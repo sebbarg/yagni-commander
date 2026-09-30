@@ -40,8 +40,11 @@ pub struct Progress {
     /// Top-level sources finished (done, skipped or failed).
     pub items_done: usize,
     pub items_total: usize,
-    /// File bytes copied. A copy knows the total up front; a move adds to it
-    /// only when it has to copy (another filesystem). Trash leaves it at 0.
+    /// Files (and symlinks) and their bytes copied. A copy knows the totals
+    /// up front; a move adds to them only when it has to copy (another
+    /// filesystem). Trash leaves them at 0.
+    pub files_done: usize,
+    pub files_total: usize,
     pub bytes_done: u64,
     pub bytes_total: u64,
     /// The entry being worked on.
@@ -160,15 +163,12 @@ impl Engine<'_> {
             }
         }
         if !is_move {
-            let mut total = 0;
             for (source, _) in &work {
-                let Some(bytes) = self.scan(source) else {
+                if self.scan(source).is_none() {
                     self.report.cancelled = true;
                     return;
-                };
-                total += bytes;
+                }
             }
-            self.progress.bytes_total = total;
         }
         for (source, target) in work {
             let step = if is_move {
@@ -203,23 +203,27 @@ impl Engine<'_> {
         Ok(target)
     }
 
-    /// Total file bytes under `path`, or `None` if cancelled. Unreadable
-    /// entries count as 0; the copy itself reports them.
-    fn scan(&mut self, path: &Path) -> Option<u64> {
+    /// Adds the files and bytes under `path` to the progress totals.
+    /// Returns `None` if cancelled. Unreadable entries are left out; the copy
+    /// itself reports them.
+    fn scan(&mut self, path: &Path) -> Option<()> {
         if self.observer.is_cancelled() {
             return None;
         }
         let Ok(meta) = path.symlink_metadata() else {
-            return Some(0);
+            return Some(());
         };
         if !meta.is_dir() {
-            return Some(if meta.is_file() { meta.len() } else { 0 });
+            self.progress.files_total += 1;
+            if meta.is_file() {
+                self.progress.bytes_total += meta.len();
+            }
+            return Some(());
         }
-        let mut total = 0;
         for entry in fs::read_dir(path).into_iter().flatten().flatten() {
-            total += self.scan(&entry.path())?;
+            self.scan(&entry.path())?;
         }
-        Some(total)
+        Some(())
     }
 
     fn move_entry(&mut self, source: &Path, target: &Path) -> Step {
@@ -233,10 +237,9 @@ impl Engine<'_> {
         };
         match error.kind() {
             io::ErrorKind::CrossesDevices => {
-                let Some(bytes) = self.scan(source) else {
+                if self.scan(source).is_none() {
                     return Step::Cancelled;
-                };
-                self.progress.bytes_total += bytes;
+                }
                 return self.copy_entry(source, target, true);
             }
             io::ErrorKind::AlreadyExists => {}
@@ -258,6 +261,7 @@ impl Engine<'_> {
                 match fs::rename(source, target) {
                     Ok(()) => Step::Done,
                     Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
+                        self.progress.files_total += 1;
                         self.progress.bytes_total += meta.len();
                         let step = self.copy_leaf(source, target, &meta, true);
                         self.remove_source(source, step)
@@ -380,13 +384,17 @@ impl Engine<'_> {
     /// Copies a file or symlink. With `replace`, the user already agreed to
     /// overwrite `target`.
     fn copy_leaf(&mut self, source: &Path, target: &Path, meta: &Metadata, replace: bool) -> Step {
-        if meta.is_symlink() {
+        let step = if meta.is_symlink() {
             self.copy_symlink(source, target, replace)
         } else if meta.is_file() {
             self.copy_file(source, target, meta, replace)
         } else {
             self.fail(source, "only files, directories and symlinks can be copied")
+        };
+        if step != Step::Cancelled {
+            self.progress.files_done += 1;
         }
+        step
     }
 
     fn copy_file(&mut self, source: &Path, target: &Path, meta: &Metadata, replace: bool) -> Step {

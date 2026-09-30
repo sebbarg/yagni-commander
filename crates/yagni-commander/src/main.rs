@@ -1,5 +1,6 @@
 mod actions;
 mod app_state;
+mod button_row;
 mod columns;
 mod file_manager;
 mod panel_view;

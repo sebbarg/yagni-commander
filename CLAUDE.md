@@ -8,8 +8,9 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 As of 2026-09-30:
 
-- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), step 5 (file-operation engine, awaiting review), plus themes-as-data and modal error boxes.
-- **Next: step 6,** F5/F6/F8 dialogs and progress on top of `file_ops::Job`: confirm dialog (target directory = other panel), progress dialog with Cancel, conflict prompt (Overwrite, Skip, Overwrite all, Skip all, Cancel), error summary, reload both panels when finished. `Job` uses std channels, so the UI polls `try_event` (e.g. a gpui timer every ~50 ms while a job runs).
+- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), step 5 (file-operation engine), step 6 (F5/F6/F8 dialogs and progress), plus themes-as-data and modal error boxes.
+- **Next: step 7, F3 viewer** (see `Requirements.md`, F3 viewer): read-only UTF-8 text in its own window, memory-mapped, lines indexed lazily, must open GB-sized files instantly.
+- **Temporary:** F12 opens a "Button test" dialog (`button_test` in `file_manager/commands.rs`) for trying the dialog button row. Remove before v1.
 - **Also required before v1:** config changes must apply without restart; background directory loading; a directory watcher that reloads panels on outside changes; resizable/configurable columns (see Known issues).
 - **Waiting on the owner to verify on real machines:** whether macOS still needs the full Xcode app with gpui-kit's runtime shaders; the "only Name sorting works" report; F4 with `editor = "code"` when launched from Finder (PATH); behavior on native Wayland (Plasma, Hyprland), which has never been tested here.
 
@@ -42,6 +43,8 @@ As of 2026-09-30:
 - `crates/yagni-commander`: the gpui app.
   - `Commander` lives in a gpui `Entity`, shared by the root `FileManager` view and two `PanelView` entities. Mutations go through `execute()` in `file_manager.rs`, which calls `cx.notify()`; views react via `observe`.
   - Keys map to gpui actions (`actions.rs`), actions map to core `Command`s or `FileManager` methods. The keymap is data, so a user config file can plug in there.
+  - `file_manager/file_ops.rs`: F5/F6/F8 around a core `file_ops::Job`. A `spawn_in` timer polls the job every 50 ms; the progress dialog (a `ProgressView` entity inside a gpui-component `Dialog`) opens after 6 polls or on the first conflict; the conflict dialog stacks on top of it. `finish_job` closes the progress dialog, reloads both panels and shows failures.
+  - `button_row.rs`: the button row used by every dialog (see Gotchas).
   - `file_manager/commands.rs`: F2/F7/Shift-F4 name prompt (`prompt_name`, a gpui-component `Dialog` with an `Input`), F4 and Shift-F4 editor launch, quick search key handling, `show_error`.
   - The active `Theme` is a gpui `Global` (`theme.rs`); `Theme::install` also applies it to gpui-component. Built-in default: Tokyo Night (Omarchy's default).
   - Views take every color from `Theme::get(cx).colors`. `clippy.toml` bans gpui's color constructors (`rgb`, `hsla`, `black`, ...) so literals can't creep in; add a new role to `Colors` and every theme file instead.
@@ -60,6 +63,7 @@ As of 2026-09-30:
 - Two panels side by side, draggable divider, resizable window; position and size restored on start.
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
+- F5 copy, F6 move (destination prompt prefilled with the other panel), F8/Del trash (confirm), in the background with a progress dialog (after ~300 ms), Cancel, a per-file conflict prompt and an error summary; both panels reload at the end.
 - F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`; Shift-F4 asks for a file name, creates the file (or keeps an existing one), puts the cursor on it and opens it in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing letters/digits jumps to the first matching name (1 s reset, no search box).
 - Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
 - Directory names show as `[name]` (display only; ".." unbracketed).
@@ -83,9 +87,10 @@ As of 2026-09-30:
 
 ## Gotchas
 
-- Tests must never call the real `trash::delete` (it would fill the owner's trash): `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function.
+- Tests must never call the real `trash::delete` (it would fill the owner's trash): core `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function, and app tests never confirm the F8 dialog.
+- App tests of F5/F6 run a real worker thread: drive them with `advance_clock` + `run_until_parked` in a loop (`wait_until` in `file_manager.rs`); the poll timer only fires on the test clock.
 
-- gpui-component `Dialog` already maps Enter to its OK action (`on_ok`), even when a text input inside it has focus. Don't also handle the input's `PressEnter`, or OK runs twice (regression test: `enter_submits_a_prompt_exactly_once`).
+- gpui-component `Dialog` maps Enter to its OK action (`on_ok`) for the whole dialog, even when a text input or another button has focus (upstream bug, not reported as of 2026-09-30), and has no arrow-key navigation. So every dialog's buttons are our `ButtonRow` (`button_row.rs`), never `DialogFooter`/`DialogAction`/`open_alert_dialog`: it keeps its own selected button and binds Left/Right, Tab/Shift-Tab, Enter and Space in its own key context. Focus the row when a dialog opens (`focus_when_open`), except prompts, which focus their text field (Enter there still goes to `on_ok`; don't also handle the input's `PressEnter`, or OK runs twice: `enter_submits_a_prompt_exactly_once`).
 - Opening a dialog moves focus to it: focus a field inside it with `window.defer` after opening. After an error box closes, focus must be put back explicitly (`show_error`'s `refocus`).
 - An event handler running inside an entity's update must not update that same entity again (panics "already being updated"); defer with `window.defer`.
 - `ThemeConfigColors` (gpui-component) has private fields: build it from `default()` and assign fields, not with struct-update syntax.

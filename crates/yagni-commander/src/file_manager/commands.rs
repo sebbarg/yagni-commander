@@ -6,8 +6,6 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::dialog::{DialogAction, DialogClose, DialogFooter};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
     App, AppContext, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement, SharedString,
@@ -17,9 +15,11 @@ use yagni_commander_core::{EntryKind, QuickSearch, launch};
 
 use super::FileManager;
 use crate::CurrentConfig;
+use crate::button_row::{ButtonRow, OnPress};
 
 /// Handles the name typed into a prompt. An error keeps the dialog open.
-type Submit = dyn Fn(&mut FileManager, &str, &mut Context<FileManager>) -> std::io::Result<()>;
+type Submit =
+    dyn Fn(&mut FileManager, &str, &mut Window, &mut Context<FileManager>) -> std::io::Result<()>;
 
 /// Text of a name prompt.
 pub(super) struct Prompt<'a> {
@@ -51,7 +51,7 @@ impl FileManager {
                 initial: &label,
                 selection: stem,
             },
-            Rc::new(move |this, to, cx| {
+            Rc::new(move |this, to, _, cx| {
                 this.commander.update(cx, |commander, cx| {
                     let result = commander.rename(&from, to);
                     cx.notify();
@@ -72,7 +72,7 @@ impl FileManager {
                 initial: "",
                 selection: 0..0,
             },
-            Rc::new(|this, name, cx| {
+            Rc::new(|this, name, _, cx| {
                 this.commander.update(cx, |commander, cx| {
                     let result = commander.make_directory(name);
                     cx.notify();
@@ -109,7 +109,7 @@ impl FileManager {
                 initial: "",
                 selection: 0..0,
             },
-            Rc::new(move |this, name, cx| {
+            Rc::new(move |this, name, _, cx| {
                 let path = this.commander.update(cx, |commander, cx| {
                     let result = commander.create_file(name);
                     cx.notify();
@@ -180,7 +180,7 @@ impl FileManager {
             move |window, cx| {
                 let name = input.read(cx).value().to_string();
                 let result = this
-                    .update(cx, |this, cx| submit(this, &name, cx))
+                    .update(cx, |this, cx| submit(this, &name, window, cx))
                     .unwrap_or(Ok(()));
                 match result {
                     Ok(()) => true,
@@ -199,8 +199,26 @@ impl FileManager {
             move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))
         });
 
-        let title = SharedString::from(prompt.title.to_owned());
         let focus = self.focus.clone();
+        let ok: OnPress = Rc::new({
+            let (confirm, focus) = (confirm.clone(), focus.clone());
+            move |window, cx| {
+                if confirm(window, cx) {
+                    window.close_dialog(cx);
+                    focus.focus(window, cx);
+                }
+            }
+        });
+        let cancel: OnPress = Rc::new({
+            let focus = focus.clone();
+            move |window, cx| {
+                window.close_dialog(cx);
+                focus.focus(window, cx);
+            }
+        });
+        let buttons = ButtonRow::build([("Cancel", cancel), ("OK", ok)], 1, cx);
+
+        let title = SharedString::from(prompt.title.to_owned());
         window.open_dialog(cx, move |dialog, _, _| {
             let confirm = confirm.clone();
             let focus_ok = focus.clone();
@@ -209,11 +227,8 @@ impl FileManager {
                 .title(title.clone())
                 .w(gpui_kit::px(420.0))
                 .child(Input::new(&input))
-                .footer(
-                    DialogFooter::new()
-                        .child(DialogClose::new().trigger(|button| button.label("Cancel")))
-                        .child(DialogAction::new().child(Button::new("ok").primary().label("OK"))),
-                )
+                .footer(buttons.clone())
+                // Enter in the text field.
                 .on_ok(move |_, window, cx| {
                     let done = confirm(window, cx);
                     if done {
@@ -223,6 +238,60 @@ impl FileManager {
                 })
                 .on_cancel(move |_, window, cx| {
                     focus_cancel.focus(window, cx);
+                    true
+                })
+        });
+    }
+}
+
+impl FileManager {
+    /// F12 (temporary): a dialog with a text field and six buttons, to try
+    /// the button row's keyboard handling. The status line shows what closed it.
+    pub(super) fn button_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| InputState::new(window, cx).default_value("Tab to the buttons"));
+        let this = cx.entity().downgrade();
+        let report = move |what: String, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| {
+                this.notice = Some(what.into());
+                cx.notify();
+            });
+        };
+        let focus = self.focus.clone();
+        let button = |label: &'static str| -> (&'static str, OnPress) {
+            let (report, focus, input) = (report.clone(), focus.clone(), input.clone());
+            let on_press: OnPress = Rc::new(move |window, cx| {
+                let text = input.read(cx).value().to_string();
+                window.close_dialog(cx);
+                focus.focus(window, cx);
+                report(format!("Button test: pressed “{label}”, text “{text}”"), cx);
+            });
+            (label, on_press)
+        };
+        let buttons = ButtonRow::build(
+            [
+                button("One"),
+                button("Two"),
+                button("Three"),
+                button("Four"),
+                button("Five"),
+                button("Six"),
+            ],
+            2,
+            cx,
+        );
+        focus_when_open(buttons.focus_handle(cx), window, cx);
+        window.open_dialog(cx, move |dialog, _, _| {
+            let (report, focus) = (report.clone(), focus.clone());
+            dialog
+                .title("Button test")
+                .w(gpui_kit::px(560.0))
+                .close_button(false)
+                .child("Left/Right, Tab/Shift-Tab, Enter/Space, Escape. \"Three\" starts selected.")
+                .child(Input::new(&input))
+                .footer(buttons.clone())
+                .on_cancel(move |_, window, cx| {
+                    focus.focus(window, cx);
+                    report("Button test: Escape".into(), cx);
                     true
                 })
         });
@@ -247,7 +316,7 @@ fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
 /// A centered, modal error box that stays until dismissed (button, Enter or
 /// Escape). Focus goes to `refocus` afterwards, e.g. back into a prompt's
 /// text field so the user can correct the input.
-fn show_error(
+pub(super) fn show_error(
     title: &'static str,
     message: impl Into<SharedString>,
     refocus: Option<FocusHandle>,
@@ -255,19 +324,40 @@ fn show_error(
     cx: &mut App,
 ) {
     let message = message.into();
-    window.open_alert_dialog(cx, move |alert, _, _| {
+    // After the dialog stack has finished restoring focus.
+    let restore = move |refocus: &Option<FocusHandle>, window: &mut Window, cx: &mut App| {
+        if let Some(focus) = refocus.clone() {
+            window.defer(cx, move |window, cx| focus.focus(window, cx));
+        }
+    };
+    let dismiss: OnPress = Rc::new({
         let refocus = refocus.clone();
-        alert
+        move |window, cx| {
+            window.close_dialog(cx);
+            restore(&refocus, window, cx);
+        }
+    });
+    let buttons = ButtonRow::build([("Dismiss", dismiss)], 0, cx);
+    focus_when_open(buttons.focus_handle(cx), window, cx);
+    window.open_dialog(cx, move |dialog, _, _| {
+        let refocus = refocus.clone();
+        dialog
             .title(title)
-            .description(message.clone())
-            .ok_text("Dismiss")
-            .on_close(move |_, window, cx| {
-                if let Some(focus) = refocus.clone() {
-                    // After the dialog stack has finished restoring focus.
-                    window.defer(cx, move |window, cx| focus.focus(window, cx));
-                }
+            .w(gpui_kit::px(420.0))
+            .close_button(false)
+            .child(message.clone())
+            .footer(buttons.clone())
+            .on_cancel(move |_, window, cx| {
+                restore(&refocus, window, cx);
+                true
             })
     });
+}
+
+/// Opening a dialog moves focus to the dialog itself; this moves it on to
+/// `handle` (typically the dialog's button row) once the dialog is open.
+pub(super) fn focus_when_open(handle: FocusHandle, window: &mut Window, cx: &mut App) {
+    window.defer(cx, move |window, cx| handle.focus(window, cx));
 }
 
 /// The part of a name to preselect for renaming: everything before the last

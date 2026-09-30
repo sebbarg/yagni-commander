@@ -154,6 +154,11 @@ impl Commander {
         Ok(())
     }
 
+    /// Deselects everything in one panel, e.g. after its selection was copied.
+    pub fn clear_selection(&mut self, side: Side) {
+        self.panel_mut(side).clear_selection();
+    }
+
     /// Applies the case-sensitive sorting setting to both panels.
     pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
         self.left.set_case_sensitive(case_sensitive);
@@ -460,6 +465,17 @@ mod tests {
         c.execute(Command::SelectAll);
         assert_eq!(c.panel(Side::Right).summary().selected(), 4);
         assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+    }
+
+    #[test]
+    fn clear_selection_affects_only_the_given_panel() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::SelectAll);
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::SelectAll);
+        c.clear_selection(Side::Left);
+        assert_eq!(c.panel(Side::Left).summary().selected(), 0);
+        assert_eq!(c.panel(Side::Right).summary().selected(), 4);
     }
 
     #[test]

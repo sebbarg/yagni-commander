@@ -39,6 +39,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 ### File list
 
 - Directories show as `[name]` (display only: sorting and quick search use the bare name). ".." has no brackets.
+- File icons in the lists (v2).
 
 ### Tabs (v2)
 
@@ -51,6 +52,7 @@ Toolbar with e.g. drive icons.
 ### Error messages
 
 - Errors are shown in a centered, modal message box with a Dismiss button. It stays until dismissed (button, Enter or Escape). No fading toasts for errors.
+- Dialog buttons: Left/Right or Tab/Shift-Tab move between buttons, Enter or Space presses the highlighted one, Escape cancels. The default button is highlighted when the dialog opens. In a prompt, the arrow keys edit the text and Tab moves to the buttons.
 - After dismissing an error from a prompt (e.g. rename), focus returns to the prompt's text field so the input can be corrected.
 
 ## Keyboard
@@ -116,6 +118,12 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 - Copying or moving something onto itself, or a directory into itself, is an error for that entry.
 - Times and permissions are preserved best effort: filesystems that can't store them (FAT, some network mounts) are not an error. A symlink's own time is not preserved.
 - Pipes, sockets and device files are not copied (error for that entry).
+- F5/F6 ask for the destination directory, prefilled with the other panel's path. A relative path is taken from the active panel's directory. It must be an existing directory other than the source directory (the prompt says so and stays open).
+- F8 and Del ask for confirmation first.
+- The progress dialog appears only if the job takes longer than about 300 ms, so quick copies don't flash a dialog. It counts files and bytes. Escape or Cancel stops the job at the next file (or 4 MiB chunk).
+- In the conflict prompt, Enter means Skip (never overwrite by accident) and Escape means Cancel. It shows both files' size and modification time.
+- One operation at a time (the queue is v2).
+- After a copy that finished without errors, the source panel's selection is cleared (like TC). Errors are listed in one error box at the end (the first 10, then "and N more").
 - A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.
 - Queue of operations, like TC's F2 queue (v2).
 - A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2).
@@ -127,6 +135,6 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
 4. ~~Ctrl-. hidden files toggle.~~ Done.
 5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
-6. F5/F6/F8 dialogs and progress.
+6. ~~F5/F6/F8 dialogs and progress.~~ Done.
 7. F3 viewer.
 8. Menu, About and the settings page.

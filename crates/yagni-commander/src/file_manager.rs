@@ -8,11 +8,12 @@ use gpui_kit::{
 use yagni_commander_core::{Command, Commander, QuickSearch, Side};
 
 mod commands;
+mod file_ops;
 
 use crate::actions::{
-    Activate, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, EditNewFile, FILE_MANAGER_CONTEXT,
-    GoUp, MakeDirectory, PageDown, PageUp, Reload, Rename, SelectAll, SwapPanels, SwitchPanel,
-    SyncOtherPanel, ToggleHidden, ToggleSelection,
+    Activate, ButtonTest, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, EditNewFile,
+    FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, Move, PageDown, PageUp, Reload, Rename, SelectAll,
+    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleSelection, Trash,
 };
 use crate::app_state::AppState;
 use crate::panel_view::PanelView;
@@ -51,6 +52,8 @@ pub struct FileManager {
     /// the next command.
     notice: Option<SharedString>,
     quick_search: QuickSearch,
+    /// The copy, move or trash operation in progress.
+    job: Option<file_ops::RunningJob>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -86,6 +89,7 @@ impl FileManager {
             dragging_split: false,
             notice: notice.map(Into::into),
             quick_search: QuickSearch::default(),
+            job: None,
             _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
@@ -211,6 +215,14 @@ impl Render for FileManager {
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
+            .on_action(cx.listener(|this, _: &Copy, window, cx| {
+                this.copy_or_move(file_ops::Kind::Copy, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Move, window, cx| {
+                this.copy_or_move(file_ops::Kind::Move, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Trash, window, cx| this.trash(window, cx)))
+            .on_action(cx.listener(|this, _: &ButtonTest, window, cx| this.button_test(window, cx)))
             .on_action(
                 cx.listener(|this, _: &EditNewFile, window, cx| this.edit_new_file(window, cx)),
             )
@@ -500,17 +512,7 @@ mod tests {
     #[gpui_kit::test]
     fn enter_submits_a_prompt_exactly_once(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
-        let view = cx.update(|window, cx| {
-            window
-                .root::<gpui_kit::base::Root>()
-                .flatten()
-                .unwrap()
-                .read(cx)
-                .view()
-                .clone()
-                .downcast::<FileManager>()
-                .unwrap()
-        });
+        let view = file_manager(cx);
         let submits = std::rc::Rc::new(std::cell::Cell::new(0));
         view.update_in(cx, |this, window, cx| {
             let submits = submits.clone();
@@ -521,7 +523,7 @@ mod tests {
                     initial: "value",
                     selection: 0..0,
                 },
-                std::rc::Rc::new(move |_, _, _| {
+                std::rc::Rc::new(move |_, _, _, _| {
                     submits.set(submits.get() + 1);
                     Ok(())
                 }),
@@ -657,5 +659,221 @@ mod tests {
         cx.run_until_parked();
         assert!(!dialog_open(cx));
         assert!(!tmp.path().join("x").exists());
+    }
+
+    fn file_manager(cx: &mut VisualTestContext) -> Entity<FileManager> {
+        cx.update(|window, cx| {
+            window
+                .root::<gpui_kit::base::Root>()
+                .flatten()
+                .unwrap()
+                .read(cx)
+                .view()
+                .clone()
+                .downcast::<FileManager>()
+                .unwrap()
+        })
+    }
+
+    /// Lets the job's worker thread and the polling timer run until `done`.
+    fn wait_until(cx: &mut VisualTestContext, done: impl Fn(&mut VisualTestContext) -> bool) {
+        for _ in 0..400 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("timed out");
+    }
+
+    fn job_running(cx: &mut VisualTestContext) -> bool {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.job.is_some())
+    }
+
+    /// Right panel in `a`, left cursor on `f`.
+    fn open_with_target(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("f"), b"new").unwrap();
+        cx.simulate_keystrokes("tab down enter tab end");
+        (tmp, commander, cx)
+    }
+
+    #[gpui_kit::test]
+    fn f5_copies_to_the_other_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("space f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "destination prompt");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+        assert!(tmp.path().join("f").exists());
+        assert!(
+            selected(&commander, Side::Left, cx).is_empty(),
+            "copied, so deselected"
+        );
+        let right: Vec<_> = commander.read_with(cx, |c, _| {
+            c.panel(Side::Right)
+                .entries()
+                .iter()
+                .map(|e| e.label.clone())
+                .collect()
+        });
+        assert_eq!(right, ["..", "f"], "reloaded");
+    }
+
+    #[gpui_kit::test]
+    fn f6_moves_the_selection_to_a_typed_directory(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("space f6");
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.dispatch_action(Box::new(gpui_kit::component::input::SelectAll), cx)
+        });
+        cx.simulate_input("b");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("b/f").exists());
+        assert!(!tmp.path().join("f").exists());
+    }
+
+    #[gpui_kit::test]
+    fn conflicts_are_asked_enter_skips_and_escape_cancels(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        std::fs::write(tmp.path().join("a/f"), b"old").unwrap();
+        for key in ["enter", "escape"] {
+            cx.simulate_keystrokes("f5");
+            cx.run_until_parked();
+            cx.simulate_keystrokes("enter");
+            wait_until(cx, dialog_open);
+            assert!(job_running(cx), "waiting for the answer");
+            cx.simulate_keystrokes(key);
+            wait_until(cx, |cx| !job_running(cx));
+            cx.run_until_parked();
+            assert!(!dialog_open(cx), "progress closed after {key}");
+            assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"old");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn f5_to_the_same_directory_is_refused_in_the_prompt(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("end f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        assert!(!job_running(cx));
+        cx.simulate_keystrokes("escape escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 4);
+    }
+
+    #[gpui_kit::test]
+    fn f8_and_delete_ask_before_trashing(cx: &mut TestAppContext) {
+        // Never confirm here: that would use the real trash.
+        let (tmp, _commander, cx) = open(cx);
+        for key in ["f8", "delete"] {
+            cx.simulate_keystrokes(&format!("end {key}"));
+            cx.run_until_parked();
+            assert!(dialog_open(cx), "{key} asks");
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            assert!(!dialog_open(cx));
+            assert!(tmp.path().join("f").exists());
+        }
+        cx.simulate_keystrokes("home f8");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "nothing to trash on ..");
+    }
+
+    /// F5 of `f` onto an existing `a/f`, up to the conflict dialog.
+    fn conflict(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
+        std::fs::write(tmp.path().join("a/f"), b"old").unwrap();
+        cx.simulate_keystrokes("f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, dialog_open);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn conflict_buttons_follow_arrows_tab_space_and_enter(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        let target = tmp.path().join("a/f");
+        // Buttons: Overwrite, Overwrite all, Skip (selected), Skip all, Cancel.
+        for (keys, expected) in [
+            ("left left enter", "new"),
+            ("shift-tab shift-tab space", "new"),
+            ("right right enter", "old"),
+            ("tab left enter", "old"),
+            (
+                "left right right right right right left left left enter",
+                "new",
+            ),
+        ] {
+            conflict(&tmp, cx);
+            cx.simulate_keystrokes(keys);
+            wait_until(cx, |cx| !job_running(cx));
+            cx.run_until_parked();
+            assert!(!dialog_open(cx), "{keys}");
+            assert_eq!(
+                std::fs::read_to_string(&target).unwrap(),
+                expected,
+                "{keys}"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn f8_left_then_enter_cancels(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("end f8");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("left enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(!job_running(cx));
+        assert!(tmp.path().join("f").exists());
+    }
+
+    #[gpui_kit::test]
+    fn prompt_arrows_edit_text_and_tab_reaches_the_buttons(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        cx.simulate_input("ab");
+        cx.simulate_keystrokes("left");
+        cx.simulate_input("X");
+        cx.simulate_keystrokes("tab left enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "Cancel closed it");
+        assert!(!tmp.path().join("aXb").exists());
+
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        cx.simulate_input("ab");
+        cx.simulate_keystrokes("left");
+        cx.simulate_input("X");
+        cx.simulate_keystrokes("tab enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(tmp.path().join("aXb").is_dir(), "OK is preselected");
+        // Focus is back on the panels.
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander_of(cx), Side::Left, cx), 0);
+    }
+
+    fn commander_of(cx: &mut VisualTestContext) -> Entity<Commander> {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.commander.clone())
     }
 }

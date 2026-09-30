@@ -145,6 +145,7 @@ fn copies_files_and_trees_with_times_permissions_and_progress() {
     let p = &script.last;
     assert_eq!((p.items_done, p.items_total), (2, 2));
     assert_eq!((p.bytes_done, p.bytes_total), (9, 9));
+    assert_eq!((p.files_done, p.files_total), (3, 3));
 }
 
 #[test]
@@ -533,6 +534,7 @@ fn move_across_filesystems_when_available() {
     assert_eq!(read(other.path().join("a.txt")), "hello");
     assert_eq!(read(other.path().join("dir/deep/c.txt")), "c");
     assert_eq!(script.last.bytes_total, 9, "bytes that had to be copied");
+    assert_eq!(script.last.files_total, 3);
 }
 
 #[test]

@@ -217,6 +217,10 @@ impl Panel {
             .collect();
     }
 
+    pub(crate) fn clear_selection(&mut self) {
+        self.selection.clear();
+    }
+
     /// First entry (in display order, never "..") whose name starts with
     /// `prefix`, ignoring case.
     pub fn find_prefix(&self, prefix: &str) -> Option<usize> {
