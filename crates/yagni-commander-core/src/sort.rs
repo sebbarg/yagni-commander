@@ -24,6 +24,9 @@ impl SortKey {
 pub struct Sort {
     pub key: SortKey,
     pub descending: bool,
+    /// Compare names case-sensitively (uppercase before lowercase). A user
+    /// setting, not changed by clicking columns.
+    pub case_sensitive: bool,
 }
 
 impl Default for Sort {
@@ -31,6 +34,7 @@ impl Default for Sort {
         Self {
             key: SortKey::Name,
             descending: false,
+            case_sensitive: false,
         }
     }
 }
@@ -41,20 +45,21 @@ impl Sort {
     pub fn toggled(self, key: SortKey) -> Self {
         if self.key == key {
             Self {
-                key,
                 descending: !self.descending,
+                ..self
             }
         } else {
             Self {
                 key,
                 descending: key.starts_descending(),
+                ..self
             }
         }
     }
 }
 
 /// Sorts TC-style: ".." first, then directories, then files. Within each group
-/// by `sort`, with ties broken by case-insensitive name.
+/// by `sort`, with ties broken by name.
 pub(crate) fn sort_entries(entries: &mut [Entry], sort: Sort) {
     entries.sort_by(|a, b| compare(a, b, sort));
 }
@@ -75,10 +80,12 @@ fn compare(a: &Entry, b: &Entry, sort: Sort) -> Ordering {
         SortKey::Owner => a.owner.cmp(&b.owner),
         SortKey::Permissions => a.mode.cmp(&b.mode),
     };
-    let by_name = a
-        .sort_name
-        .cmp(&b.sort_name)
-        .then_with(|| a.name.cmp(&b.name));
+    let by_name = if sort.case_sensitive {
+        a.label.cmp(&b.label)
+    } else {
+        a.sort_name.cmp(&b.sort_name)
+    }
+    .then_with(|| a.name.cmp(&b.name));
     let (by_key, by_name) = match (sort.descending, sort.key) {
         (false, _) => (by_key, by_name),
         (true, SortKey::Name) => (by_key, by_name.reverse()),
@@ -183,7 +190,8 @@ mod tests {
             Sort::default(),
             Sort {
                 key: SortKey::Name,
-                descending: false
+                descending: false,
+                case_sensitive: false,
             }
         );
     }
@@ -247,5 +255,34 @@ mod tests {
         let mut entries = vec![entry("same", EntryKind::File, None, 0), upper];
         // Case-insensitive keys tie, so the raw name decides ("S" < "s").
         assert_eq!(sorted_by(&mut entries, Sort::default()), ["SAME", "same"]);
+    }
+
+    #[test]
+    fn case_sensitive_puts_uppercase_first() {
+        let sort = Sort {
+            case_sensitive: true,
+            ..Sort::default()
+        };
+        assert_eq!(
+            sorted(sort),
+            ["..", "Adir", "zdir", "A.txt", "b.txt", "c.txt"]
+        );
+        let mut entries = vec![
+            entry("b", EntryKind::File, None, 0),
+            entry("C", EntryKind::File, None, 0),
+            entry("a", EntryKind::File, None, 0),
+        ];
+        assert_eq!(sorted_by(&mut entries, sort), ["C", "a", "b"]);
+        assert_eq!(sorted_by(&mut entries, Sort::default()), ["a", "b", "C"]);
+    }
+
+    #[test]
+    fn toggling_columns_keeps_case_sensitivity() {
+        let sort = Sort {
+            case_sensitive: true,
+            ..Sort::default()
+        };
+        assert!(sort.toggled(SortKey::Size).case_sensitive);
+        assert!(sort.toggled(SortKey::Name).case_sensitive);
     }
 }

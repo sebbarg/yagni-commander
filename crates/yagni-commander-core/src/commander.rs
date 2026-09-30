@@ -85,6 +85,12 @@ impl Commander {
         self.active
     }
 
+    /// Applies the case-sensitive sorting setting to both panels.
+    pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
+        self.left.set_case_sensitive(case_sensitive);
+        self.right.set_case_sensitive(case_sensitive);
+    }
+
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -337,5 +343,15 @@ mod tests {
 
         assert!(c.error().is_some());
         assert_eq!(c.panel(Side::Left).path(), inside);
+    }
+
+    #[test]
+    fn case_sensitive_sort_applies_to_both_panels() {
+        let (_tmp, mut c) = commander();
+        c.set_case_sensitive_sort(true);
+        assert!(c.panel(Side::Left).sort().case_sensitive);
+        assert!(c.panel(Side::Right).sort().case_sensitive);
+        c.set_case_sensitive_sort(false);
+        assert!(!c.panel(Side::Left).sort().case_sensitive);
     }
 }

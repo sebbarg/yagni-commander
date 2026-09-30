@@ -60,12 +60,25 @@ impl Panel {
     /// Column header click: sort by `key`, or reverse if already sorted by it.
     /// The cursor stays on the same entry.
     pub(crate) fn sort_by(&mut self, key: SortKey) {
+        self.resort(self.sort.toggled(key));
+    }
+
+    fn resort(&mut self, sort: Sort) {
         let keep = self.selected().map(|e| e.name.clone());
-        self.sort = self.sort.toggled(key);
+        self.sort = sort;
         sort_entries(&mut self.entries, self.sort);
         self.cursor = keep
             .and_then(|name| self.entries.iter().position(|e| e.name == name))
             .unwrap_or(0);
+    }
+
+    /// Switches between case-sensitive and -insensitive name sorting,
+    /// keeping the cursor on the same entry.
+    pub(crate) fn set_case_sensitive(&mut self, case_sensitive: bool) {
+        self.resort(Sort {
+            case_sensitive,
+            ..self.sort
+        });
     }
 
     pub fn selected(&self) -> Option<&Entry> {
@@ -302,5 +315,32 @@ mod tests {
         panel.set_cursor(ix);
         assert_eq!(panel.activate().unwrap(), Activation::Navigated);
         assert_eq!(panel.path(), tmp.path().join(raw));
+    }
+
+    #[test]
+    fn case_sensitivity_resorts_and_keeps_cursor() {
+        let tmp = fixture();
+        fs::create_dir(tmp.path().join("Zeta")).unwrap();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        select(&mut panel, "alpha");
+
+        panel.set_case_sensitive(true);
+        assert!(panel.sort().case_sensitive);
+        assert_eq!(panel.entries()[1].label, "Zeta");
+        assert_eq!(panel.selected().unwrap().label, "alpha");
+
+        panel.set_case_sensitive(false);
+        assert_eq!(panel.entries()[3].label, "Zeta");
+        assert_eq!(panel.selected().unwrap().label, "alpha");
+    }
+
+    #[test]
+    fn case_sensitivity_survives_navigation() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.set_case_sensitive(true);
+        select(&mut panel, "alpha");
+        panel.activate().unwrap();
+        assert!(panel.sort().case_sensitive);
     }
 }

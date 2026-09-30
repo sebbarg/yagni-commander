@@ -1,7 +1,12 @@
 //! Colors, stored as a gpui global so any view can read them.
 //! Hardcoded Tokyo Night (Omarchy's default) until themes become configurable.
 
-use gpui::{App, Global, Rgba, rgb};
+use gpui_kit::component::{Theme as ComponentTheme, ThemeMode, ThemeRegistry};
+use gpui_kit::{App, Global, Rgba, rgb};
+
+/// The same palette for gpui-component's widgets (dialogs, inputs, menus).
+const COMPONENT_THEME: &str = include_str!("../assets/tokyo-night.json");
+const COMPONENT_THEME_NAME: &str = "Tokyo Night";
 
 pub struct Theme {
     pub window_bg: Rgba,
@@ -43,4 +48,17 @@ impl Theme {
     pub fn get(cx: &App) -> &Self {
         cx.global::<Self>()
     }
+}
+
+/// Installs our palette as gpui-component's dark theme and activates it.
+/// Call after `gpui_kit::init`. Colors the JSON leaves out keep the
+/// component library's dark defaults.
+pub fn apply_component_theme(cx: &mut App) {
+    let registry = ThemeRegistry::global_mut(cx);
+    registry
+        .load_themes_from_str(COMPONENT_THEME)
+        .expect("bundled theme is valid");
+    let config = registry.themes()[COMPONENT_THEME_NAME].clone();
+    ComponentTheme::global_mut(cx).dark_theme = config;
+    ComponentTheme::change(ThemeMode::Dark, None, cx);
 }

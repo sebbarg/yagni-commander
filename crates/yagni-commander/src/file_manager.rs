@@ -1,9 +1,9 @@
 //! The root view: two panels side by side with a draggable divider, a status
 //! line, and the keyboard actions that drive the shared [`Commander`].
 
-use gpui::{
-    App, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, Subscription,
-    Window, div, prelude::*, px, relative,
+use gpui_kit::{
+    App, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, SharedString,
+    Subscription, Window, div, prelude::*, px, relative,
 };
 use yagni_commander_core::{Command, Commander, Side};
 
@@ -13,6 +13,7 @@ use crate::actions::{
 };
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
+use crate::window_state::WindowState;
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
@@ -43,17 +44,31 @@ pub struct FileManager {
     /// Left panel's share of the width, changed by dragging the divider.
     split_ratio: f32,
     dragging_split: bool,
+    /// One-off message (e.g. a config problem) shown in the status line until
+    /// the next command.
+    notice: Option<SharedString>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl FileManager {
-    pub fn new(commander: Entity<Commander>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        commander: Entity<Commander>,
+        notice: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, cx));
         let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
-        let subscription = cx.observe_in(&commander, window, |this, _, window, cx| {
-            this.update_title(window, cx);
-            cx.notify();
-        });
+        let subscriptions = vec![
+            cx.observe_in(&commander, window, |this, _, window, cx| {
+                this.update_title(window, cx);
+                cx.notify();
+            }),
+            cx.observe_window_bounds(window, |_, window, cx| {
+                WindowState::remember(window.window_bounds(), cx);
+            }),
+        ];
+        WindowState::remember(window.window_bounds(), cx);
 
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -65,7 +80,8 @@ impl FileManager {
             focus,
             split_ratio: 0.5,
             dragging_split: false,
-            _subscriptions: vec![subscription],
+            notice: notice.map(Into::into),
+            _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
         this
@@ -76,6 +92,7 @@ impl FileManager {
     }
 
     fn execute(&mut self, command: Command, cx: &mut Context<Self>) {
+        self.notice = None;
         execute(&self.commander, command, cx);
     }
 
@@ -130,9 +147,10 @@ impl Render for FileManager {
                 }),
             );
 
-        let status = match self.commander.read(cx).error() {
-            Some(err) => div().text_color(theme.error).child(err.to_owned()),
-            None => div()
+        let status = match (self.commander.read(cx).error(), &self.notice) {
+            (Some(err), _) => div().text_color(theme.error).child(err.to_owned()),
+            (None, Some(notice)) => div().text_color(theme.error).child(notice.clone()),
+            (None, None) => div()
                 .text_color(theme.text_dim)
                 .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
         };
@@ -200,7 +218,7 @@ impl Render for FileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{TestAppContext, VisualTestContext};
+    use gpui_kit::{TestAppContext, VisualTestContext};
 
     /// A file manager window on a directory with dirs `a`, `b` and file `f`,
     /// using the default keymap.
@@ -214,13 +232,14 @@ mod tests {
 
         cx.update(|cx| {
             cx.set_global(Theme::tokyo_night());
+            cx.set_global(WindowState::default());
             crate::actions::bind_default_keys(cx);
         });
         let commander = Commander::new(tmp.path(), tmp.path()).unwrap();
         let commander = cx.new(|_| commander);
         let (_, cx) = cx.add_window_view({
             let commander = commander.clone();
-            |window, cx| FileManager::new(commander, window, cx)
+            |window, cx| FileManager::new(commander, None, window, cx)
         });
         (tmp, commander, cx)
     }
@@ -229,7 +248,7 @@ mod tests {
         commander.read_with(cx, |c, _| c.panel(side).cursor())
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn arrow_keys_home_and_end_move_the_cursor(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("down down");
@@ -242,7 +261,7 @@ mod tests {
         assert_eq!(cursor(&commander, Side::Left, cx), 0);
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn tab_switches_the_panel_that_keys_act_on(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("tab down");
@@ -253,7 +272,7 @@ mod tests {
         commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn enter_and_backspace_navigate(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("down down enter");
@@ -267,7 +286,7 @@ mod tests {
         });
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn page_keys_move_by_more_than_one_row(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("pagedown");
@@ -277,7 +296,7 @@ mod tests {
         assert_eq!(cursor(&commander, Side::Left, cx), 0);
     }
 
-    #[gpui::test]
+    #[gpui_kit::test]
     fn window_title_follows_the_active_panel(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("tab down enter");

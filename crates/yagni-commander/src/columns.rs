@@ -1,6 +1,6 @@
 //! The panel's table layout: which columns exist, their size, and cell text.
 
-use gpui::{Div, div, prelude::*, px};
+use gpui_kit::{Div, div, prelude::*, px};
 use yagni_commander_core::{
     Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
 };

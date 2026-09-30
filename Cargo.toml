@@ -10,13 +10,15 @@ license = "MIT"
 [workspace.dependencies]
 yagni-commander-core = { path = "crates/yagni-commander-core" }
 
-# crates.io gpui (0.2.2, Oct 2025) is stale: pin a Zed commit and upgrade deliberately.
-gpui = { git = "https://github.com/zed-industries/zed", rev = "1a28cff" }
-# font-kit is required on macOS, otherwise text lays out but renders no glyphs.
-gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1a28cff", features = ["wayland", "x11", "font-kit"] }
-
+# gpui-kit (Longbridge) re-exports gpui (the `gpui-pre` snapshot of a Zed commit),
+# the platform layer and gpui-component. Import everything through `gpui_kit`.
+gpui-kit = "0.7"
+dirs = "7"
 env_logger = "0.11"
 jiff = "0.2"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
 nix = { version = "0.31", default-features = false, features = ["user"] }
 tempfile = "3"
 

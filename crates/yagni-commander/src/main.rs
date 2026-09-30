@@ -3,13 +3,15 @@ mod columns;
 mod file_manager;
 mod panel_view;
 mod theme;
+mod window_state;
 
-use gpui::{App, AppContext, Bounds, Menu, MenuItem, WindowBounds, WindowOptions, px, size};
-use yagni_commander_core::Commander;
+use gpui_kit::{App, AppContext, Menu, MenuItem, WindowOptions};
+use yagni_commander_core::{Commander, Config, storage};
 
 use crate::actions::Quit;
 use crate::file_manager::FileManager;
 use crate::theme::Theme;
+use crate::window_state::WindowState;
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -17,7 +19,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let left = args.next().unwrap_or_else(|| ".".into());
     let right = args.next().unwrap_or_else(|| left.clone());
-    let commander = match Commander::new(&left, &right) {
+    let mut commander = match Commander::new(&left, &right) {
         Ok(commander) => commander,
         Err(e) => {
             eprintln!("yagni-commander: cannot open {left} / {right}: {e}");
@@ -25,7 +27,21 @@ fn main() {
         }
     };
 
-    gpui_platform::application().run(move |cx: &mut App| {
+    // A broken config is reported in the UI and never overwritten; the app
+    // runs on defaults until the user fixes it.
+    let (config, notice) = match storage::config_file().map(|path| Config::load_or_create(&path)) {
+        Some(Ok(config)) => (config, None),
+        Some(Err(e)) => (Config::default(), Some(format!("Config ignored: {e}"))),
+        None => (
+            Config::default(),
+            Some("No config directory found".to_owned()),
+        ),
+    };
+    commander.set_case_sensitive_sort(config.case_sensitive_sort);
+
+    gpui_kit::application().run(move |cx: &mut App| {
+        gpui_kit::init(cx);
+        theme::apply_component_theme(cx);
         cx.set_global(Theme::tokyo_night());
         actions::bind_default_keys(cx);
 
@@ -40,14 +56,22 @@ fn main() {
         })
         .detach();
 
-        let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
+        let window_state = WindowState::load();
         let options = WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_bounds: Some(window_state.initial_bounds(cx)),
             ..Default::default()
         };
+        cx.set_global(window_state);
+        cx.on_app_quit(|cx| {
+            cx.global::<WindowState>().save();
+            async {}
+        })
+        .detach();
+
         let commander = cx.new(|_| commander);
-        cx.open_window(options, |window, cx| {
-            cx.new(|cx| FileManager::new(commander, window, cx))
+        // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| FileManager::new(commander, notice, window, cx))
         })
         .expect("failed to open window");
         cx.activate(true);

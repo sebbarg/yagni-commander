@@ -1,0 +1,44 @@
+{
+  "name": "yagni-commander",
+  "themes": [
+    {
+      "name": "Tokyo Night",
+      "mode": "dark",
+      "colors": {
+        "background": "#1a1b26",
+        "foreground": "#c0caf5",
+        "border": "#292e42",
+        "caret": "#c0caf5",
+        "ring": "#7aa2f7",
+        "selection.background": "#2f3549",
+        "accent.background": "#292e42",
+        "accent.foreground": "#c0caf5",
+        "primary.background": "#7aa2f7",
+        "primary.foreground": "#1a1b26",
+        "primary.hover.background": "#89b4fa",
+        "primary.active.background": "#6a8fe0",
+        "secondary.background": "#292e42",
+        "secondary.foreground": "#c0caf5",
+        "secondary.hover.background": "#2f3549",
+        "secondary.active.background": "#1f2335",
+        "muted.background": "#1f2335",
+        "muted.foreground": "#565f89",
+        "popover.background": "#1f2335",
+        "popover.foreground": "#c0caf5",
+        "input.border": "#3b4261",
+        "list.background": "#1a1b26",
+        "list.active.background": "#7aa2f733",
+        "list.active.border": "#7aa2f7",
+        "title_bar.background": "#16161e",
+        "danger.background": "#f7768e",
+        "danger.foreground": "#f7768e",
+        "success.background": "#9ece6a",
+        "success.foreground": "#9ece6a",
+        "warning.background": "#e0af68",
+        "warning.foreground": "#e0af68",
+        "info.background": "#7dcfff",
+        "info.foreground": "#7dcfff"
+      }
+    }
+  ]
+}

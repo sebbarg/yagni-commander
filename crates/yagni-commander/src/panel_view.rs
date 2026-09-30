@@ -4,7 +4,7 @@
 use std::ops::Range;
 use std::path::PathBuf;
 
-use gpui::{
+use gpui_kit::{
     Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
     UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };

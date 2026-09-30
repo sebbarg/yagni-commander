@@ -8,7 +8,10 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+dirs.workspace = true
 jiff.workspace = true
+serde.workspace = true
+toml.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

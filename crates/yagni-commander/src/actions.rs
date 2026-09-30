@@ -1,7 +1,7 @@
 //! Actions and the default keymap. The keymap is data, so a user config file
 //! can later add or override bindings without touching the views.
 
-use gpui::{App, KeyBinding, actions};
+use gpui_kit::{App, KeyBinding, actions};
 
 /// Key context of the file manager's root view; scopes the bindings below.
 pub const FILE_MANAGER_CONTEXT: &str = "FileManager";
