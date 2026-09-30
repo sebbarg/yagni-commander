@@ -29,6 +29,12 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Saved automatically on exit and restored on start.
 - Kept in a state file separate from the config, so the config stays hand-editable.
 
+### Themes
+
+- v1: all colors come from a theme file; one built-in theme (Tokyo Night). No hardcoded colors in views.
+- Theme selection in the config (`theme = "..."`), more built-in themes, and user themes in `~/.config/yagni-commander/themes/*.toml` (v2).
+- Following the system light/dark appearance (v2).
+
 ### Tabs (v2)
 
 Tabs per panel, like Double Commander.

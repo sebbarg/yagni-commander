@@ -15,7 +15,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 - **GUI, not TUI.** Terminals intercept keys (Cmd shortcuts, Ctrl+Tab, etc.) inconsistently, so a TC keymap can't be guaranteed. A GUI also gives real multiple windows, drag and drop with Finder/Dolphin, and launching a configurable external editor (e.g. VS Code on F4).
 - **gpui (Zed's UI framework), not iced.** Its action + context-scoped keymap system matches the TC model, `uniform_list` is virtualized with native smooth scrolling, text truncates with ellipsis, and redraw on resize is smooth. iced 0.14 was evaluated and rejected.
 - **gpui comes via gpui-kit** (Longbridge, crates.io `gpui-kit = "0.7"`). gpui-kit pins `gpui-pre 0.3.7` (a snapshot of Zed commit `1a28cff`), re-exports gpui, provides `application()`, `init()` and `open_window()`, and includes gpui-component. Import everything through `gpui_kit::` (gpui APIs) and `gpui_kit::component::` (widgets); never add `gpui` directly, since two gpui crates in one build are incompatible types. The crates.io `gpui` itself (0.2.2, Oct 2025) is stale. Trade-off accepted: the snapshot is republished by a third party, not Zed, and the dependency tree is large (~700 crates).
-- **gpui-component** (via gpui-kit) provides inputs, dialogs, menus, the settings component and progress, which gpui lacks. Its theme is fed our palette from `assets/tokyo-night.json` (see `theme.rs`).
+- **gpui-component** (via gpui-kit) provides inputs, dialogs, menus, the settings component and progress, which gpui lacks.
+- **Themes are data.** A theme is a TOML file (`crates/yagni-commander/assets/themes/`) with `name`, `mode` (dark/light) and ~18 colors named by role (`accent`, `selected`, `directory`, ...), never by hue. Every background role has a matching text role (`accent`/`text_on_accent`). gpui-component's theme is derived from these roles in code (`Theme::component_config`), including hover/pressed shades, so theme authors only define roles and we don't depend on gpui-component's theme format. Theme selection and user theme files are v2 (see `Requirements.md`).
 
 ## Architecture
 
@@ -23,7 +24,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 - `crates/yagni-commander`: the gpui app.
   - `Commander` lives in a gpui `Entity`, shared by the root `FileManager` view and two `PanelView` entities. Mutations go through `execute()` in `file_manager.rs`, which calls `cx.notify()`; views react via `observe`.
   - Keys map to gpui actions (`actions.rs`), actions map to core `Command`s. The keymap is data, so a user config file can plug in there.
-  - Theme is a gpui `Global` (`theme.rs`), currently hardcoded Tokyo Night (Omarchy's default). `apply_component_theme` installs the same palette into gpui-component.
+  - The active `Theme` is a gpui `Global` (`theme.rs`); `Theme::install` also applies it to gpui-component. Built-in default: Tokyo Night (Omarchy's default).
+  - Views take every color from `Theme::get(cx).colors`. `clippy.toml` bans gpui's color constructors (`rgb`, `hsla`, `black`, ...) so literals can't creep in; add a new role to `Colors` and every theme file instead.
   - The window is opened with `gpui_kit::open_window`, which wraps `FileManager` in gpui-kit's `Root` (needed for dialogs and notifications).
   - Window position/size: `window_state.rs` keeps the latest geometry in a `WindowState` global (updated via `observe_window_bounds`) and saves it on quit; restore falls back to centered if the geometry no longer overlaps a display.
   - Column layout and cell text live in `columns.rs`.

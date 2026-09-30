@@ -1,0 +1,24 @@
+# Tokyo Night (Omarchy's default). Colors are named by role, not hue.
+# Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+name = "Tokyo Night"
+mode = "dark"
+
+[colors]
+window_bg = "#16161e"
+panel_bg = "#1a1b26"
+header_bg = "#1f2335"
+header_active_bg = "#2f3549"
+border = "#292e42"
+text = "#c0caf5"
+text_dim = "#565f89"
+directory = "#7aa2f7"
+symlink = "#7dcfff"
+accent = "#7aa2f7"
+text_on_accent = "#1a1b26"
+cursor_inactive_bg = "#292e42"
+selected = "#ff9e64"
+text_on_selected = "#1a1b26"
+error = "#f7768e"
+warning = "#e0af68"
+success = "#9ece6a"
+info = "#7dcfff"

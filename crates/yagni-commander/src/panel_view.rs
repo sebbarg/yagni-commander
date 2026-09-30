@@ -14,7 +14,7 @@ use yagni_commander_core::{
 
 use crate::columns::COLUMNS;
 use crate::file_manager::execute;
-use crate::theme::Theme;
+use crate::theme::{Colors, Theme};
 
 const ROW_HEIGHT: f32 = 22.0;
 const HEADER_HEIGHT: f32 = 28.0;
@@ -70,7 +70,7 @@ impl PanelView {
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Div> {
         let side = self.side;
-        let theme = Theme::get(cx);
+        let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let panel = commander.panel(side);
         let is_active = commander.active() == side;
@@ -81,7 +81,7 @@ impl PanelView {
                     cursor: (ix == panel.cursor()).then_some(is_active),
                     selected: panel.is_selected(entry),
                 };
-                entry_row(entry, row, theme).on_mouse_down(
+                entry_row(entry, row, colors).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         execute(&this.commander, Command::CursorTo(side, ix), cx);
@@ -97,7 +97,7 @@ impl PanelView {
     /// Clickable column titles; clicking sorts the panel by that column.
     fn render_column_headers(&self, cx: &mut Context<Self>) -> Div {
         let side = self.side;
-        let theme = Theme::get(cx);
+        let colors = &Theme::get(cx).colors;
         let sort = self.commander.read(cx).panel(side).sort();
         div()
             .h(px(COLUMN_HEADER_HEIGHT))
@@ -107,7 +107,7 @@ impl PanelView {
             .items_center()
             .gap(px(CELL_SPACING))
             .border_b_1()
-            .border_color(theme.border)
+            .border_color(colors.border)
             .text_size(px(12.0))
             .children(COLUMNS.iter().map(|column| {
                 let key = column.key;
@@ -115,9 +115,9 @@ impl PanelView {
                     .cell()
                     .cursor_pointer()
                     .text_color(if sort.key == key {
-                        theme.text
+                        colors.text
                     } else {
-                        theme.text_dim
+                        colors.text_dim
                     })
                     .child(column.header(sort))
                     .on_mouse_down(
@@ -132,7 +132,7 @@ impl PanelView {
 
 impl Render for PanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::get(cx);
+        let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let panel = commander.panel(self.side);
         let is_active = commander.active() == self.side;
@@ -144,14 +144,14 @@ impl Render for PanelView {
             .flex()
             .items_center()
             .bg(if is_active {
-                theme.header_active_bg
+                colors.header_active_bg
             } else {
-                theme.header_bg
+                colors.header_bg
             })
             .text_color(if is_active {
-                theme.text
+                colors.text
             } else {
-                theme.text_dim
+                colors.text_dim
             })
             .child(
                 div()
@@ -167,17 +167,17 @@ impl Render for PanelView {
             .px(px(10.0))
             .flex()
             .items_center()
-            .bg(theme.header_bg)
-            .text_color(theme.text_dim)
+            .bg(colors.header_bg)
+            .text_color(colors.text_dim)
             .text_size(px(12.0))
             .child(footer_text(&panel.summary()));
 
         let border = if is_active {
-            theme.accent
+            colors.accent
         } else {
-            theme.border
+            colors.border
         };
-        let panel_bg = theme.panel_bg;
+        let panel_bg = colors.panel_bg;
         let entry_count = panel.entries().len();
 
         let list = uniform_list(
@@ -211,24 +211,24 @@ struct RowState {
     selected: bool,
 }
 
-fn entry_row(entry: &Entry, row: RowState, theme: &Theme) -> Div {
+fn entry_row(entry: &Entry, row: RowState, colors: &Colors) -> Div {
     // Selected rows are orange throughout; under the active cursor the bar
     // itself turns orange so selection stays visible.
     let (name, detail) = if row.selected {
-        (theme.selected, theme.selected)
+        (colors.selected, colors.selected)
     } else {
-        (name_color(entry, theme), theme.text_dim)
+        (name_color(entry, colors), colors.text_dim)
     };
     let (fg, detail, bg) = match row.cursor {
         Some(true) => {
-            let bar = if row.selected {
-                theme.selected
+            let (bar, text) = if row.selected {
+                (colors.selected, colors.text_on_selected)
             } else {
-                theme.accent
+                (colors.accent, colors.text_on_accent)
             };
-            (theme.text_on_accent, theme.text_on_accent, Some(bar))
+            (text, text, Some(bar))
         }
-        Some(false) => (name, detail, Some(theme.cursor_inactive_bg)),
+        Some(false) => (name, detail, Some(colors.cursor_inactive_bg)),
         None => (name, detail, None),
     };
     div()
@@ -270,11 +270,11 @@ fn footer_text(summary: &Summary) -> String {
     }
 }
 
-fn name_color(entry: &Entry, theme: &Theme) -> Rgba {
+fn name_color(entry: &Entry, colors: &Colors) -> Rgba {
     match entry.kind {
-        EntryKind::Parent | EntryKind::Dir if entry.is_symlink => theme.symlink,
-        EntryKind::Parent | EntryKind::Dir => theme.dir,
-        EntryKind::File => theme.text,
+        EntryKind::Parent | EntryKind::Dir if entry.is_symlink => colors.symlink,
+        EntryKind::Parent | EntryKind::Dir => colors.directory,
+        EntryKind::File => colors.text,
     }
 }
 

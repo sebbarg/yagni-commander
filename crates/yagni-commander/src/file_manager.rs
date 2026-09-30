@@ -129,7 +129,7 @@ impl FileManager {
 
 impl Render for FileManager {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::get(cx);
+        let colors = &Theme::get(cx).colors;
 
         let divider = div()
             .id("divider")
@@ -137,8 +137,8 @@ impl Render for FileManager {
             .h_full()
             .flex_none()
             .cursor_col_resize()
-            .when(self.dragging_split, |d| d.bg(theme.accent))
-            .hover(|d| d.bg(theme.accent))
+            .when(self.dragging_split, |d| d.bg(colors.accent))
+            .hover(|d| d.bg(colors.accent))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -148,10 +148,10 @@ impl Render for FileManager {
             );
 
         let status = match (self.commander.read(cx).error(), &self.notice) {
-            (Some(err), _) => div().text_color(theme.error).child(err.to_owned()),
-            (None, Some(notice)) => div().text_color(theme.error).child(notice.clone()),
+            (Some(err), _) => div().text_color(colors.error).child(err.to_owned()),
+            (None, Some(notice)) => div().text_color(colors.error).child(notice.clone()),
             (None, None) => div()
-                .text_color(theme.text_dim)
+                .text_color(colors.text_dim)
                 .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
         };
 
@@ -192,8 +192,8 @@ impl Render for FileManager {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.window_bg)
-            .text_color(theme.text)
+            .bg(colors.window_bg)
+            .text_color(colors.text)
             .text_size(px(14.0))
             .child(
                 div()
@@ -237,7 +237,7 @@ mod tests {
         std::fs::write(tmp.path().join("f"), b"").unwrap();
 
         cx.update(|cx| {
-            cx.set_global(Theme::tokyo_night());
+            cx.set_global(Theme::default());
             cx.set_global(WindowState::default());
             crate::actions::bind_default_keys(cx);
         });

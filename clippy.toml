@@ -1,0 +1,14 @@
+# Colors come from the theme (crates/yagni-commander/src/theme.rs), never from
+# literals in views, so every color stays themeable.
+disallowed-methods = [
+    { path = "gpui::rgb", reason = "take colors from theme::Colors" },
+    { path = "gpui::rgba", reason = "take colors from theme::Colors" },
+    { path = "gpui::hsla", reason = "take colors from theme::Colors" },
+    { path = "gpui::black", reason = "take colors from theme::Colors" },
+    { path = "gpui::white", reason = "take colors from theme::Colors" },
+    { path = "gpui::red", reason = "take colors from theme::Colors" },
+    { path = "gpui::green", reason = "take colors from theme::Colors" },
+    { path = "gpui::blue", reason = "take colors from theme::Colors" },
+    { path = "gpui::yellow", reason = "take colors from theme::Colors" },
+    { path = "gpui::transparent_black", reason = "take colors from theme::Colors" },
+]

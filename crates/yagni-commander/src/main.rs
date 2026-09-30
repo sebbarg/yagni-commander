@@ -41,8 +41,7 @@ fn main() {
 
     gpui_kit::application().run(move |cx: &mut App| {
         gpui_kit::init(cx);
-        theme::apply_component_theme(cx);
-        cx.set_global(Theme::tokyo_night());
+        Theme::default().install(cx);
         actions::bind_default_keys(cx);
 
         // gpui has no built-in quit: handle it and expose it in the menu bar.
