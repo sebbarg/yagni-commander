@@ -69,6 +69,7 @@ Toolbar with e.g. drive icons.
 | Shift-F4 | Create a file and open it in the editor. Asks for a name (a single name, no `/`); if that file already exists it is opened as is. Without a configured editor, shows the error instead of asking. |
 | F7 | Create a directory. Nested paths like `a/b/c` are allowed; nothing outside the current directory. |
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
+| Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. |
 | Alt-Z | Set the other panel's path to this panel's path. |
 | Ctrl-U | Swap the two panels. |
 | Ctrl-R | Reload both panels. |
@@ -106,7 +107,7 @@ Toolbar with e.g. drive icons.
 
 ## File operations
 
-Applies to F5 (copy), F6 (move) and F8 (trash).
+Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 
 - Runs in the background: the UI stays responsive, with a progress dialog and Cancel.
 - If a target exists, ask per file: Overwrite, Skip, Overwrite all, Skip all, Cancel.
@@ -128,6 +129,14 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 - A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.
 - Queue of operations, like TC's F2 queue (v2).
 - A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2).
+
+## Operation log
+
+- Off by default; `log = true` in the config turns it on.
+- One file per day, `operations-YYYY-MM-DD.log` (local date), in a `logs` folder next to the state file (`~/.local/state/yagni-commander/logs/` on Linux). Private to the user (mode 0600), never written through a symlink. Not in `/tmp`: shared with other users and emptied on reboot.
+- One line per file or directory the app creates, copies, moves, renames, trashes or deletes, plus skips ("exists") and failures, with a timestamp. Copy/move/trash/delete also log a start line (with each selected source) and a finish line (failed and skipped counts). F2, F7 and Shift-F4 log one line each; Shift-F4 on an existing file logs nothing.
+- At startup, log files older than `log_keep_days` (default 7) are deleted, even when logging is off. Only files named like log files are touched.
+- Logging problems never stop an operation. A log that can't be opened at startup is reported in the status line and the app runs without it.
 
 ## Build order (v1)
 

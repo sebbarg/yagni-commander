@@ -20,8 +20,17 @@ pub fn config_file() -> Option<PathBuf> {
 /// `~/.local/state/yagni-commander/state.toml` on Linux. macOS has no state
 /// directory, so it shares the config's Application Support folder there.
 pub fn state_file() -> Option<PathBuf> {
+    Some(state_dir()?.join("state.toml"))
+}
+
+/// The operation log's directory: `logs` next to the state file.
+pub fn log_dir() -> Option<PathBuf> {
+    Some(state_dir()?.join("logs"))
+}
+
+fn state_dir() -> Option<PathBuf> {
     let base = dirs::state_dir().or_else(dirs::data_dir)?;
-    Some(base.join(APP_DIR).join("state.toml"))
+    Some(base.join(APP_DIR))
 }
 
 #[derive(Debug)]
@@ -138,7 +147,10 @@ mod tests {
 
     #[test]
     fn platform_paths_end_in_app_directory() {
-        for path in [config_file(), state_file()].into_iter().flatten() {
+        for path in [config_file(), state_file(), log_dir()]
+            .into_iter()
+            .flatten()
+        {
             assert_eq!(
                 path.parent().unwrap().file_name().unwrap(),
                 "yagni-commander"

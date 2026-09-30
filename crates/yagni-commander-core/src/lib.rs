@@ -10,6 +10,7 @@ pub mod file_ops;
 mod format;
 mod fs_ops;
 pub mod launch;
+pub mod oplog;
 mod panel;
 mod quick_search;
 mod sort;

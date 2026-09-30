@@ -18,6 +18,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use crate::fs_ops::{rename_noreplace, same_file};
+use crate::oplog::OperationLog;
 
 /// Bytes copied between progress reports and cancel checks.
 const CHUNK: u64 = 4 << 20;
@@ -33,6 +34,8 @@ pub enum Operation {
     Move { sources: Vec<PathBuf>, to: PathBuf },
     /// Moves each source to the system trash.
     Trash { sources: Vec<PathBuf> },
+    /// Deletes each source permanently, directories with their contents.
+    Delete { sources: Vec<PathBuf> },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -89,33 +92,77 @@ pub trait Observer {
     fn is_cancelled(&self) -> bool;
 }
 
-/// Runs `operation` to completion (or cancellation) on the calling thread.
-pub fn run(operation: &Operation, observer: &mut dyn Observer) -> Report {
-    run_with(operation, observer, system_trash)
+/// How operations run, beyond what the user chose.
+#[derive(Clone)]
+pub struct Settings {
+    /// What trash operations use. Tests pass a fake.
+    pub trash: TrashFn,
+    /// Where each file touched is logged, if logging is on.
+    pub log: Option<Arc<OperationLog>>,
 }
 
-fn system_trash(path: &Path) -> Result<(), String> {
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            trash: system_trash,
+            log: None,
+        }
+    }
+}
+
+/// Moves one entry to the trash, or says why not. [`system_trash`] in the
+/// app; tests pass a fake so they never touch the user's real trash.
+pub type TrashFn = fn(&Path) -> Result<(), String>;
+
+/// The platform's trash (freedesktop on Linux, Finder on macOS).
+pub fn system_trash(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|e| e.to_string())
 }
 
-/// [`run`] with a replaceable trash function, so tests never touch the
-/// user's real trash.
-fn run_with(
-    operation: &Operation,
-    observer: &mut dyn Observer,
-    trash: fn(&Path) -> Result<(), String>,
-) -> Report {
+/// Runs `operation` to completion (or cancellation) on the calling thread.
+pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settings) -> Report {
+    let (name, sources, to) = match operation {
+        Operation::Copy { sources, to } => ("copy", sources, Some(to)),
+        Operation::Move { sources, to } => ("move", sources, Some(to)),
+        Operation::Trash { sources } => ("trash", sources, None),
+        Operation::Delete { sources } => ("delete", sources, None),
+    };
     let mut engine = Engine {
         observer,
         progress: Progress::default(),
         always: None,
         report: Report::default(),
+        log: settings.log.as_deref(),
+        name,
     };
+    match to {
+        Some(to) => engine.note(format_args!(
+            "start: {} entries to {}",
+            sources.len(),
+            to.display()
+        )),
+        None => engine.note(format_args!("start: {} entries", sources.len())),
+    }
+    for source in sources {
+        engine.note(format_args!("source {}", source.display()));
+    }
     match operation {
         Operation::Copy { sources, to } => engine.transfer(sources, to, false),
         Operation::Move { sources, to } => engine.transfer(sources, to, true),
-        Operation::Trash { sources } => engine.trash(sources, trash),
+        Operation::Trash { sources } => engine.trash(sources, settings.trash),
+        Operation::Delete { sources } => engine.delete(sources),
     }
+    let report = &engine.report;
+    engine.note(format_args!(
+        "{}: {} failed, {} skipped",
+        if report.cancelled {
+            "cancelled"
+        } else {
+            "finished"
+        },
+        report.failures.len(),
+        report.skipped
+    ));
     engine.report
 }
 
@@ -141,6 +188,9 @@ struct Engine<'a> {
     /// Set by "Overwrite all" (true) or "Skip all" (false).
     always: Option<bool>,
     report: Report,
+    log: Option<&'a OperationLog>,
+    /// The operation's name in log lines ("copy", "move", ...).
+    name: &'static str,
 }
 
 impl Engine<'_> {
@@ -232,7 +282,14 @@ impl Engine<'_> {
         }
         self.set_current(source);
         let error = match rename_noreplace(source, target) {
-            Ok(()) => return Step::Done,
+            Ok(()) => {
+                self.note(format_args!(
+                    "moved {} -> {}",
+                    source.display(),
+                    target.display()
+                ));
+                return Step::Done;
+            }
             Err(e) => e,
         };
         match error.kind() {
@@ -259,7 +316,14 @@ impl Engine<'_> {
                     return step;
                 }
                 match fs::rename(source, target) {
-                    Ok(()) => Step::Done,
+                    Ok(()) => {
+                        self.note(format_args!(
+                            "moved {} -> {}",
+                            source.display(),
+                            target.display()
+                        ));
+                        Step::Done
+                    }
                     Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
                         self.progress.files_total += 1;
                         self.progress.bytes_total += meta.len();
@@ -299,7 +363,10 @@ impl Engine<'_> {
             return Step::Incomplete;
         }
         match fs::remove_dir(source) {
-            Ok(()) => Step::Done,
+            Ok(()) => {
+                self.note(format_args!("removed {}", source.display()));
+                Step::Done
+            }
             Err(e) => self.fail(source, e),
         }
     }
@@ -334,7 +401,10 @@ impl Engine<'_> {
         delete_source: bool,
     ) -> Step {
         let created = match fs::create_dir(target) {
-            Ok(()) => true,
+            Ok(()) => {
+                self.note(format_args!("created directory {}", target.display()));
+                true
+            }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 if !target.symlink_metadata().is_ok_and(|m| m.is_dir()) {
                     return self.fail(target, "a file with this name exists");
@@ -375,8 +445,11 @@ impl Engine<'_> {
         if !complete {
             return Step::Incomplete;
         }
-        if delete_source && let Err(e) = fs::remove_dir(source) {
-            return self.fail(source, e);
+        if delete_source {
+            if let Err(e) = fs::remove_dir(source) {
+                return self.fail(source, e);
+            }
+            self.note(format_args!("removed {}", source.display()));
         }
         Step::Done
     }
@@ -393,6 +466,13 @@ impl Engine<'_> {
         };
         if step != Step::Cancelled {
             self.progress.files_done += 1;
+        }
+        if step == Step::Done {
+            self.note(format_args!(
+                "copied {} -> {}",
+                source.display(),
+                target.display()
+            ));
         }
         step
     }
@@ -513,7 +593,10 @@ impl Engine<'_> {
             return step;
         }
         match fs::remove_file(source) {
-            Ok(()) => Step::Done,
+            Ok(()) => {
+                self.note(format_args!("removed {}", source.display()));
+                Step::Done
+            }
             Err(e) => self.fail(
                 source,
                 format!("copied, but cannot delete the original: {e}"),
@@ -530,8 +613,16 @@ impl Engine<'_> {
             return Some(self.fail(target, "a directory with this name exists"));
         }
         match self.choose(source, target) {
-            Choice::Overwrite => None,
+            Choice::Overwrite => {
+                self.note(format_args!("replacing {}", target.display()));
+                None
+            }
             Choice::Skip => {
+                self.note(format_args!(
+                    "skipped {} -> {}: exists",
+                    source.display(),
+                    target.display()
+                ));
                 self.report.skipped += 1;
                 Some(Step::Incomplete)
             }
@@ -564,7 +655,115 @@ impl Engine<'_> {
         }
     }
 
-    fn trash(&mut self, sources: &[PathBuf], trash: fn(&Path) -> Result<(), String>) {
+    /// Permanent delete. Counts the files first for progress, then removes
+    /// each source with [`Engine::delete_at`].
+    fn delete(&mut self, sources: &[PathBuf]) {
+        self.progress.items_total = sources.len();
+        // Roots are rejected before the scan, which would walk everything.
+        let mut work = Vec::new();
+        for source in sources {
+            match (source.parent(), source.file_name()) {
+                (Some(parent), Some(name)) => work.push((source, parent, name)),
+                _ => {
+                    self.fail(source, "a filesystem root cannot be deleted");
+                    self.progress.items_done += 1;
+                }
+            }
+        }
+        for (source, _, _) in &work {
+            if self.scan(source).is_none() {
+                self.report.cancelled = true;
+                return;
+            }
+        }
+        self.progress.bytes_total = 0; // deleting takes no time per byte
+        for (source, parent, name) in work {
+            let step = match open_dir(parent) {
+                Ok(dir) => self.delete_at(&dir, name, source),
+                Err(e) => self.fail(parent, e),
+            };
+            if step == Step::Cancelled {
+                self.report.cancelled = true;
+                return;
+            }
+            self.progress.items_done += 1;
+            self.report_progress();
+        }
+    }
+
+    /// Deletes `name` inside the open directory `dir` (shown as `path`).
+    ///
+    /// Everything is addressed relative to an open directory and never
+    /// through a symlink (`O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`), so replacing
+    /// a directory with a symlink while this runs cannot make it delete
+    /// anything outside the tree: the open fails instead. A symlink is
+    /// deleted itself, never its target.
+    #[cfg(unix)]
+    fn delete_at(&mut self, dir: &nix::dir::Dir, name: &std::ffi::OsStr, path: &Path) -> Step {
+        use nix::sys::stat::{FileStat, SFlag, fstatat};
+        use nix::unistd::{UnlinkatFlags, unlinkat};
+
+        if self.observer.is_cancelled() {
+            return Step::Cancelled;
+        }
+        self.set_current(path);
+        let is_dir = |stat: FileStat| {
+            SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR
+        };
+        let stat = match fstatat(dir, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW) {
+            Ok(stat) => stat,
+            Err(e) => return self.fail(path, io::Error::from(e)),
+        };
+        if !is_dir(stat) {
+            self.progress.files_done += 1;
+            return match unlinkat(dir, name, UnlinkatFlags::NoRemoveDir) {
+                Ok(()) => {
+                    self.note(format_args!("deleted {}", path.display()));
+                    Step::Done
+                }
+                Err(e) => self.fail(path, io::Error::from(e)),
+            };
+        }
+        let mut child = match open_dir_at(dir, name) {
+            Ok(child) => child,
+            Err(e) => return self.fail(path, e),
+        };
+        // Names first: deleting while reading the same directory is unreliable.
+        let names: Vec<std::ffi::OsString> = child
+            .iter()
+            .filter_map(Result::ok)
+            .map(|entry| {
+                use std::os::unix::ffi::OsStrExt;
+                std::ffi::OsStr::from_bytes(entry.file_name().to_bytes()).to_owned()
+            })
+            .filter(|n| n != "." && n != "..")
+            .collect();
+        let mut complete = true;
+        for child_name in names {
+            match self.delete_at(&child, &child_name, &path.join(&child_name)) {
+                Step::Done => {}
+                Step::Incomplete => complete = false,
+                Step::Cancelled => return Step::Cancelled,
+            }
+        }
+        if !complete {
+            return Step::Incomplete;
+        }
+        match unlinkat(dir, name, UnlinkatFlags::RemoveDir) {
+            Ok(()) => {
+                self.note(format_args!("deleted {}", path.display()));
+                Step::Done
+            }
+            Err(e) => self.fail(path, io::Error::from(e)),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn delete_at(&mut self, _: &(), _: &std::ffi::OsStr, path: &Path) -> Step {
+        self.fail(path, "deleting is not supported on this platform")
+    }
+
+    fn trash(&mut self, sources: &[PathBuf], trash: TrashFn) {
         self.progress.items_total = sources.len();
         for source in sources {
             if self.observer.is_cancelled() {
@@ -572,8 +771,11 @@ impl Engine<'_> {
                 return;
             }
             self.set_current(source);
-            if let Err(message) = trash(source) {
-                self.fail(source, message);
+            match trash(source) {
+                Ok(()) => self.note(format_args!("trashed {}", source.display())),
+                Err(message) => {
+                    self.fail(source, message);
+                }
             }
             self.progress.items_done += 1;
             self.report_progress();
@@ -590,12 +792,52 @@ impl Engine<'_> {
     }
 
     fn fail(&mut self, path: &Path, message: impl ToString) -> Step {
+        let message = message.to_string();
+        self.note(format_args!("failed {}: {message}", path.display()));
         self.report.failures.push(Failure {
             path: path.to_path_buf(),
-            message: message.to_string(),
+            message,
         });
         Step::Incomplete
     }
+
+    /// Writes a line to the operation log, if logging is on.
+    fn note(&self, what: std::fmt::Arguments) {
+        if let Some(log) = self.log {
+            log.write(format_args!("{} {what}", self.name));
+        }
+    }
+}
+
+/// Opens a directory for [`Engine::delete_at`]. The path itself may go
+/// through symlinks: it is the directory the user is looking at.
+#[cfg(unix)]
+fn open_dir(path: &Path) -> io::Result<nix::dir::Dir> {
+    use nix::fcntl::OFlag;
+    nix::dir::Dir::open(
+        path,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(io::Error::from)
+}
+
+/// Opens directory `name` inside `dir`, refusing to follow a symlink.
+#[cfg(unix)]
+fn open_dir_at(dir: &nix::dir::Dir, name: &std::ffi::OsStr) -> io::Result<nix::dir::Dir> {
+    use nix::fcntl::OFlag;
+    nix::dir::Dir::openat(
+        dir,
+        name,
+        OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_NOFOLLOW | OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(io::Error::from)
+}
+
+#[cfg(not(unix))]
+fn open_dir(_: &Path) -> io::Result<()> {
+    Err(io::ErrorKind::Unsupported.into())
 }
 
 fn create_new(path: &Path) -> io::Result<File> {
@@ -640,14 +882,7 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn spawn(operation: Operation) -> io::Result<Self> {
-        Self::spawn_with(operation, system_trash)
-    }
-
-    fn spawn_with(
-        operation: Operation,
-        trash: fn(&Path) -> Result<(), String>,
-    ) -> io::Result<Self> {
+    pub fn spawn(operation: Operation, settings: Settings) -> io::Result<Self> {
         let (event_tx, events) = mpsc::channel();
         let (answers, answer_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -660,7 +895,7 @@ impl Job {
         std::thread::Builder::new()
             .name("file-operation".into())
             .spawn(move || {
-                let report = run_with(&operation, &mut observer, trash);
+                let report = run(&operation, &mut observer, &settings);
                 let _ = observer.events.send(Event::Finished(report));
             })?;
         Ok(Self {

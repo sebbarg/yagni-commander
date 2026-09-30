@@ -36,6 +36,7 @@ type Confirm = dyn Fn(&mut Window, &mut App) -> bool;
 impl FileManager {
     /// F2: rename the entry under the cursor.
     pub(super) fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let panel = self.active_panel(cx);
         let Some(entry) = panel.cursor_entry().filter(|e| e.kind != EntryKind::Parent) else {
             return;
@@ -64,6 +65,7 @@ impl FileManager {
 
     /// F7: create a directory (nested paths like `a/b` allowed).
     pub(super) fn make_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         self.prompt_name(
             Prompt {
                 title: "New directory",
@@ -86,6 +88,7 @@ impl FileManager {
     /// F4: open the entry under the cursor (or the directory, on "..") in
     /// the configured editor.
     pub(super) fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let Some(editor) = configured_editor(window, cx) else {
             return;
         };
@@ -98,6 +101,7 @@ impl FileManager {
     /// Shift-F4: create a file (or pick an existing one) and open it in the
     /// editor. Asks for the name only if an editor is configured.
     pub(super) fn edit_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let Some(editor) = configured_editor(window, cx) else {
             return;
         };
@@ -242,6 +246,7 @@ impl FileManager {
     /// F12 (temporary): a dialog with a text field and six buttons, to try
     /// the button row's keyboard handling. The status line shows what closed it.
     pub(super) fn button_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let input = cx.new(|cx| InputState::new(window, cx).default_value("Tab to the buttons"));
         let this = cx.entity().downgrade();
         let report = move |what: String, cx: &mut App| {

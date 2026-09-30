@@ -7,7 +7,7 @@ mod panel_view;
 mod theme;
 
 use gpui_kit::{App, AppContext, Global, Menu, MenuItem, WindowOptions};
-use yagni_commander_core::{Commander, Config, storage};
+use yagni_commander_core::{Commander, Config, oplog, storage};
 
 use crate::actions::Quit;
 use crate::app_state::AppState;
@@ -45,6 +45,10 @@ fn main() {
         ),
     };
     commander.set_case_sensitive_sort(config.case_sensitive_sort);
+    let log_dir = storage::log_dir();
+    let (log, log_problem) = oplog::start(log_dir.as_deref(), config.log, config.log_keep_days);
+    commander.set_log(log.map(std::sync::Arc::new));
+    let notice = notice.or(log_problem);
 
     gpui_kit::application().run(move |cx: &mut App| {
         gpui_kit::init(cx);

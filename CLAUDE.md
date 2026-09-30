@@ -17,7 +17,7 @@ As of 2026-09-30:
 ### How we work
 
 - The owner reviews each step; commit only when asked (they say "commit"). Commits are local; the owner pushes (remote: `github.com/sebbarg/yagni-commander`).
-- Every change: tests (core near 100% coverage; gpui tests for keymap/dialogs), `cargo clippy --workspace --all-targets` with zero warnings, `cargo fmt`, then a headless run with screenshots for anything visible.
+- Every change: tests (core near 100% coverage; gpui app tests for every key, mouse action and dialog), `cargo clippy --workspace --all-targets` with zero warnings, `cargo fmt`, then `scripts/smoke.sh` and a look at its screenshots. Extend the smoke script when a feature is visible or touches the OS (trash, editor, state file).
 - Update `Requirements.md` when behavior decisions are made, and this file's Status section when a step completes.
 - User-facing text and docs: no em dashes.
 
@@ -39,7 +39,7 @@ As of 2026-09-30:
 
 ## Architecture
 
-- `crates/yagni-commander-core`: UI-agnostic core, no gpui. Modules: `commander` (dual-panel state, `Command`s, rename/mkdir/quick-search entry points), `panel` (listing, cursor, sort, selection, `Summary`), `entry` (reading directories), `sort`, `format` (size, time, permissions text), `fs_ops` (rename, no-replace rename, make directory, name validation), `file_ops` (copy/move/trash engine `run`, background `Job`), `launch` (external editor), `quick_search` (the typed prefix), `config`, `storage` (platform paths, TOML load/save, atomic writes).
+- `crates/yagni-commander-core`: UI-agnostic core, no gpui. Modules: `commander` (dual-panel state, `Command`s, rename/mkdir/quick-search entry points), `panel` (listing, cursor, sort, selection, `Summary`), `entry` (reading directories), `sort`, `format` (size, time, permissions text), `fs_ops` (rename, no-replace rename, make directory, name validation), `file_ops` (copy/move/trash/delete engine `run`, background `Job`; delete walks with `openat`/`unlinkat` and `O_NOFOLLOW` so a directory swapped for a symlink mid-delete can't redirect it), `launch` (external editor), `oplog` (operation log: day files, startup pruning; the engine writes through `file_ops::Settings::log`, F2/F7/Shift-F4 through `Commander::set_log`), `quick_search` (the typed prefix), `config`, `storage` (platform paths, TOML load/save, atomic writes).
 - `crates/yagni-commander`: the gpui app.
   - `Commander` lives in a gpui `Entity`, shared by the root `FileManager` view and two `PanelView` entities. Mutations go through `execute()` in `file_manager.rs`, which calls `cx.notify()`; views react via `observe`.
   - Keys map to gpui actions (`actions.rs`), actions map to core `Command`s or `FileManager` methods. The keymap is data, so a user config file can plug in there.
@@ -54,8 +54,9 @@ As of 2026-09-30:
   - Hidden entries: `Panel` keeps them in a separate unsorted list while hidden, so `entries()` and every index (cursor, quick search, summary, selection) only see visible ones.
   - Column layout and cell text live in `columns.rs`; panel rendering in `panel_view.rs`.
 - Settings: `Config` is a hand-editable TOML file, created from a commented template on first start. A file that fails to parse is never overwritten; the app shows the error in the status line and runs on defaults.
-  - Config: `~/.config/yagni-commander/config.toml` (Linux), `~/Library/Application Support/yagni-commander/config.toml` (macOS). Keys: `editor`, `case_sensitive_sort`.
+  - Config: `~/.config/yagni-commander/config.toml` (Linux), `~/Library/Application Support/yagni-commander/config.toml` (macOS). Keys: `editor`, `case_sensitive_sort`, `log`, `log_keep_days`.
   - State: `~/.local/state/yagni-commander/state.toml` (Linux), same folder as config on macOS.
+  - Operation log (when `log = true`): `logs/operations-YYYY-MM-DD.log` next to the state file (see `Requirements.md`, Operation log).
 - `unsafe_code` is forbidden workspace-wide.
 
 ## Current features
@@ -63,12 +64,13 @@ As of 2026-09-30:
 - Two panels side by side, draggable divider, resizable window; position and size restored on start.
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
-- F5 copy, F6 move (destination prompt prefilled with the other panel), F8/Del trash (confirm), in the background with a progress dialog (after ~300 ms), Cancel, a per-file conflict prompt and an error summary; both panels reload at the end.
+- F5 copy, F6 move (destination prompt prefilled with the other panel), F8/Del trash (confirm), Shift-F8/Shift-Del permanent delete (confirm), in the background with a progress dialog (after ~300 ms), Cancel, a per-file conflict prompt and an error summary; both panels reload at the end.
 - F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`; Shift-F4 asks for a file name, creates the file (or keeps an existing one), puts the cursor on it and opens it in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing opens a quick search box in the panel footer and jumps to the first name starting with the typed text; Down/Up step through matches (wrapping), Backspace shortens it, Escape or any other command closes it. The search state lives in `Commander` (`search_*`), so every command ends it.
 - Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
 - Directory names show as `[name]` (display only; ".." unbracketed).
 - Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
 - Hidden files (name starts with `.`) are hidden by default; Ctrl-. toggles them in both panels, remembered in the state file. Shown hidden names use the `hidden` theme role. Hiding deselects them and moves the cursor off them.
+- Optional operation log (`log = true`): every file created, copied, moved, renamed, trashed or deleted, one file per day, pruned after `log_keep_days`.
 - Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
 - Quit: Cmd+Q, Alt+F4, the macOS app menu, or closing the last window.
 
@@ -87,7 +89,7 @@ As of 2026-09-30:
 
 ## Gotchas
 
-- Tests must never call the real `trash::delete` (it would fill the owner's trash): core `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function, and app tests never confirm the F8 dialog.
+- Tests must never call the real `trash::delete` (it would fill the owner's trash): core `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function, and app tests set `FileManager::trash` to a fake (`use_fake_trash`). Only `scripts/smoke.sh` uses the real trash, with `XDG_DATA_HOME` in a temporary folder.
 - App tests of F5/F6 run a real worker thread: drive them with `advance_clock` + `run_until_parked` in a loop (`wait_until` in `file_manager.rs`); the poll timer only fires on the test clock.
 
 - gpui-component `Dialog` maps Enter to its OK action (`on_ok`) for the whole dialog, even when a text input or another button has focus (upstream bug, not reported as of 2026-09-30), and has no arrow-key navigation. So every dialog's buttons are our `ButtonRow` (`button_row.rs`), never `DialogFooter`/`DialogAction`/`open_alert_dialog`: it keeps its own selected button and binds Left/Right, Tab/Shift-Tab, Enter and Space in its own key context. Focus the row when a dialog opens (`focus_when_open`), except prompts, which focus their text field (Enter there still goes to `on_ok`; don't also handle the input's `PressEnter`, or OK runs twice: `enter_submits_a_prompt_exactly_once`).
@@ -122,7 +124,9 @@ Cargo is at `~/.cargo/bin/cargo` (not on PATH in non-login shells). A clean buil
 - `cargo run --release -- [left-dir] [right-dir]`: run the app (the default workspace member).
 - `cargo test --workspace` and `cargo clippy --workspace --all-targets` (must be warning-free).
 - `cargo llvm-cov --workspace --summary-only`: coverage. Core is kept near 100%; the uncovered lines need root or a file owned by an unknown uid.
+- App tests live in `file_manager/tests.rs`. Mouse tests find elements by `debug_selector` (`row-left-3`, `header-right-Size`, `divider`, `search-left`) and `cx.debug_bounds`; a missing selector also means the element was not drawn. Jobs that must stay running use `use_fake_trash` plus a `hold` file.
 - App tests use gpui's `TestAppContext` (`#[gpui_kit::test]`) and build the window like the app does (`gpui_kit::init` + `Root`), so dialogs work. Drive them with `simulate_keystrokes` / `simulate_input` and `run_until_parked`; check dialogs with `window.has_active_dialog(cx)`. gpui's test window does not expose the title, so title text lives in a pure function.
+- `scripts/smoke.sh [screenshot-dir]`: runs the real debug build under Xvfb through the main features (quick search, F7, Shift-F4, F2, F5 with a conflict, F6, F8 into a temporary trash, Shift-Del, F12, Ctrl-., quit), checks the results on disk (including the operation log and its startup pruning) and saves screenshots to `target/smoke/`. Config, state and trash are in a temporary folder. Linux only; needs Xvfb, xdotool, ImageMagick.
 - `scripts/make-test-files.sh [count] [dir]`: create a large directory under `/tmp` for stress tests.
 - `RUST_LOG=info` shows gpui's platform logs (renderer, fonts, windowing).
 

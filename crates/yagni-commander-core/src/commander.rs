@@ -1,8 +1,10 @@
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::fs_ops;
+use crate::oplog::OperationLog;
 use crate::panel::{Activation, Panel};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
@@ -72,6 +74,8 @@ pub struct Commander {
     error: Option<String>,
     /// Quick search in the active panel. Any command ends it.
     search: QuickSearch,
+    /// Where file changes are logged, if logging is on.
+    log: Option<Arc<OperationLog>>,
 }
 
 impl Commander {
@@ -86,6 +90,7 @@ impl Commander {
             active: Side::Left,
             error: None,
             search: QuickSearch::default(),
+            log: None,
         })
     }
 
@@ -168,21 +173,64 @@ impl Commander {
     /// F2: renames `from` in the active panel's directory to `to`, then
     /// puts the cursor on it.
     pub fn rename(&mut self, from: &OsStr, to: &str) -> io::Result<()> {
-        fs_ops::rename(self.panel(self.active).path(), from, to)?;
+        let dir = self.panel(self.active).path().to_path_buf();
+        let source = dir.join(from);
+        let result = fs_ops::rename(&dir, from, to);
+        self.note("rename", &source, &result, |source| {
+            format!("renamed {} -> {}", source.display(), dir.join(to).display())
+        });
+        result?;
         self.refresh_after_change(OsStr::new(to))
+    }
+
+    /// Logs `result` of an action on `path`, if logging is on.
+    fn note<T>(
+        &self,
+        action: &str,
+        path: &Path,
+        result: &io::Result<T>,
+        done: impl FnOnce(&Path) -> String,
+    ) {
+        let Some(log) = &self.log else { return };
+        match result {
+            Ok(_) => log.write(format_args!("{action} {}", done(path))),
+            Err(e) => log.write(format_args!("{action} failed {}: {e}", path.display())),
+        }
+    }
+
+    /// Logs file changes from now on (the config's `log` setting).
+    pub fn set_log(&mut self, log: Option<Arc<OperationLog>>) {
+        self.log = log;
+    }
+
+    /// The log for background jobs to share.
+    pub fn log(&self) -> Option<&Arc<OperationLog>> {
+        self.log.as_ref()
     }
 
     /// F7: creates `name` (possibly `a/b/c`) in the active panel's directory,
     /// then puts the cursor on it.
     pub fn make_directory(&mut self, name: &str) -> io::Result<()> {
-        let created = fs_ops::make_directory(self.panel(self.active).path(), name)?;
-        self.refresh_after_change(&created)
+        let dir = self.panel(self.active).path().to_path_buf();
+        let result = fs_ops::make_directory(&dir, name);
+        self.note("mkdir", &dir.join(name), &result, |path| {
+            format!("created directory {}", path.display())
+        });
+        self.refresh_after_change(&result?)
     }
 
     /// Shift-F4: creates an empty file `name` in the active panel's directory
     /// (or keeps an existing one), puts the cursor on it and returns its path.
     pub fn create_file(&mut self, name: &str) -> io::Result<PathBuf> {
-        let path = fs_ops::create_file(self.panel(self.active).path(), name)?;
+        let dir = self.panel(self.active).path().to_path_buf();
+        let result = fs_ops::create_file(&dir, name);
+        // Only a file that was created counts as touched.
+        if !matches!(result, Ok((_, false))) {
+            self.note("new file", &dir.join(name), &result, |path| {
+                format!("created {}", path.display())
+            });
+        }
+        let (path, _) = result?;
         self.refresh_after_change(OsStr::new(name))?;
         Ok(path)
     }
@@ -688,5 +736,36 @@ mod tests {
         c.execute(Command::SwapPanels);
         c.execute(Command::ToggleHidden);
         assert!(!c.panel(Side::Left).shows_hidden() && !c.panel(Side::Right).shows_hidden());
+    }
+
+    #[test]
+    fn rename_mkdir_and_new_file_are_logged_when_logging_is_on() {
+        let (tmp, mut c) = commander();
+        let logs = tempfile::tempdir().unwrap();
+        c.set_log(Some(Arc::new(OperationLog::open(logs.path()).unwrap())));
+        assert!(c.log().is_some());
+        let d = tmp.path().display();
+        c.rename(OsStr::new("f"), "g").unwrap();
+        c.rename(OsStr::new("a"), "b").unwrap_err();
+        c.make_directory("x/y").unwrap();
+        c.create_file("new.txt").unwrap();
+        c.create_file("new.txt").unwrap(); // existed: not logged
+        c.create_file("x").unwrap_err();
+        let file = fs::read_dir(logs.path()).unwrap().next().unwrap().unwrap();
+        let lines: Vec<String> = fs::read_to_string(file.path())
+            .unwrap()
+            .lines()
+            .map(|l| l[20..].to_owned())
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                format!("rename renamed {d}/f -> {d}/g"),
+                format!("rename failed {d}/a: “b” already exists"),
+                format!("mkdir created directory {d}/x/y"),
+                format!("new file created {d}/new.txt"),
+                format!("new file failed {d}/x: “x” is a directory"),
+            ]
+        );
     }
 }

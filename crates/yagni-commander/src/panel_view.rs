@@ -81,15 +81,17 @@ impl PanelView {
                     cursor: (ix == panel.cursor()).then_some(is_active),
                     selected: panel.is_selected(entry),
                 };
-                entry_row(entry, row, colors).on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                        execute(&this.commander, Command::CursorTo(side, ix), cx);
-                        if event.click_count == 2 {
-                            execute(&this.commander, Command::Activate, cx);
-                        }
-                    }),
-                )
+                entry_row(entry, row, colors)
+                    .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            execute(&this.commander, Command::CursorTo(side, ix), cx);
+                            if event.click_count == 2 {
+                                execute(&this.commander, Command::Activate, cx);
+                            }
+                        }),
+                    )
             })
             .collect()
     }
@@ -113,6 +115,7 @@ impl PanelView {
                 let key = column.key;
                 column
                     .cell()
+                    .debug_selector(|| format!("header-{}-{:?}", side_name(side), key))
                     .cursor_pointer()
                     .text_color(if sort.key == key {
                         colors.text
@@ -164,6 +167,7 @@ impl Render for PanelView {
         // The quick search box sits in the active panel's footer while open.
         let search = commander.search().filter(|_| is_active).map(|prefix| {
             div()
+                .debug_selector(|| format!("search-{}", side_name(self.side)))
                 .flex_none()
                 .max_w(relative(0.6))
                 .overflow_hidden()
@@ -290,6 +294,14 @@ fn footer_text(summary: &Summary) -> String {
             format_size(summary.selected_bytes),
             format_size(summary.bytes)
         )
+    }
+}
+
+/// For test selectors.
+fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::Left => "left",
+        Side::Right => "right",
     }
 }
 

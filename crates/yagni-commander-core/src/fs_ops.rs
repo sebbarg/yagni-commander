@@ -79,9 +79,10 @@ pub(crate) fn rename(dir: &Path, from: &OsStr, to: &str) -> io::Result<()> {
     })
 }
 
-/// Creates an empty file `name` in `dir` and returns its path. An existing
-/// file is left as it is (Shift-F4 then just opens it); a directory is an error.
-pub(crate) fn create_file(dir: &Path, name: &str) -> io::Result<PathBuf> {
+/// Creates an empty file `name` in `dir` and returns its path and whether it
+/// was created. An existing file is left as it is (Shift-F4 then just opens
+/// it); a directory is an error.
+pub(crate) fn create_file(dir: &Path, name: &str) -> io::Result<(PathBuf, bool)> {
     validate_name(name)?;
     let path = dir.join(name);
     match fs::OpenOptions::new()
@@ -89,8 +90,8 @@ pub(crate) fn create_file(dir: &Path, name: &str) -> io::Result<PathBuf> {
         .create_new(true)
         .open(&path)
     {
-        Ok(_) => Ok(path),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !path.is_dir() => Ok(path),
+        Ok(_) => Ok((path, true)),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !path.is_dir() => Ok((path, false)),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
             Err(io::Error::new(e.kind(), format!("“{name}” is a directory")))
         }
@@ -215,11 +216,15 @@ mod tests {
     #[test]
     fn create_file_makes_an_empty_file_or_keeps_an_existing_one() {
         let tmp = tempfile::tempdir().unwrap();
-        let path = create_file(tmp.path(), "new.txt").unwrap();
+        let (path, created) = create_file(tmp.path(), "new.txt").unwrap();
+        assert!(created);
         assert_eq!(path, tmp.path().join("new.txt"));
         assert_eq!(fs::read(&path).unwrap(), b"");
         fs::write(&path, b"keep").unwrap();
-        assert_eq!(create_file(tmp.path(), "new.txt").unwrap(), path);
+        assert_eq!(
+            create_file(tmp.path(), "new.txt").unwrap(),
+            (path.clone(), false)
+        );
         assert_eq!(fs::read(&path).unwrap(), b"keep");
 
         fs::create_dir(tmp.path().join("dir")).unwrap();

@@ -14,7 +14,9 @@ use gpui_kit::{
     App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, SharedString,
     Styled, WeakEntity, Window, div, px,
 };
-use yagni_commander_core::file_ops::{Answer, Conflict, Event, Job, Operation, Progress, Report};
+use yagni_commander_core::file_ops::{
+    Answer, Conflict, Event, Job, Operation, Progress, Report, Settings,
+};
 use yagni_commander_core::{Command, Side, format_modified, format_size};
 
 use super::FileManager;
@@ -34,6 +36,7 @@ pub(super) enum Kind {
     Copy,
     Move,
     Trash,
+    Delete,
 }
 
 impl Kind {
@@ -42,6 +45,7 @@ impl Kind {
             Kind::Copy => "Copy",
             Kind::Move => "Move",
             Kind::Trash => "Move to trash",
+            Kind::Delete => "Delete",
         }
     }
 
@@ -50,6 +54,7 @@ impl Kind {
             Kind::Copy => "Copying",
             Kind::Move => "Moving",
             Kind::Trash => "Moving to trash",
+            Kind::Delete => "Deleting",
         }
     }
 }
@@ -65,10 +70,22 @@ pub(super) struct RunningJob {
     progress_open: bool,
 }
 
+#[cfg(test)]
+impl RunningJob {
+    pub(super) fn progress_open(&self) -> bool {
+        self.progress_open
+    }
+
+    pub(super) fn cancelling(&self, cx: &App) -> bool {
+        self.view.read(cx).cancelling
+    }
+}
+
 impl FileManager {
     /// F5 and F6: ask for the destination (the other panel's directory by
     /// default), then run the job.
     pub(super) fn copy_or_move(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let (sources, dir, other_dir) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
@@ -109,8 +126,10 @@ impl FileManager {
         );
     }
 
-    /// F8 and Del: confirm, then move to the trash.
-    pub(super) fn trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// F8 and Del: confirm, then move to the trash. Shift-F8 and Shift-Del
+    /// (`Kind::Delete`): confirm, then delete permanently.
+    pub(super) fn trash(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
         let sources = {
             let commander = self.commander.read(cx);
             source_paths(commander.panel(commander.active()))
@@ -118,7 +137,24 @@ impl FileManager {
         if sources.is_empty() || self.refuse_second_job(window, cx) {
             return;
         }
-        let question = SharedString::from(format!("Move {} to the trash?", describe(&sources)));
+        let delete = kind == Kind::Delete;
+        let (title, question, error_title) = if delete {
+            (
+                "Delete permanently",
+                format!(
+                    "Delete {} permanently? This cannot be undone.",
+                    describe(&sources)
+                ),
+                "Cannot delete",
+            )
+        } else {
+            (
+                "Move to trash",
+                format!("Move {} to the trash?", describe(&sources)),
+                "Cannot move to trash",
+            )
+        };
+        let question = SharedString::from(question);
         let this = cx.entity().downgrade();
         let focus = self.focus.clone();
         let cancel: OnPress = Rc::new({
@@ -130,25 +166,27 @@ impl FileManager {
         });
         let confirm: OnPress = Rc::new(move |window, cx| {
             window.close_dialog(cx);
-            let operation = Operation::Trash {
-                sources: sources.clone(),
+            let sources = sources.clone();
+            let operation = if delete {
+                Operation::Delete { sources }
+            } else {
+                Operation::Trash { sources }
             };
             let result = this
-                .update(cx, |this, cx| {
-                    this.start_job(Kind::Trash, operation, window, cx)
-                })
+                .update(cx, |this, cx| this.start_job(kind, operation, window, cx))
                 .unwrap_or(Ok(()));
             if let Err(e) = result {
-                show_error("Cannot move to trash", e.to_string(), None, window, cx);
+                show_error(error_title, e.to_string(), None, window, cx);
             }
         });
-        // Enter confirms, like TC's F8: the trash can be undone.
-        let buttons = ButtonRow::build([("Cancel", cancel), ("Move to trash", confirm)], 1, cx);
+        // Enter confirms, like TC's F8 and Shift-F8.
+        let label = if delete { "Delete" } else { "Move to trash" };
+        let buttons = ButtonRow::build([("Cancel", cancel), (label, confirm)], 1, cx);
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, _| {
             let focus_cancel = focus.clone();
             dialog
-                .title("Move to trash")
+                .title(title)
                 .w(px(420.0))
                 .close_button(false)
                 .child(question.clone())
@@ -181,7 +219,11 @@ impl FileManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> io::Result<()> {
-        let job = Job::spawn(operation)?;
+        let settings = Settings {
+            trash: self.trash,
+            log: self.commander.read(cx).log().cloned(),
+        };
+        let job = Job::spawn(operation, settings)?;
         let source = self.commander.read(cx).active();
         self.job = Some(RunningJob {
             job,
@@ -350,6 +392,7 @@ impl FileManager {
                 Kind::Copy => "Some entries were not copied",
                 Kind::Move => "Some entries were not moved",
                 Kind::Trash => "Some entries were not moved to the trash",
+                Kind::Delete => "Some entries were not deleted",
             };
             show_error(title, failure_summary(&report), None, window, cx);
         }

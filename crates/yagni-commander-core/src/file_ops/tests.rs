@@ -57,8 +57,15 @@ fn fake_trash(path: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+fn settings() -> Settings {
+    Settings {
+        trash: fake_trash,
+        log: None,
+    }
+}
+
 fn run_script(operation: &Operation, script: &mut Script) -> Report {
-    run_with(operation, script, fake_trash)
+    run(operation, script, &settings())
 }
 
 /// `src/` holds `a.txt` (5 bytes), `dir/b.txt` (3 bytes), `dir/deep/c.txt`
@@ -481,12 +488,7 @@ fn move_by_copy_deletes_only_what_was_copied() {
     fs::write(dst.join("dir/b.txt"), b"old").unwrap();
     symlink("b.txt", src.join("dir/link")).unwrap();
     let mut script = Script::answering(&[Answer::Skip]);
-    let mut engine = Engine {
-        observer: &mut script,
-        progress: Progress::default(),
-        always: None,
-        report: Report::default(),
-    };
+    let mut engine = engine(&mut script);
     assert_eq!(
         engine.copy_entry(&src.join("dir"), &dst.join("dir"), true),
         Step::Incomplete
@@ -585,9 +587,9 @@ fn finish(job: &Job) -> Report {
 fn job_runs_in_the_background_and_waits_for_answers() {
     let (_tmp, src, dst) = fixture();
     fs::write(dst.join("a.txt"), b"old").unwrap();
-    let job = Job::spawn_with(
+    let job = Job::spawn(
         copy(&[src.join("a.txt"), src.join("dir")], &dst),
-        fake_trash,
+        settings(),
     )
     .unwrap();
     let conflict = loop {
@@ -610,7 +612,7 @@ fn job_cancel_and_drop_stop_the_worker() {
     fs::write(dst.join("a.txt"), b"old").unwrap();
     let op = copy(&[src.join("a.txt"), src.join("dir")], &dst);
 
-    let job = Job::spawn_with(op, fake_trash).unwrap();
+    let job = Job::spawn(op, settings()).unwrap();
     job.cancel();
     job.answer(Answer::Cancel); // in case it got to the conflict first
     assert!(finish(&job).cancelled);
@@ -675,6 +677,8 @@ fn engine(script: &mut Script) -> Engine<'_> {
         progress: Progress::default(),
         always: None,
         report: Report::default(),
+        log: None,
+        name: "test",
     }
 }
 
@@ -782,4 +786,198 @@ fn move_merge_reports_unreadable_sources() {
     assert_eq!(report.failures.len(), 1);
     assert_eq!(report.failures[0].path, src.join("dir/deep"));
     assert_eq!(read(dst.join("dir/b.txt")), "bee", "the rest still moved");
+}
+
+fn delete(sources: &[PathBuf]) -> Operation {
+    Operation::Delete {
+        sources: sources.to_vec(),
+    }
+}
+
+#[test]
+fn delete_removes_files_and_trees_with_progress() {
+    let (_tmp, src, _) = fixture();
+    let mut script = Script::default();
+    let report = run_script(&delete(&[src.join("a.txt"), src.join("dir")]), &mut script);
+    assert_eq!(report, Report::default());
+    assert!(names(&src).is_empty());
+    let p = &script.last;
+    assert_eq!((p.items_done, p.items_total), (2, 2));
+    assert_eq!((p.files_done, p.files_total), (3, 3));
+    assert_eq!(p.bytes_total, 0, "deleting is counted by files");
+}
+
+#[test]
+fn delete_removes_symlinks_but_never_their_targets() {
+    let (tmp, src, dst) = fixture();
+    fs::write(dst.join("precious"), b"keep").unwrap();
+    symlink(&dst, src.join("dir/link-to-dir")).unwrap();
+    symlink(dst.join("precious"), src.join("link-to-file")).unwrap();
+    let report = run_script(
+        &delete(&[src.join("dir"), src.join("link-to-file")]),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+    assert!(!src.join("dir").exists());
+    assert!(src.join("link-to-file").symlink_metadata().is_err());
+    assert_eq!(read(dst.join("precious")), "keep");
+    drop(tmp);
+}
+
+#[test]
+fn opening_a_directory_for_deletion_never_follows_a_symlink() {
+    // What stops a directory swapped for a symlink mid-delete.
+    let (_tmp, src, dst) = fixture();
+    symlink(&dst, src.join("swapped")).unwrap();
+    let parent = open_dir(&src).unwrap();
+    assert!(open_dir_at(&parent, std::ffi::OsStr::new("swapped")).is_err());
+    assert!(open_dir_at(&parent, std::ffi::OsStr::new("dir")).is_ok());
+}
+
+#[test]
+fn delete_reports_failures_and_continues() {
+    let (_tmp, src, _) = fixture();
+    let report = run_script(
+        &delete(&[src.join("missing"), PathBuf::from("/"), src.join("a.txt")]),
+        &mut Script::default(),
+    );
+    assert_eq!(report.failures.len(), 2);
+    assert!(
+        report.failures[0].message.contains("root"),
+        "rejected first"
+    );
+    assert_eq!(report.failures[1].path, src.join("missing"));
+    assert!(!src.join("a.txt").exists());
+}
+
+#[test]
+fn delete_keeps_what_it_cannot_remove() {
+    if is_root() {
+        return;
+    }
+    let (_tmp, src, _) = fixture();
+    let deep = src.join("dir/deep");
+    fs::set_permissions(&deep, fs::Permissions::from_mode(0o555)).unwrap();
+    let report = run_script(&delete(&[src.join("dir")]), &mut Script::default());
+    fs::set_permissions(&deep, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].path, deep.join("c.txt"));
+    assert!(deep.join("c.txt").exists());
+    assert!(!src.join("dir/b.txt").exists(), "the rest was deleted");
+}
+
+#[test]
+fn delete_can_be_cancelled_before_or_between_entries() {
+    let (_tmp, src, _) = fixture();
+    let mut script = Script {
+        cancelled: true,
+        ..Script::default()
+    };
+    assert!(run_script(&delete(&[src.join("dir")]), &mut script).cancelled);
+    assert!(src.join("dir").exists());
+
+    let mut script = Script {
+        cancel_at_path: Some(src.join("dir/deep")),
+        ..Script::default()
+    };
+    let report = run_script(&delete(&[src.join("dir"), src.join("a.txt")]), &mut script);
+    assert!(report.cancelled);
+    assert!(src.join("dir/deep/c.txt").exists());
+    assert!(src.join("a.txt").exists(), "later sources untouched");
+}
+
+/// Log lines written by `operations`, without their timestamps.
+fn logged(operations: &[(Operation, &[Answer])]) -> Vec<String> {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(crate::oplog::OperationLog::open(dir.path()).unwrap());
+    for (operation, answers) in operations {
+        let settings = Settings {
+            trash: fake_trash,
+            log: Some(log.clone()),
+        };
+        run(operation, &mut Script::answering(answers), &settings);
+    }
+    let file = fs::read_dir(dir.path()).unwrap().next().unwrap().unwrap();
+    fs::read_to_string(file.path())
+        .unwrap()
+        .lines()
+        .map(|line| line[20..].to_owned())
+        .collect()
+}
+
+#[test]
+fn every_file_touched_is_logged() {
+    let (_tmp, src, dst) = fixture();
+    fs::create_dir(dst.join("dir")).unwrap();
+    fs::write(dst.join("dir/b.txt"), b"old").unwrap();
+    let (s, d) = (src.display(), dst.display());
+    let mut lines = logged(&[
+        (
+            copy(&[src.join("dir"), src.join("missing")], &dst),
+            &[Answer::Skip],
+        ),
+        (mv(&[src.join("a.txt")], &dst), &[]),
+        (delete(&[src.join("dir")]), &[]),
+    ]);
+    // Entries inside a directory come in the filesystem's order.
+    let mut expected = [
+        format!("copy start: 2 entries to {d}"),
+        format!("copy source {s}/dir"),
+        format!("copy source {s}/missing"),
+        format!("copy skipped {s}/dir/b.txt -> {d}/dir/b.txt: exists"),
+        format!("copy created directory {d}/dir/deep"),
+        format!("copy copied {s}/dir/deep/c.txt -> {d}/dir/deep/c.txt"),
+        format!("copy failed {s}/missing: No such file or directory (os error 2)"),
+        "copy finished: 1 failed, 1 skipped".to_owned(),
+        format!("move start: 1 entries to {d}"),
+        format!("move source {s}/a.txt"),
+        format!("move moved {s}/a.txt -> {d}/a.txt"),
+        "move finished: 0 failed, 0 skipped".to_owned(),
+        "delete start: 1 entries".to_owned(),
+        format!("delete source {s}/dir"),
+        format!("delete deleted {s}/dir/b.txt"),
+        format!("delete deleted {s}/dir/deep/c.txt"),
+        format!("delete deleted {s}/dir/deep"),
+        format!("delete deleted {s}/dir"),
+        "delete finished: 0 failed, 0 skipped".to_owned(),
+    ];
+    assert_eq!(lines.first(), expected.first());
+    assert_eq!(lines.last(), expected.last());
+    lines.sort();
+    expected.sort();
+    assert_eq!(lines, expected);
+}
+
+#[test]
+fn overwrites_trash_and_moves_by_copy_are_logged() {
+    let (_tmp, src, dst) = fixture();
+    fs::write(dst.join("a.txt"), b"old").unwrap();
+    fs::write(src.join("stuck"), b"").unwrap();
+    let (s, d) = (src.display(), dst.display());
+    let lines = logged(&[
+        (copy(&[src.join("a.txt")], &dst), &[Answer::Overwrite]),
+        (
+            Operation::Trash {
+                sources: vec![src.join("stuck"), src.join("a.txt")],
+            },
+            &[],
+        ),
+    ]);
+    assert!(lines.contains(&format!("copy replacing {d}/a.txt")));
+    assert!(lines.contains(&format!("copy copied {s}/a.txt -> {d}/a.txt")));
+    assert!(lines.contains(&format!("trash failed {s}/stuck: cannot trash")));
+    assert!(lines.contains(&format!("trash trashed {s}/a.txt")));
+    assert!(lines.contains(&"trash finished: 1 failed, 0 skipped".to_owned()));
+
+    // A move to another filesystem: copied, then the original removed.
+    let dir = tempfile::tempdir().unwrap();
+    let log = crate::oplog::OperationLog::open(dir.path()).unwrap();
+    let mut script = Script::default();
+    let mut engine = engine(&mut script);
+    engine.log = Some(&log);
+    engine.copy_entry(&src.join("dir"), &dst.join("moved"), true);
+    let file = fs::read_dir(dir.path()).unwrap().next().unwrap().unwrap();
+    let text = fs::read_to_string(file.path()).unwrap();
+    assert!(text.contains(&format!("test removed {s}/dir/b.txt")));
+    assert!(text.contains(&format!("test removed {s}/dir\n")));
 }

@@ -6,13 +6,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage::{self, StorageError};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Command that F4 runs with the file or directory as its argument, e.g. `code`.
     pub editor: Option<String>,
     /// Sort names case-sensitively (uppercase before lowercase).
     pub case_sensitive_sort: bool,
+    /// Log every file the app creates, copies, moves, renames, trashes or
+    /// deletes (see [`crate::oplog`]).
+    pub log: bool,
+    /// Log files older than this many days are deleted at startup.
+    pub log_keep_days: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            editor: None,
+            case_sensitive_sort: false,
+            log: false,
+            log_keep_days: 7,
+        }
+    }
 }
 
 /// Written on first start so the available settings are discoverable.
@@ -23,6 +39,13 @@ const TEMPLATE: &str = r#"# yagni-commander settings
 
 # Sort names case-sensitively (uppercase before lowercase).
 case_sensitive_sort = false
+
+# Log every file created, copied, moved, renamed, trashed or deleted, one file
+# per day in the "logs" folder next to the state file.
+log = false
+
+# Log files older than this many days are deleted at startup.
+log_keep_days = 7
 "#;
 
 impl Config {
@@ -74,6 +97,8 @@ mod tests {
     fn missing_keys_use_defaults() {
         let config: Config = toml::from_str("editor = \"vim\"").unwrap();
         assert!(!config.case_sensitive_sort);
+        assert!(!config.log, "logging is off by default");
+        assert_eq!(config.log_keep_days, 7);
     }
 
     #[test]
@@ -88,6 +113,8 @@ mod tests {
         let config = Config {
             editor: Some("zed".into()),
             case_sensitive_sort: true,
+            log: true,
+            log_keep_days: 30,
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);
