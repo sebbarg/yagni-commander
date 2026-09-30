@@ -187,4 +187,68 @@ mod tests {
         // The link's own mode (a symlink), not its target's.
         assert_eq!(find("link").mode.unwrap() & 0o170000, 0o120000);
     }
+
+    #[test]
+    fn missing_directory_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(read_entries(&tmp.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn lists_parent_dirs_and_files_with_sizes() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("dir")).unwrap();
+        fs::write(tmp.path().join("five"), b"12345").unwrap();
+
+        let entries = read_entries(tmp.path()).unwrap();
+        assert_eq!(entries.len(), 3);
+        let find = |n: &str| entries.iter().find(|e| e.label == n).unwrap();
+        assert_eq!(find("..").kind, EntryKind::Parent);
+        assert_eq!(find("dir").kind, EntryKind::Dir);
+        assert_eq!(find("dir").size, None);
+        assert_eq!(find("five").kind, EntryKind::File);
+        assert_eq!(find("five").size, Some(5));
+        assert!(find("five").modified.is_some());
+        assert!(!find("five").is_symlink);
+    }
+
+    #[test]
+    fn sort_name_is_lowercased_label() {
+        let tmp = tempfile::tempdir().unwrap();
+        File::create(tmp.path().join("MiXeD")).unwrap();
+        let entries = read_entries(tmp.path()).unwrap();
+        let e = entries.iter().find(|e| e.label == "MiXeD").unwrap();
+        assert_eq!(e.sort_name, "mixed");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_file_reports_target_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("target"), b"1234567").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("target"), tmp.path().join("link")).unwrap();
+        let entries = read_entries(tmp.path()).unwrap();
+        let link = entries.iter().find(|e| e.label == "link").unwrap();
+        assert_eq!(link.size, Some(7));
+        assert!(link.is_symlink);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn entries_with_the_same_owner_share_one_string() {
+        let tmp = tempfile::tempdir().unwrap();
+        File::create(tmp.path().join("a")).unwrap();
+        File::create(tmp.path().join("b")).unwrap();
+        let entries = read_entries(tmp.path()).unwrap();
+        let owner = |n: &str| {
+            entries
+                .iter()
+                .find(|e| e.label == n)
+                .unwrap()
+                .owner
+                .clone()
+                .unwrap()
+        };
+        assert!(Arc::ptr_eq(&owner("a"), &owner("b")));
+    }
 }

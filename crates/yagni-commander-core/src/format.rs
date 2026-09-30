@@ -113,4 +113,62 @@ mod tests {
         assert_eq!(format_permissions(&with_mode(0o102644)), "-rw-r-Sr--");
         assert_eq!(format_permissions(&Entry::parent()), "");
     }
+
+    #[test]
+    fn formats_size_unit_boundaries() {
+        assert_eq!(format_size(1024), "1.0 KiB");
+        assert_eq!(format_size(1024 * 1024 - 1), "1024.0 KiB");
+        assert_eq!(format_size(1 << 30), "1.0 GiB");
+        // PiB is the largest unit, so larger values keep counting in it.
+        assert_eq!(format_size(u64::MAX), "16384.0 PiB");
+    }
+
+    #[test]
+    fn formats_modified_in_system_zone() {
+        let formatted = format_modified(std::time::SystemTime::now());
+        // `YYYY-MM-DD HH:MM`, whatever the local zone is.
+        assert_eq!(formatted.len(), 16, "{formatted}");
+        assert_eq!(&formatted[4..5], "-");
+        assert_eq!(&formatted[10..11], " ");
+        assert_eq!(&formatted[13..14], ":");
+    }
+
+    #[test]
+    fn formats_modified_in_non_utc_zone() {
+        let t = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+        let tz = TimeZone::fixed(jiff::tz::offset(2));
+        assert_eq!(format_modified_in(t, tz), "2026-09-21 16:13");
+    }
+
+    #[test]
+    fn unrepresentable_time_formats_as_empty() {
+        // Far beyond the year 9999 that timestamps support.
+        let t = UNIX_EPOCH + Duration::from_secs(1 << 40);
+        assert_eq!(format_modified_in(t, TimeZone::UTC), "");
+    }
+
+    #[test]
+    fn formats_special_file_types() {
+        assert_eq!(format_permissions(&with_mode(0o010644)), "prw-r--r--");
+        assert_eq!(format_permissions(&with_mode(0o140755)), "srwxr-xr-x");
+        assert_eq!(format_permissions(&with_mode(0o060660)), "brw-rw----");
+        assert_eq!(format_permissions(&with_mode(0o020620)), "crw--w----");
+    }
+
+    #[test]
+    fn formats_special_bits_without_execute() {
+        assert_eq!(format_permissions(&with_mode(0o104644)), "-rwSr--r--");
+        assert_eq!(format_permissions(&with_mode(0o102755)), "-rwxr-sr-x");
+        assert_eq!(format_permissions(&with_mode(0o041776)), "drwxrwxrwT");
+    }
+
+    #[test]
+    fn mode_without_type_bits_falls_back_to_entry_kind() {
+        let dir = Entry {
+            kind: EntryKind::Dir,
+            ..with_mode(0o755)
+        };
+        assert_eq!(format_permissions(&dir), "drwxr-xr-x");
+        assert_eq!(format_permissions(&with_mode(0o644)), "-rw-r--r--");
+    }
 }

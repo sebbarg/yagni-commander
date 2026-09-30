@@ -163,4 +163,89 @@ mod tests {
             ["..", "Adir", "zdir", "b.txt", "c.txt", "A.txt"]
         );
     }
+
+    fn with_owner_and_mode(label: &str, owner: &str, mode: u32) -> Entry {
+        Entry {
+            owner: Some(owner.into()),
+            mode: Some(mode),
+            ..entry(label, EntryKind::File, Some(1), 0)
+        }
+    }
+
+    fn sorted_by(entries: &mut [Entry], sort: Sort) -> Vec<String> {
+        sort_entries(entries, sort);
+        entries.iter().map(|e| e.label.clone()).collect()
+    }
+
+    #[test]
+    fn default_sort_is_name_ascending() {
+        assert_eq!(
+            Sort::default(),
+            Sort {
+                key: SortKey::Name,
+                descending: false
+            }
+        );
+    }
+
+    #[test]
+    fn toggling_other_key_uses_its_starting_direction() {
+        let by_size = Sort::default().toggled(SortKey::Size);
+        assert!(by_size.descending);
+        let by_owner = by_size.toggled(SortKey::Owner);
+        assert_eq!(by_owner.key, SortKey::Owner);
+        assert!(!by_owner.descending);
+        assert!(by_owner.toggled(SortKey::Owner).descending);
+        assert!(!by_owner.toggled(SortKey::Permissions).descending);
+        assert!(by_owner.toggled(SortKey::Modified).descending);
+    }
+
+    #[test]
+    fn sorts_by_owner_with_name_tie_break() {
+        let mut entries = vec![
+            with_owner_and_mode("c", "root:root", 0o644),
+            with_owner_and_mode("a", "seb:seb", 0o644),
+            with_owner_and_mode("b", "root:root", 0o644),
+        ];
+        let asc = Sort::default().toggled(SortKey::Owner);
+        assert_eq!(sorted_by(&mut entries, asc), ["b", "c", "a"]);
+        // Descending flips the key but keeps names ascending within a group.
+        assert_eq!(
+            sorted_by(&mut entries, asc.toggled(SortKey::Owner)),
+            ["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn sorts_by_permissions_mode_value() {
+        let mut entries = vec![
+            with_owner_and_mode("x", "u:g", 0o100755),
+            with_owner_and_mode("r", "u:g", 0o100444),
+            with_owner_and_mode("w", "u:g", 0o100644),
+        ];
+        let asc = Sort::default().toggled(SortKey::Permissions);
+        assert_eq!(sorted_by(&mut entries, asc), ["r", "w", "x"]);
+    }
+
+    #[test]
+    fn missing_values_sort_first_ascending() {
+        let mut entries = vec![
+            entry("known", EntryKind::File, Some(5), 0),
+            entry("unknown", EntryKind::File, None, 0),
+        ];
+        let asc = Sort::default()
+            .toggled(SortKey::Size)
+            .toggled(SortKey::Size);
+        assert_eq!(sorted_by(&mut entries, asc), ["unknown", "known"]);
+    }
+
+    #[test]
+    fn identical_labels_are_ordered_by_raw_name() {
+        let mut upper = entry("same", EntryKind::File, None, 0);
+        upper.name = "SAME".into();
+        upper.label = "SAME".into();
+        let mut entries = vec![entry("same", EntryKind::File, None, 0), upper];
+        // Case-insensitive keys tie, so the raw name decides ("S" < "s").
+        assert_eq!(sorted_by(&mut entries, Sort::default()), ["SAME", "same"]);
+    }
 }

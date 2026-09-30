@@ -29,6 +29,12 @@ pub fn execute(commander: &Entity<Commander>, command: Command, cx: &mut App) {
     });
 }
 
+/// The active panel's path, then the app name.
+fn window_title(commander: &Commander) -> String {
+    let path = commander.panel(commander.active()).path();
+    format!("{} - yagni-commander", path.display())
+}
+
 pub struct FileManager {
     commander: Entity<Commander>,
     left: Entity<PanelView>,
@@ -66,9 +72,7 @@ impl FileManager {
     }
 
     fn update_title(&self, window: &mut Window, cx: &App) {
-        let commander = self.commander.read(cx);
-        let path = commander.panel(commander.active()).path();
-        window.set_window_title(&format!("{} - yagni-commander", path.display()));
+        window.set_window_title(&window_title(self.commander.read(cx)));
     }
 
     fn execute(&mut self, command: Command, cx: &mut Context<Self>) {
@@ -190,5 +194,100 @@ impl Render for FileManager {
                     .px(px(10.0))
                     .text_size(px(12.0)),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{TestAppContext, VisualTestContext};
+
+    /// A file manager window on a directory with dirs `a`, `b` and file `f`,
+    /// using the default keymap.
+    fn open(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::create_dir(tmp.path().join("b")).unwrap();
+        std::fs::write(tmp.path().join("f"), b"").unwrap();
+
+        cx.update(|cx| {
+            cx.set_global(Theme::tokyo_night());
+            crate::actions::bind_default_keys(cx);
+        });
+        let commander = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let commander = cx.new(|_| commander);
+        let (_, cx) = cx.add_window_view({
+            let commander = commander.clone();
+            |window, cx| FileManager::new(commander, window, cx)
+        });
+        (tmp, commander, cx)
+    }
+
+    fn cursor(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> usize {
+        commander.read_with(cx, |c, _| c.panel(side).cursor())
+    }
+
+    #[gpui::test]
+    fn arrow_keys_home_and_end_move_the_cursor(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
+        cx.simulate_keystrokes("up");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+        cx.simulate_keystrokes("end");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui::test]
+    fn tab_switches_the_panel_that_keys_act_on(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("tab down");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Right));
+        assert_eq!(cursor(&commander, Side::Right, cx), 1);
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+        cx.simulate_keystrokes("tab");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+    }
+
+    #[gpui::test]
+    fn enter_and_backspace_navigate(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down down enter");
+        commander.read_with(cx, |c, _| {
+            assert_eq!(c.panel(Side::Left).path(), tmp.path().join("b"))
+        });
+        cx.simulate_keystrokes("backspace");
+        commander.read_with(cx, |c, _| {
+            assert_eq!(c.panel(Side::Left).path(), tmp.path());
+            assert_eq!(c.panel(Side::Left).selected().unwrap().label, "b");
+        });
+    }
+
+    #[gpui::test]
+    fn page_keys_move_by_more_than_one_row(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("pagedown");
+        // The listing is shorter than a page, so the cursor lands on the last entry.
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+        cx.simulate_keystrokes("pageup");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui::test]
+    fn window_title_follows_the_active_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("tab down enter");
+        let title = commander.read_with(cx, |c, _| window_title(c));
+        assert_eq!(
+            title,
+            format!("{} - yagni-commander", tmp.path().join("a").display())
+        );
+        cx.simulate_keystrokes("tab");
+        let title = commander.read_with(cx, |c, _| window_title(c));
+        assert_eq!(title, format!("{} - yagni-commander", tmp.path().display()));
     }
 }

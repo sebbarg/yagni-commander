@@ -59,6 +59,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 - `cargo run --release -- [left-dir] [right-dir]`: run the app (the default workspace member).
 - `cargo test --workspace` and `cargo clippy --workspace --all-targets`.
+- `cargo llvm-cov --workspace --summary-only`: coverage (needs `cargo install cargo-llvm-cov` and `rustup component add llvm-tools-preview`). Core is kept near 100%; the uncovered lines need root or a file owned by an unknown uid.
+- App tests use gpui's `TestAppContext` (`#[gpui::test]`, `simulate_keystrokes`) to drive the real keymap in a headless window. gpui's test window does not expose the title, so title text lives in a pure function.
 - `scripts/make-test-files.sh [count] [dir]`: create a large directory under `/tmp` for stress tests.
 - `RUST_LOG=info` shows gpui's platform logs (renderer, fonts, windowing).
 - Headless UI checks on Linux: run under `Xvfb` and drive with `xdotool`. gpui ignores a click sent in the same instant as the pointer move, so pause between them.

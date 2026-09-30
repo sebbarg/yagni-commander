@@ -12,3 +12,7 @@ yagni-commander-core.workspace = true
 gpui.workspace = true
 gpui_platform.workspace = true
 env_logger.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

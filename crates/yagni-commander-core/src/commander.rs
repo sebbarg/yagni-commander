@@ -197,4 +197,145 @@ mod tests {
             Outcome::OpenFile(tmp.path().join("f"))
         );
     }
+
+    /// Left and right both start in a directory with dirs `a`, `b`, `c` and file `f`.
+    fn commander() -> (tempfile::TempDir, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in ["a", "b", "c"] {
+            fs::create_dir(tmp.path().join(dir)).unwrap();
+        }
+        fs::write(tmp.path().join("f"), b"12345").unwrap();
+        let c = Commander::new(tmp.path(), tmp.path()).unwrap();
+        (tmp, c)
+    }
+
+    fn selected(c: &Commander, side: Side) -> &str {
+        &c.panel(side).selected().unwrap().label
+    }
+
+    #[test]
+    fn side_other_is_symmetric() {
+        assert_eq!(Side::Left.other(), Side::Right);
+        assert_eq!(Side::Right.other(), Side::Left);
+    }
+
+    #[test]
+    fn new_fails_for_missing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing");
+        assert!(Commander::new(&missing, tmp.path()).is_err());
+        assert!(Commander::new(tmp.path(), &missing).is_err());
+    }
+
+    #[test]
+    fn starts_with_left_active_and_no_error() {
+        let (_tmp, c) = commander();
+        assert_eq!(c.active(), Side::Left);
+        assert!(c.error().is_none());
+    }
+
+    #[test]
+    fn cursor_commands_move_within_bounds() {
+        let (_tmp, mut c) = commander();
+        let last = c.panel(Side::Left).entries().len() - 1;
+
+        assert_eq!(c.execute(Command::CursorEnd), Outcome::Done);
+        assert_eq!(c.panel(Side::Left).cursor(), last);
+        c.execute(Command::CursorDown);
+        assert_eq!(c.panel(Side::Left).cursor(), last);
+
+        c.execute(Command::CursorHome);
+        assert_eq!(c.panel(Side::Left).cursor(), 0);
+        c.execute(Command::CursorUp);
+        assert_eq!(c.panel(Side::Left).cursor(), 0);
+
+        c.execute(Command::CursorBy(2));
+        assert_eq!(c.panel(Side::Left).cursor(), 2);
+        c.execute(Command::CursorBy(-10));
+        assert_eq!(c.panel(Side::Left).cursor(), 0);
+        c.execute(Command::CursorBy(100));
+        assert_eq!(c.panel(Side::Left).cursor(), last);
+    }
+
+    #[test]
+    fn cursor_to_activates_that_side() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Right, 2));
+        assert_eq!(c.active(), Side::Right);
+        assert_eq!(c.panel(Side::Right).cursor(), 2);
+        assert_eq!(c.panel(Side::Left).cursor(), 0);
+    }
+
+    #[test]
+    fn focus_only_changes_active_side() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::CursorDown);
+        c.execute(Command::Focus(Side::Right));
+        assert_eq!(c.active(), Side::Right);
+        c.execute(Command::Focus(Side::Right));
+        assert_eq!(c.active(), Side::Right);
+        assert_eq!(c.panel(Side::Left).cursor(), 1);
+    }
+
+    #[test]
+    fn go_up_returns_to_parent_with_cursor_on_previous_dir() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 2));
+        assert_eq!(selected(&c, Side::Left), "b");
+        c.execute(Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("b"));
+
+        c.execute(Command::GoUp);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert_eq!(selected(&c, Side::Left), "b");
+    }
+
+    #[test]
+    fn sort_by_targets_the_given_side_and_activates_it() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::SortBy(Side::Right, SortKey::Name));
+        assert_eq!(c.active(), Side::Right);
+        assert!(c.panel(Side::Right).sort().descending);
+        assert!(!c.panel(Side::Left).sort().descending);
+
+        let labels: Vec<_> = c
+            .panel(Side::Right)
+            .entries()
+            .iter()
+            .map(|e| e.label.as_str())
+            .collect();
+        assert_eq!(labels, ["..", "c", "b", "a", "f"]);
+    }
+
+    #[test]
+    fn activate_on_parent_navigates_up() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 1));
+        c.execute(Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        c.execute(Command::CursorHome);
+        assert_eq!(c.execute(Command::Activate), Outcome::Done);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_go_up_is_reported_and_leaves_panel_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+        if nix::unistd::geteuid().is_root() {
+            return; // root can read anything, so there is no failure to provoke
+        }
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 1));
+        c.execute(Command::Activate);
+        let inside = tmp.path().join("a");
+        assert_eq!(c.panel(Side::Left).path(), inside);
+
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o000)).unwrap();
+        c.execute(Command::GoUp);
+        fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(c.error().is_some());
+        assert_eq!(c.panel(Side::Left).path(), inside);
+    }
 }

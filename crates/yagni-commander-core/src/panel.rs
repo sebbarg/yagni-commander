@@ -231,4 +231,76 @@ mod tests {
         panel.go_up().unwrap();
         assert_eq!(panel.path(), Path::new("/"));
     }
+
+    #[test]
+    fn open_fails_for_missing_or_non_directory_path() {
+        let tmp = fixture();
+        assert!(Panel::open(tmp.path().join("missing")).is_err());
+        assert!(Panel::open(tmp.path().join("file.txt")).is_err());
+    }
+
+    #[test]
+    fn open_makes_relative_paths_absolute() {
+        let panel = Panel::open(".").unwrap();
+        assert!(panel.path().is_absolute());
+    }
+
+    #[test]
+    fn starts_sorted_by_name_with_cursor_on_first_entry() {
+        let tmp = fixture();
+        let panel = Panel::open(tmp.path()).unwrap();
+        assert_eq!(panel.sort(), Sort::default());
+        assert_eq!(panel.cursor(), 0);
+        let labels: Vec<_> = panel.entries().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["..", "alpha", "beta", "file.txt"]);
+    }
+
+    #[test]
+    fn empty_listing_has_no_selection_and_activates_to_none() {
+        let mut panel = Panel {
+            path: PathBuf::from("/"),
+            entries: Vec::new(),
+            cursor: 0,
+            sort: Sort::default(),
+        };
+        assert!(panel.selected().is_none());
+        panel.move_cursor(3);
+        assert_eq!(panel.cursor(), 0);
+        assert_eq!(panel.activate().unwrap(), Activation::None);
+    }
+
+    #[test]
+    fn sorting_falls_back_to_first_entry_without_selection() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.entries.clear();
+        panel.sort_by(SortKey::Size);
+        assert_eq!(panel.cursor(), 0);
+    }
+
+    #[test]
+    fn go_up_to_root_has_no_parent_entry() {
+        let mut panel = Panel::open("/tmp").unwrap();
+        panel.go_up().unwrap();
+        assert_eq!(panel.path(), Path::new("/"));
+        assert!(panel.entries().iter().all(|e| e.kind != EntryKind::Parent));
+        assert_eq!(panel.selected().unwrap().label, "tmp");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn navigates_into_directory_with_non_utf8_name() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+        let tmp = fixture();
+        let raw = OsStr::from_bytes(b"caf\xe9");
+        fs::create_dir(tmp.path().join(raw)).unwrap();
+
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        let ix = panel.entries().iter().position(|e| e.name == raw).unwrap();
+        assert_eq!(panel.entries()[ix].label, "caf\u{fffd}");
+        panel.set_cursor(ix);
+        assert_eq!(panel.activate().unwrap(), Activation::Navigated);
+        assert_eq!(panel.path(), tmp.path().join(raw));
+    }
 }
