@@ -1,16 +1,19 @@
 use std::cell::Cell;
 
 use fm_core::theme::{Rgb, TOKYO_NIGHT as P};
-use fm_core::{Command, Commander, Entry, EntryKind, Side, format_size, scroll_offset};
+use fm_core::{COLUMNS, Command, Commander, Entry, EntryKind, Side, Sort, SortKey, scroll_offset};
+use iced::alignment::Horizontal;
 use iced::keyboard::{self, Key, key::Named};
-use iced::mouse::ScrollDelta;
+use iced::mouse::{self, ScrollDelta};
 use iced::widget::text::Wrapping;
-use iced::widget::{Column, column, container, mouse_area, pane_grid, responsive, row, text};
+use iced::widget::{Column, Row, column, container, mouse_area, pane_grid, responsive, text};
 use iced::{Color, Element, Length, Size, Subscription, Theme};
 
 const ROW_HEIGHT: f32 = 22.0;
 const HEADER_HEIGHT: f32 = 28.0;
 const FOOTER_HEIGHT: f32 = 24.0;
+const COLUMN_HEADER_HEIGHT: f32 = 22.0;
+const CELL_SPACING: f32 = 10.0;
 const FONT_SIZE: f32 = 14.0;
 const WHEEL_ROWS_PER_LINE: f32 = 3.0;
 
@@ -252,20 +255,67 @@ impl App {
         .style(|_| background(P.header_bg));
 
         let border = if is_active { P.accent } else { P.border };
-        container(column![header, rows, footer])
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .clip(true)
-            .style(move |_| container::Style {
-                border: iced::Border {
-                    color: color(border),
-                    width: 1.0,
-                    radius: 6.0.into(),
-                },
-                ..background(P.panel_bg)
-            })
-            .into()
+        container(column![
+            header,
+            column_headers(panel.sort(), side),
+            rows,
+            footer
+        ])
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .clip(true)
+        .style(move |_| container::Style {
+            border: iced::Border {
+                color: color(border),
+                width: 1.0,
+                radius: 6.0.into(),
+            },
+            ..background(P.panel_bg)
+        })
+        .into()
     }
+}
+
+fn column_width(column: &fm_core::Column) -> Length {
+    column.width.map_or(Length::Fill, Length::Fixed)
+}
+
+/// Clickable column titles; clicking sorts the panel by that column.
+fn column_headers<'a>(sort: Sort, side: Side) -> Element<'a, Message> {
+    let mut cells = Row::new().spacing(CELL_SPACING);
+    for column in &COLUMNS {
+        let active = sort.key == column.key;
+        let title = text(column.header(sort))
+            .size(12)
+            .wrapping(Wrapping::None)
+            .color(color(if active { P.text } else { P.text_dim }));
+        let cell = container(title)
+            .width(column_width(column))
+            .clip(true)
+            .align_x(if column.align_right {
+                Horizontal::Right
+            } else {
+                Horizontal::Left
+            });
+        cells = cells.push(
+            mouse_area(cell)
+                .interaction(mouse::Interaction::Pointer)
+                .on_press(Message::Command(Command::SortBy(side, column.key))),
+        );
+    }
+    container(cells)
+        .padding([3, 10])
+        .height(COLUMN_HEADER_HEIGHT)
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            border: iced::Border {
+                color: color(P.border),
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..background(P.panel_bg)
+        })
+        .into()
 }
 
 /// `cursor`: `None` if not under the cursor, `Some(panel_is_active)` otherwise.
@@ -275,32 +325,36 @@ fn entry_row<'a>(entry: &'a Entry, cursor: Option<bool>) -> Element<'a, Message>
         Some(false) => (name_color(entry), Some(P.cursor_inactive_bg)),
         None => (name_color(entry), None),
     };
-    let size_label = match entry.kind {
-        EntryKind::Parent => String::new(),
-        EntryKind::Dir => "<DIR>".into(),
-        EntryKind::File => entry.size.map(format_size).unwrap_or_default(),
-    };
-    let name = text(&entry.label)
-        .size(FONT_SIZE)
-        .wrapping(Wrapping::None)
-        .color(color(fg));
-    let size = text(size_label)
-        .size(FONT_SIZE - 1.0)
-        .color(color(if cursor == Some(true) { fg } else { P.text_dim }))
-        .align_x(iced::alignment::Horizontal::Right);
+    let detail = if cursor == Some(true) { fg } else { P.text_dim };
 
-    container(row![
-        container(name).width(Length::Fill).clip(true),
-        container(size).width(90).align_right(90),
-    ])
-    .padding([2, 10])
-    .height(ROW_HEIGHT)
-    .width(Length::Fill)
-    .style(move |_| container::Style {
-        background: bg.map(|c| color(c).into()),
-        ..Default::default()
-    })
-    .into()
+    let mut cells = Row::new().spacing(CELL_SPACING);
+    for column in &COLUMNS {
+        let is_name = column.key == SortKey::Name;
+        let cell = text(column.cell(entry))
+            .size(if is_name { FONT_SIZE } else { FONT_SIZE - 1.0 })
+            .wrapping(Wrapping::None)
+            .color(color(if is_name { fg } else { detail }));
+        cells = cells.push(
+            container(cell)
+                .width(column_width(column))
+                .clip(true)
+                .align_x(if column.align_right {
+                    Horizontal::Right
+                } else {
+                    Horizontal::Left
+                }),
+        );
+    }
+
+    container(cells)
+        .padding([2, 10])
+        .height(ROW_HEIGHT)
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: bg.map(|c| color(c).into()),
+            ..Default::default()
+        })
+        .into()
 }
 
 fn name_color(entry: &Entry) -> Rgb {

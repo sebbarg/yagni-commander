@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::panel::{Activation, Panel};
+use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
@@ -34,6 +35,8 @@ pub enum Command {
     Focus(Side),
     Activate,
     GoUp,
+    /// Column header click on a panel.
+    SortBy(Side, SortKey),
 }
 
 /// Result of a command that the frontend may need to act on.
@@ -127,6 +130,11 @@ impl Commander {
                 Ok(())
             }
             Command::GoUp => panel.go_up(),
+            Command::SortBy(side, key) => {
+                self.active = side;
+                self.panel_mut(side).sort_by(key);
+                Ok(())
+            }
             Command::Activate => match panel.activate() {
                 Ok(Activation::File(path)) => return Outcome::OpenFile(path),
                 Ok(_) => Ok(()),

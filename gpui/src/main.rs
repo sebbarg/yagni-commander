@@ -1,5 +1,5 @@
 use fm_core::theme::{Rgb, TOKYO_NIGHT as P};
-use fm_core::{Command, Commander, Entry, EntryKind, Side, format_size};
+use fm_core::{COLUMNS, Command, Commander, Entry, EntryKind, Side, SortKey};
 use gpui::{
     App, Bounds, Context, Div, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton,
     MouseDownEvent, MouseMoveEvent, Rgba, ScrollStrategy, UniformListScrollHandle, Window,
@@ -9,6 +9,8 @@ use gpui::{
 const ROW_HEIGHT: f32 = 22.0;
 const HEADER_HEIGHT: f32 = 28.0;
 const FOOTER_HEIGHT: f32 = 24.0;
+const COLUMN_HEADER_HEIGHT: f32 = 22.0;
+const CELL_SPACING: f32 = 10.0;
 const STATUS_HEIGHT: f32 = 22.0;
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
@@ -121,7 +123,8 @@ impl FileManager {
     }
 
     fn page(&mut self, down: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let chrome = 2.0 * PADDING + HEADER_HEIGHT + FOOTER_HEIGHT + STATUS_HEIGHT;
+        let chrome =
+            2.0 * PADDING + HEADER_HEIGHT + COLUMN_HEADER_HEIGHT + FOOTER_HEIGHT + STATUS_HEIGHT;
         let rows = ((f32::from(window.viewport_size().height) - chrome) / ROW_HEIGHT) as isize;
         let delta = (rows - 1).max(1);
         self.execute(
@@ -129,6 +132,34 @@ impl FileManager {
             window,
             cx,
         );
+    }
+
+    /// Clickable column titles; clicking sorts the panel by that column.
+    fn column_headers(&self, side: Side, cx: &mut Context<Self>) -> Div {
+        let sort = self.commander.panel(side).sort();
+        div()
+            .h(px(COLUMN_HEADER_HEIGHT))
+            .flex_none()
+            .px(px(10.0))
+            .flex()
+            .items_center()
+            .gap(px(CELL_SPACING))
+            .border_b_1()
+            .border_color(color(P.border))
+            .text_size(px(12.0))
+            .children(COLUMNS.iter().map(|column| {
+                let key = column.key;
+                cell(column)
+                    .cursor_pointer()
+                    .text_color(color(if sort.key == key { P.text } else { P.text_dim }))
+                    .child(column.header(sort))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                            this.execute(Command::SortBy(side, key), window, cx);
+                        }),
+                    )
+            }))
     }
 
     fn panel(&self, side: Side, cx: &mut Context<Self>) -> Div {
@@ -212,6 +243,7 @@ impl FileManager {
             .border_color(color(if is_active { P.accent } else { P.border }))
             .bg(color(P.panel_bg))
             .child(header)
+            .child(self.column_headers(side, cx))
             .child(list)
             .child(footer)
     }
@@ -318,6 +350,15 @@ impl Render for FileManager {
     }
 }
 
+/// A table cell sized and aligned for `column`, shared by headers and rows.
+fn cell(column: &fm_core::Column) -> Div {
+    let cell = match column.width {
+        Some(width) => div().w(px(width)).flex_none(),
+        None => div().flex_1().min_w_0(),
+    };
+    cell.truncate().when(column.align_right, |d| d.text_right())
+}
+
 /// `cursor`: `None` if not under the cursor, `Some(panel_is_active)` otherwise.
 fn entry_row(entry: &Entry, cursor: Option<bool>) -> Div {
     let (fg, bg) = match cursor {
@@ -325,36 +366,22 @@ fn entry_row(entry: &Entry, cursor: Option<bool>) -> Div {
         Some(false) => (name_color(entry), Some(P.cursor_inactive_bg)),
         None => (name_color(entry), None),
     };
-    let size_label = match entry.kind {
-        EntryKind::Parent => String::new(),
-        EntryKind::Dir => "<DIR>".into(),
-        EntryKind::File => entry.size.map(format_size).unwrap_or_default(),
-    };
+    let detail = if cursor == Some(true) { fg } else { P.text_dim };
     div()
         .w_full()
         .h(px(ROW_HEIGHT))
         .px(px(10.0))
         .flex()
         .items_center()
-        .gap(px(8.0))
+        .gap(px(CELL_SPACING))
         .when_some(bg, |d, bg| d.bg(color(bg)))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .truncate()
-                .text_color(color(fg))
-                .child(entry.label.clone()),
-        )
-        .child(
-            div()
-                .w(px(90.0))
-                .flex_none()
-                .text_right()
-                .text_size(px(13.0))
-                .text_color(color(if cursor == Some(true) { fg } else { P.text_dim }))
-                .child(size_label),
-        )
+        .children(COLUMNS.iter().map(|column| {
+            let is_name = column.key == SortKey::Name;
+            cell(column)
+                .when(!is_name, |d| d.text_size(px(13.0)))
+                .text_color(color(if is_name { fg } else { detail }))
+                .child(column.cell(entry))
+        }))
 }
 
 fn name_color(entry: &Entry) -> Rgb {

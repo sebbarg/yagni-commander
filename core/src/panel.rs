@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::entry::{Entry, EntryKind, read_entries};
+use crate::sort::{Sort, SortKey, sort_entries};
 
 /// One side of the commander: a directory listing with a cursor.
 ///
@@ -12,6 +13,7 @@ pub struct Panel {
     path: PathBuf,
     entries: Vec<Entry>,
     cursor: usize,
+    sort: Sort,
 }
 
 /// What happened when the entry under the cursor was activated.
@@ -28,11 +30,14 @@ pub enum Activation {
 impl Panel {
     pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = std::path::absolute(path)?;
-        let entries = read_entries(&path)?;
+        let sort = Sort::default();
+        let mut entries = read_entries(&path)?;
+        sort_entries(&mut entries, sort);
         Ok(Self {
             path,
             entries,
             cursor: 0,
+            sort,
         })
     }
 
@@ -46,6 +51,21 @@ impl Panel {
 
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    pub fn sort(&self) -> Sort {
+        self.sort
+    }
+
+    /// Column header click: sort by `key`, or reverse if already sorted by it.
+    /// The cursor stays on the same entry.
+    pub fn sort_by(&mut self, key: SortKey) {
+        let keep = self.selected().map(|e| e.name.clone());
+        self.sort = self.sort.toggled(key);
+        sort_entries(&mut self.entries, self.sort);
+        self.cursor = keep
+            .and_then(|name| self.entries.iter().position(|e| e.name == name))
+            .unwrap_or(0);
     }
 
     pub fn selected(&self) -> Option<&Entry> {
@@ -95,7 +115,8 @@ impl Panel {
     /// Loads `target` and only commits the change if reading succeeded,
     /// so a failed navigation leaves the panel untouched.
     fn navigate(&mut self, target: PathBuf, select: Option<&std::ffi::OsStr>) -> io::Result<()> {
-        let entries = read_entries(&target)?;
+        let mut entries = read_entries(&target)?;
+        sort_entries(&mut entries, self.sort);
         let cursor = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(0);
@@ -190,6 +211,24 @@ mod tests {
         panel.go_up().unwrap();
         assert_eq!(panel.path(), tmp.path());
         assert_eq!(panel.selected().unwrap().label, "link");
+    }
+
+    #[test]
+    fn sorting_keeps_cursor_on_same_entry_and_survives_navigation() {
+        let tmp = fixture();
+        fs::write(tmp.path().join("beta/small"), b"1").unwrap();
+        fs::write(tmp.path().join("beta/big"), b"12345").unwrap();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        select(&mut panel, "beta");
+
+        panel.sort_by(SortKey::Name);
+        assert_eq!(panel.entries()[1].label, "beta");
+        assert_eq!(panel.selected().unwrap().label, "beta");
+
+        panel.sort_by(SortKey::Size);
+        panel.activate().unwrap();
+        let labels: Vec<_> = panel.entries().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["..", "big", "small"]);
     }
 
     #[test]
