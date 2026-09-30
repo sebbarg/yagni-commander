@@ -56,9 +56,14 @@ impl Column {
         }
     }
 
+    /// Cell text. Directories show as `[name]`; this is display only, so
+    /// sorting and quick search still use the bare name.
     pub fn text(&self, entry: &Entry) -> String {
         match self.key {
-            SortKey::Name => entry.label.clone(),
+            SortKey::Name => match entry.kind {
+                EntryKind::Dir => format!("[{}]", entry.label),
+                EntryKind::Parent | EntryKind::File => entry.label.clone(),
+            },
             SortKey::Size => match entry.kind {
                 EntryKind::Parent => String::new(),
                 EntryKind::Dir => "<DIR>".into(),
@@ -94,7 +99,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("f"), b"12345").unwrap();
-        let entries = Commander::new(tmp.path(), tmp.path())
+        let entries = Commander::new(tmp.path(), tmp.path(), false)
             .unwrap()
             .panel(yagni_commander_core::Side::Left)
             .entries()
@@ -119,6 +124,14 @@ mod tests {
         );
         assert_eq!(column(SortKey::Name).header(sort), "Name");
         assert_eq!(column(SortKey::Name).header(Sort::default()), "Name ▲");
+    }
+
+    #[test]
+    fn directory_names_are_bracketed_but_parent_and_files_are_not() {
+        let (_tmp, entries) = entries();
+        let name = column(SortKey::Name);
+        let texts: Vec<_> = entries.iter().map(|e| name.text(e)).collect();
+        assert_eq!(texts, ["..", "[d]", "f"]);
     }
 
     #[test]

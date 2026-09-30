@@ -1,17 +1,17 @@
 mod actions;
+mod app_state;
 mod columns;
 mod file_manager;
 mod panel_view;
 mod theme;
-mod window_state;
 
 use gpui_kit::{App, AppContext, Global, Menu, MenuItem, WindowOptions};
 use yagni_commander_core::{Commander, Config, storage};
 
 use crate::actions::Quit;
+use crate::app_state::AppState;
 use crate::file_manager::FileManager;
 use crate::theme::Theme;
-use crate::window_state::WindowState;
 
 /// The loaded settings, available to every view.
 pub(crate) struct CurrentConfig(pub Config);
@@ -24,7 +24,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let left = args.next().unwrap_or_else(|| ".".into());
     let right = args.next().unwrap_or_else(|| left.clone());
-    let mut commander = match Commander::new(&left, &right) {
+    let app_state = AppState::load();
+    let mut commander = match Commander::new(&left, &right, app_state.state.show_hidden) {
         Ok(commander) => commander,
         Err(e) => {
             eprintln!("yagni-commander: cannot open {left} / {right}: {e}");
@@ -61,14 +62,13 @@ fn main() {
         })
         .detach();
 
-        let window_state = WindowState::load();
         let options = WindowOptions {
-            window_bounds: Some(window_state.initial_bounds(cx)),
+            window_bounds: Some(app_state.initial_bounds(cx)),
             ..Default::default()
         };
-        cx.set_global(window_state);
+        cx.set_global(app_state);
         cx.on_app_quit(|cx| {
-            cx.global::<WindowState>().save();
+            cx.global::<AppState>().save();
             async {}
         })
         .detach();

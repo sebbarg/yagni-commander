@@ -26,6 +26,7 @@ actions!(
         SyncOtherPanel,
         SwapPanels,
         Reload,
+        ToggleHidden,
         Quit
     ]
 );
@@ -52,5 +53,6 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("alt-z", SyncOtherPanel, context),
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-r", Reload, context),
+        KeyBinding::new("ctrl-.", ToggleHidden, context),
     ]);
 }

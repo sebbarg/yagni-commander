@@ -8,12 +8,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 As of 2026-09-30:
 
-- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), plus themes-as-data and modal error boxes.
-- **Next: step 4, Ctrl-. hidden files toggle.** Spec in `Requirements.md` (Hidden files). Plan:
-  - Core: `Panel` keeps all entries but exposes only visible ones (`show_hidden` flag; hidden = name starts with `.`). Everything index-based (cursor, `entries()`, `find_prefix`, `summary`, `targets`) must work on the visible list. Hiding deselects hidden entries and moves the cursor to the nearest visible entry. New `Command::ToggleHidden` applies to both panels.
-  - App: `ctrl-.` binding; remember the flag in the state file (`window_state.rs` holds the state file today; generalize it to app state); new theme role for dimmed hidden entries (add to `Colors` and `assets/themes/tokyo-night.toml`).
-  - Note the default changes behavior: today hidden files are shown; after step 4 they are hidden by default.
-- **After that:** step 5 file-operation engine in core (copy, move, trash; background, per-file conflict prompt, error summary; see `Requirements.md`, File operations). Use the `trash` crate for F8. Revisit the rename check-then-act race (TOCTOU) there.
+- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), plus themes-as-data and modal error boxes.
+- **Next: step 5,** file-operation engine in core (copy, move, trash; background, per-file conflict prompt, error summary; see `Requirements.md`, File operations). Use the `trash` crate for F8. Revisit the rename check-then-act race (TOCTOU) there.
 - **Also required before v1:** config changes must apply without restart; background directory loading; resizable/configurable columns (see Known issues).
 - **Waiting on the owner to verify on real machines:** whether macOS still needs the full Xcode app with gpui-kit's runtime shaders; the "only Name sorting works" report; F4 with `editor = "code"` when launched from Finder (PATH); behavior on native Wayland (Plasma, Hyprland), which has never been tested here.
 
@@ -36,7 +32,7 @@ As of 2026-09-30:
 - **gpui (Zed's UI framework), not iced.** Its action + context-scoped keymap system matches the TC model, `uniform_list` is virtualized with native smooth scrolling, text truncates with ellipsis, and redraw on resize is smooth. iced 0.14 was evaluated and rejected.
 - **gpui comes via gpui-kit** (Longbridge, crates.io `gpui-kit = "0.7"`). gpui-kit pins `gpui-pre 0.3.7` (a snapshot of Zed commit `1a28cff`), re-exports gpui, provides `application()`, `init()` and `open_window()`, and includes gpui-component. Import everything through `gpui_kit::` (gpui APIs) and `gpui_kit::component::` (widgets); never add `gpui` directly, since two gpui crates in one build are incompatible types. The crates.io `gpui` itself (0.2.2, Oct 2025) is stale. Trade-off accepted: the snapshot is republished by a third party, not Zed, and the dependency tree is large (~700 crates). Its docs are thin: read the source under `~/.cargo/registry/src/*/gpui-component-0.7.0`, `gpui-base-0.7.0`, `gpui-pre-0.3.7`.
 - **gpui-component** (via gpui-kit) provides inputs, dialogs, menus, the settings component and progress, which gpui lacks.
-- **Themes are data.** A theme is a TOML file (`crates/yagni-commander/assets/themes/`) with `name`, `mode` (dark/light) and ~18 colors named by role (`accent`, `selected`, `directory`, ...), never by hue. Every background role has a matching text role (`accent`/`text_on_accent`). gpui-component's theme is derived from these roles in code (`Theme::component_config`), including hover/pressed shades, so theme authors only define roles and we don't depend on gpui-component's theme format. Theme selection and user theme files are v2 (see `Requirements.md`).
+- **Themes are data.** A theme is a TOML file (`crates/yagni-commander/assets/themes/`) with `name`, `mode` (dark/light) and ~19 colors named by role (`accent`, `selected`, `directory`, ...), never by hue. Every background role has a matching text role (`accent`/`text_on_accent`). gpui-component's theme is derived from these roles in code (`Theme::component_config`), including hover/pressed shades, so theme authors only define roles and we don't depend on gpui-component's theme format. Theme selection and user theme files are v2 (see `Requirements.md`).
 - **Errors are modal.** Errors show in a centered message box that stays until dismissed (`show_error` in `file_manager/commands.rs`); never toast notifications for errors.
 - **Same keymap on all platforms**, Ctrl not Cmd on macOS (only Quit differs: Cmd-Q / Alt-F4). F-keys assume Fn is held on Mac keyboards.
 
@@ -51,7 +47,8 @@ As of 2026-09-30:
   - Views take every color from `Theme::get(cx).colors`. `clippy.toml` bans gpui's color constructors (`rgb`, `hsla`, `black`, ...) so literals can't creep in; add a new role to `Colors` and every theme file instead.
   - The loaded `Config` is a gpui global, `CurrentConfig` (`main.rs`).
   - The window is opened with `gpui_kit::open_window`, which wraps `FileManager` in gpui-kit's `Root` (needed for dialogs).
-  - Window position/size: `window_state.rs` keeps the latest geometry in a `WindowState` global (updated via `observe_window_bounds`) and saves it on quit; restore falls back to centered if the geometry no longer overlaps a display.
+  - State file: `app_state.rs` keeps an `AppState` global (window geometry, updated via `observe_window_bounds`, and `show_hidden`) and saves it on quit. It is loaded before the window opens, since `Commander::new` needs `show_hidden`. Window restore falls back to centered if the geometry no longer overlaps a display.
+  - Hidden entries: `Panel` keeps them in a separate unsorted list while hidden, so `entries()` and every index (cursor, quick search, summary, selection) only see visible ones.
   - Column layout and cell text live in `columns.rs`; panel rendering in `panel_view.rs`.
 - Settings: `Config` is a hand-editable TOML file, created from a commented template on first start. A file that fails to parse is never overwritten; the app shows the error in the status line and runs on defaults.
   - Config: `~/.config/yagni-commander/config.toml` (Linux), `~/Library/Application Support/yagni-commander/config.toml` (macOS). Keys: `editor`, `case_sensitive_sort`.
@@ -65,7 +62,9 @@ As of 2026-09-30:
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
 - F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing letters/digits jumps to the first matching name (1 s reset, no search box).
 - Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
+- Directory names show as `[name]` (display only; ".." unbracketed).
 - Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
+- Hidden files (name starts with `.`) are hidden by default; Ctrl-. toggles them in both panels, remembered in the state file. Shown hidden names use the `hidden` theme role. Hiding deselects them and moves the cursor off them.
 - Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
 - Quit: Cmd+Q, Alt+F4, the macOS app menu, or closing the last window.
 

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -47,6 +47,16 @@ impl Entry {
             owner: None,
         }
     }
+
+    /// Hidden means the name starts with `.` (Linux and macOS). ".." is not hidden.
+    pub fn is_hidden(&self) -> bool {
+        self.kind != EntryKind::Parent && is_hidden_name(&self.name)
+    }
+}
+
+/// True for names starting with `.`. Callers exclude "..".
+pub(crate) fn is_hidden_name(name: &OsStr) -> bool {
+    name.as_encoded_bytes().first() == Some(&b'.')
 }
 
 /// Reads `dir` and returns its entries, unsorted (see [`crate::sort::sort_entries`]).
@@ -147,6 +157,18 @@ impl OwnerCache {
 mod tests {
     use super::*;
     use std::fs::File;
+
+    #[test]
+    fn dot_names_are_hidden_but_parent_is_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".dot"), b"").unwrap();
+        fs::write(tmp.path().join("plain.txt"), b"").unwrap();
+        let entries = read_entries(tmp.path()).unwrap();
+        let hidden = |n: &str| entries.iter().find(|e| e.label == n).unwrap().is_hidden();
+        assert!(hidden(".dot"));
+        assert!(!hidden("plain.txt"));
+        assert!(!hidden(".."));
+    }
 
     #[test]
     fn root_has_no_parent_entry() {

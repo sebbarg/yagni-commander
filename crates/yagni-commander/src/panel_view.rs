@@ -271,6 +271,9 @@ fn footer_text(summary: &Summary) -> String {
 }
 
 fn name_color(entry: &Entry, colors: &Colors) -> Rgba {
+    if entry.is_hidden() {
+        return colors.hidden;
+    }
     match entry.kind {
         EntryKind::Parent | EntryKind::Dir if entry.is_symlink => colors.symlink,
         EntryKind::Parent | EntryKind::Dir => colors.directory,

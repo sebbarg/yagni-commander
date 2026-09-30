@@ -12,11 +12,11 @@ mod commands;
 use crate::actions::{
     Activate, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, FILE_MANAGER_CONTEXT, GoUp,
     MakeDirectory, PageDown, PageUp, Reload, Rename, SelectAll, SwapPanels, SwitchPanel,
-    SyncOtherPanel, ToggleSelection,
+    SyncOtherPanel, ToggleHidden, ToggleSelection,
 };
+use crate::app_state::AppState;
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
-use crate::window_state::WindowState;
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
@@ -69,10 +69,10 @@ impl FileManager {
                 cx.notify();
             }),
             cx.observe_window_bounds(window, |_, window, cx| {
-                WindowState::remember(window.window_bounds(), cx);
+                AppState::remember_window(window.window_bounds(), cx);
             }),
         ];
-        WindowState::remember(window.window_bounds(), cx);
+        AppState::remember_window(window.window_bounds(), cx);
 
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -105,6 +105,12 @@ impl FileManager {
         self.notice = None;
         self.quick_search.reset();
         execute(&self.commander, command, cx);
+    }
+
+    fn toggle_hidden(&mut self, cx: &mut Context<Self>) {
+        self.execute(Command::ToggleHidden, cx);
+        let show = self.commander.read(cx).shows_hidden();
+        AppState::remember_show_hidden(show, cx);
     }
 
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
@@ -199,6 +205,7 @@ impl Render for FileManager {
                 this.execute(Command::SyncOtherPanel, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| this.execute(Command::Reload, cx)))
+            .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_action(
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
@@ -250,8 +257,8 @@ mod tests {
     use super::*;
     use gpui_kit::{TestAppContext, VisualTestContext};
 
-    /// A file manager window on a directory with dirs `a`, `b` and file `f`,
-    /// using the default keymap.
+    /// A file manager window on a directory with dirs `a`, `b`, file `f` and
+    /// hidden file `.dot` (not shown), using the default keymap.
     fn open(
         cx: &mut TestAppContext,
     ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
@@ -259,15 +266,16 @@ mod tests {
         std::fs::create_dir(tmp.path().join("a")).unwrap();
         std::fs::create_dir(tmp.path().join("b")).unwrap();
         std::fs::write(tmp.path().join("f"), b"").unwrap();
+        std::fs::write(tmp.path().join(".dot"), b"").unwrap();
 
         cx.update(|cx| {
             gpui_kit::init(cx);
             cx.set_global(Theme::default());
-            cx.set_global(WindowState::default());
+            cx.set_global(AppState::default());
             cx.set_global(crate::CurrentConfig(Default::default()));
             crate::actions::bind_default_keys(cx);
         });
-        let commander = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let commander = Commander::new(tmp.path(), tmp.path(), false).unwrap();
         let commander = cx.new(|_| commander);
         // Wrapped in Root like the real window, so dialogs and notifications work.
         let (_, cx) = cx.add_window_view({
@@ -580,5 +588,32 @@ mod tests {
         cx.run_until_parked();
         assert!(!dialog_open(cx));
         assert!(tmp.path().join("c").is_dir());
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_dot_toggles_hidden_files_in_both_panels_and_remembers_it(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let labels = |cx: &VisualTestContext, side| -> Vec<String> {
+            commander.read_with(cx, |c, _| {
+                c.panel(side)
+                    .entries()
+                    .iter()
+                    .map(|e| e.label.clone())
+                    .collect()
+            })
+        };
+        let remembered = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| cx.global::<AppState>().state.show_hidden)
+        };
+        assert_eq!(labels(cx, Side::Left), ["..", "a", "b", "f"]);
+
+        cx.simulate_keystrokes("ctrl-.");
+        assert_eq!(labels(cx, Side::Left), ["..", "a", "b", ".dot", "f"]);
+        assert_eq!(labels(cx, Side::Right), ["..", "a", "b", ".dot", "f"]);
+        assert!(remembered(cx));
+
+        cx.simulate_keystrokes("ctrl-.");
+        assert_eq!(labels(cx, Side::Right), ["..", "a", "b", "f"]);
+        assert!(!remembered(cx));
     }
 }

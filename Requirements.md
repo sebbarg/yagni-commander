@@ -36,6 +36,10 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Theme selection in the config (`theme = "..."`), more built-in themes, and user themes in `~/.config/yagni-commander/themes/*.toml` (v2).
 - Following the system light/dark appearance (v2).
 
+### File list
+
+- Directories show as `[name]` (display only: sorting and quick search use the bare name). ".." has no brackets.
+
 ### Tabs (v2)
 
 Tabs per panel, like Double Commander.
@@ -86,7 +90,9 @@ Toolbar with e.g. drive icons.
 - Hidden files are not shown by default. Ctrl-. toggles them for both panels, and the choice is remembered across runs (state file).
 - When shown, hidden entries are drawn in a dimmer color (a theme role).
 - Hiding them deselects any selected hidden entries, so file operations never act on something invisible. Quick search only matches visible entries.
-- If the cursor is on an entry that gets hidden, it moves to the nearest visible entry.
+- If the cursor is on an entry that gets hidden, it moves to the nearest visible entry (the next one below, else above).
+- One theme role (`hidden`) colors all hidden names, so a hidden directory is not drawn in the directory color.
+- If the entry under the cursor disappears on a re-read (deleted, or renamed to a hidden name), the cursor stays on the same row.
 
 ### F3 viewer
 
@@ -112,7 +118,7 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 1. ~~Adopt gpui-component; config and state storage.~~ Done (settings page UI comes with the menu, step 8).
 2. ~~Selection model in core.~~ Done.
 3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
-4. Ctrl-. hidden files toggle.
+4. ~~Ctrl-. hidden files toggle.~~ Done.
 5. File-operation engine in core (copy, move, trash), with tests.
 6. F5/F6/F8 dialogs and progress.
 7. F3 viewer.

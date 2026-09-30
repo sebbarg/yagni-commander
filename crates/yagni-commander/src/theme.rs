@@ -46,6 +46,8 @@ pub struct Colors {
     pub text_dim: Rgba,
     pub directory: Rgba,
     pub symlink: Rgba,
+    /// Names of hidden entries (dot files), dimmer than `text`.
+    pub hidden: Rgba,
     /// Focus color: the active panel's cursor bar and border, primary buttons.
     pub accent: Rgba,
     pub text_on_accent: Rgba,

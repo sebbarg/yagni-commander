@@ -49,6 +49,8 @@ pub enum Command {
     SyncOtherPanel,
     /// Ctrl-R: re-read both panels.
     Reload,
+    /// Ctrl-.: show or hide hidden entries in both panels.
+    ToggleHidden,
 }
 
 /// Result of a command that the UI may need to act on.
@@ -70,10 +72,14 @@ pub struct Commander {
 }
 
 impl Commander {
-    pub fn new(left: impl AsRef<Path>, right: impl AsRef<Path>) -> io::Result<Self> {
+    pub fn new(
+        left: impl AsRef<Path>,
+        right: impl AsRef<Path>,
+        show_hidden: bool,
+    ) -> io::Result<Self> {
         Ok(Self {
-            left: Panel::open(left)?,
-            right: Panel::open(right)?,
+            left: Panel::open(left, show_hidden)?,
+            right: Panel::open(right, show_hidden)?,
             active: Side::Left,
             error: None,
         })
@@ -95,6 +101,11 @@ impl Commander {
 
     pub fn active(&self) -> Side {
         self.active
+    }
+
+    /// Whether hidden entries are shown. Always the same for both panels.
+    pub fn shows_hidden(&self) -> bool {
+        self.left.shows_hidden()
     }
 
     /// Quick search: moves the active panel's cursor to the first entry
@@ -204,6 +215,12 @@ impl Commander {
                 self.panel_mut(active.other()).show(path, select.as_deref())
             }
             Command::Reload => self.left.reload(None).and(self.right.reload(None)),
+            Command::ToggleHidden => {
+                let show = !self.shows_hidden();
+                self.left.set_show_hidden(show);
+                self.right.set_show_hidden(show);
+                Ok(())
+            }
             Command::SortBy(side, key) => {
                 self.active = side;
                 self.panel_mut(side).sort_by(key);
@@ -232,7 +249,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir(tmp.path().join("a")).unwrap();
         fs::create_dir(tmp.path().join("b")).unwrap();
-        let mut c = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
 
         c.execute(Command::CursorDown);
         assert_eq!(c.panel(Side::Left).cursor(), 1);
@@ -250,7 +267,7 @@ mod tests {
     fn errors_are_recorded_and_cleared() {
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir(tmp.path().join("gone")).unwrap();
-        let mut c = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
         c.execute(Command::CursorDown);
         fs::remove_dir(tmp.path().join("gone")).unwrap();
 
@@ -264,7 +281,7 @@ mod tests {
     fn enter_on_file_is_reported() {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("f"), b"").unwrap();
-        let mut c = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
         c.execute(Command::CursorEnd);
         assert_eq!(
             c.execute(Command::Activate),
@@ -279,7 +296,7 @@ mod tests {
             fs::create_dir(tmp.path().join(dir)).unwrap();
         }
         fs::write(tmp.path().join("f"), b"12345").unwrap();
-        let c = Commander::new(tmp.path(), tmp.path()).unwrap();
+        let c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
         (tmp, c)
     }
 
@@ -297,8 +314,8 @@ mod tests {
     fn new_fails_for_missing_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("missing");
-        assert!(Commander::new(&missing, tmp.path()).is_err());
-        assert!(Commander::new(tmp.path(), &missing).is_err());
+        assert!(Commander::new(&missing, tmp.path(), true).is_err());
+        assert!(Commander::new(tmp.path(), &missing, true).is_err());
     }
 
     #[test]
@@ -535,5 +552,31 @@ mod tests {
         assert!(c.make_directory("x").is_err());
         // The left panel shows another directory and is untouched.
         assert_eq!(under_cursor(&c, Side::Left), "..");
+    }
+
+    #[test]
+    fn toggle_hidden_applies_to_both_panels() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join(".dot"), b"").unwrap();
+        fs::write(tmp.path().join("f"), b"").unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        let labels = |c: &Commander, side| -> Vec<String> {
+            c.panel(side)
+                .entries()
+                .iter()
+                .map(|e| e.label.clone())
+                .collect()
+        };
+        assert!(!c.shows_hidden());
+        assert_eq!(labels(&c, Side::Right), ["..", "f"]);
+
+        c.execute(Command::ToggleHidden);
+        assert!(c.shows_hidden());
+        assert_eq!(labels(&c, Side::Left), ["..", ".dot", "f"]);
+        assert_eq!(labels(&c, Side::Right), ["..", ".dot", "f"]);
+
+        c.execute(Command::SwapPanels);
+        c.execute(Command::ToggleHidden);
+        assert!(!c.panel(Side::Left).shows_hidden() && !c.panel(Side::Right).shows_hidden());
     }
 }
