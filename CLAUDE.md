@@ -2,6 +2,8 @@
 
 A personal, cross-platform dual-pane file manager in the spirit of Total Commander (TC), written in Rust with gpui. It implements the ~20% of TC the owner actually uses, not a full clone.
 
+**Requirements live in `Requirements.md`** (the working document: v1/v2 scope, keymap, product decisions, build order). Read it before planning features and keep it updated when decisions change.
+
 ## Goals
 
 - Looks great and feels at home on macOS, Kubuntu (KDE Plasma) and Omarchy (Hyprland). Existing options fall short: Double Commander's macOS support is poor, Krusader lacks features.
@@ -13,7 +15,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 - **GUI, not TUI.** Terminals intercept keys (Cmd shortcuts, Ctrl+Tab, etc.) inconsistently, so a TC keymap can't be guaranteed. A GUI also gives real multiple windows, drag and drop with Finder/Dolphin, and launching a configurable external editor (e.g. VS Code on F4).
 - **gpui (Zed's UI framework), not iced.** Its action + context-scoped keymap system matches the TC model, `uniform_list` is virtualized with native smooth scrolling, text truncates with ellipsis, and redraw on resize is smooth. iced 0.14 was evaluated and rejected.
 - **gpui is pinned to a Zed git commit** in the root `Cargo.toml` (`[workspace.dependencies]`). The crates.io `gpui` (0.2.2, Oct 2025) is stale. Upgrade the rev deliberately and expect small API ports; gpui gets 40-100 commits/month, mostly additive.
-- **Open question: gpui-component.** gpui has no text input, dialogs, dropdowns or tables; gpui-component provides them. Its dependency `gpui-pre 0.3.7` is a snapshot of the same Zed commit we pin (`1a28cff`), so adopting it needs no gpui port today. Trade-off: `gpui-pre` is republished by a single third-party maintainer, not Zed.
+- **gpui-component is adopted** for inputs, dialogs, menus, the settings page and progress (gpui itself has none). Not yet integrated. It depends on `gpui-pre 0.3.7`, a crates.io snapshot of the same Zed commit we pin (`1a28cff`), not on Zed's git repo. Two gpui crates in one build are distinct types, so integrating it likely means switching our gpui dependencies to that snapshot's crates; verify when doing it. Trade-off accepted: `gpui-pre` is republished by a single third-party maintainer (Longbridge), not Zed.
 
 ## Architecture
 
@@ -44,9 +46,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Next steps
 
-1. Collect the owner's list of TC features they actually use; write the product spec from it.
-2. Decide on gpui-component.
-3. Candidates already discussed: F4 opens a configurable external editor, background directory loading, resizable/configurable columns.
+Follow the v1 build order in `Requirements.md`. Also pending from earlier: background directory loading and resizable/configurable columns (see Known issues).
 
 ## Building
 
