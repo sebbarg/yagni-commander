@@ -1,9 +1,9 @@
 use fm_core::theme::{Rgb, TOKYO_NIGHT as P};
 use fm_core::{Command, Commander, Entry, EntryKind, Side, format_size};
 use gpui::{
-    App, Bounds, Context, Div, FocusHandle, KeyBinding, MouseButton, MouseDownEvent,
-    MouseMoveEvent, Rgba, ScrollStrategy, UniformListScrollHandle, Window, WindowBounds,
-    WindowOptions, actions, div, prelude::*, px, relative, size, uniform_list,
+    App, Bounds, Context, Div, FocusHandle, KeyBinding, Menu, MenuItem, MouseButton,
+    MouseDownEvent, MouseMoveEvent, Rgba, ScrollStrategy, UniformListScrollHandle, Window,
+    WindowBounds, WindowOptions, actions, div, prelude::*, px, relative, size, uniform_list,
 };
 
 const ROW_HEIGHT: f32 = 22.0;
@@ -25,7 +25,8 @@ actions!(
         PageUp,
         PageDown,
         Activate,
-        GoUp
+        GoUp,
+        Quit
     ]
 );
 
@@ -36,7 +37,24 @@ fn main() {
     let commander = Commander::new(&left, &right)
         .unwrap_or_else(|e| panic!("cannot open {left} / {right}: {e}"));
 
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
     gpui_platform::application().run(move |cx: &mut App| {
+        // gpui has no built-in quit: register it, bind it, and expose it in the menu bar.
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("alt-f4", Quit, None),
+        ]);
+        cx.set_menus([Menu::new("fm").items([MenuItem::action("Quit", Quit)])]);
+        // Keep macOS from leaving a windowless process behind.
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
+
         // The keymap is data: this is where a user config file will plug in.
         cx.bind_keys([
             KeyBinding::new("tab", SwitchPanel, Some(CONTEXT)),
