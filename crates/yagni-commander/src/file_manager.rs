@@ -5,11 +5,14 @@ use gpui_kit::{
     App, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, SharedString,
     Subscription, Window, div, prelude::*, px, relative,
 };
-use yagni_commander_core::{Command, Commander, Side};
+use yagni_commander_core::{Command, Commander, QuickSearch, Side};
+
+mod commands;
 
 use crate::actions::{
-    Activate, CursorDown, CursorEnd, CursorHome, CursorUp, FILE_MANAGER_CONTEXT, GoUp, PageDown,
-    PageUp, SelectAll, SwitchPanel, ToggleSelection,
+    Activate, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, FILE_MANAGER_CONTEXT, GoUp,
+    MakeDirectory, PageDown, PageUp, Reload, Rename, SelectAll, SwapPanels, SwitchPanel,
+    SyncOtherPanel, ToggleSelection,
 };
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
@@ -47,6 +50,7 @@ pub struct FileManager {
     /// One-off message (e.g. a config problem) shown in the status line until
     /// the next command.
     notice: Option<SharedString>,
+    quick_search: QuickSearch,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -81,6 +85,7 @@ impl FileManager {
             split_ratio: 0.5,
             dragging_split: false,
             notice: notice.map(Into::into),
+            quick_search: QuickSearch::default(),
             _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
@@ -91,8 +96,14 @@ impl FileManager {
         window.set_window_title(&window_title(self.commander.read(cx)));
     }
 
+    fn active_panel<'a>(&self, cx: &'a App) -> &'a yagni_commander_core::Panel {
+        let commander = self.commander.read(cx);
+        commander.panel(commander.active())
+    }
+
     fn execute(&mut self, command: Command, cx: &mut Context<Self>) {
         self.notice = None;
+        self.quick_search.reset();
         execute(&self.commander, command, cx);
     }
 
@@ -181,6 +192,19 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.page(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &SwapPanels, _, cx| this.execute(Command::SwapPanels, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SyncOtherPanel, _, cx| {
+                this.execute(Command::SyncOtherPanel, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Reload, _, cx| this.execute(Command::Reload, cx)))
+            .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
+            .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
                 MouseButton::Left,
@@ -237,15 +261,21 @@ mod tests {
         std::fs::write(tmp.path().join("f"), b"").unwrap();
 
         cx.update(|cx| {
+            gpui_kit::init(cx);
             cx.set_global(Theme::default());
             cx.set_global(WindowState::default());
+            cx.set_global(crate::CurrentConfig(Default::default()));
             crate::actions::bind_default_keys(cx);
         });
         let commander = Commander::new(tmp.path(), tmp.path()).unwrap();
         let commander = cx.new(|_| commander);
+        // Wrapped in Root like the real window, so dialogs and notifications work.
         let (_, cx) = cx.add_window_view({
             let commander = commander.clone();
-            |window, cx| FileManager::new(commander, None, window, cx)
+            |window, cx| {
+                let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
+                gpui_kit::base::Root::new(view, window, cx)
+            }
         });
         (tmp, commander, cx)
     }
@@ -338,5 +368,217 @@ mod tests {
         cx.simulate_keystrokes("tab ctrl-a");
         assert_eq!(selected(&commander, Side::Right, cx), ["a", "b", "f"]);
         assert!(selected(&commander, Side::Left, cx).is_empty());
+    }
+
+    fn path(
+        commander: &Entity<Commander>,
+        side: Side,
+        cx: &VisualTestContext,
+    ) -> std::path::PathBuf {
+        commander.read_with(cx, |c, _| c.panel(side).path().to_path_buf())
+    }
+
+    #[gpui_kit::test]
+    fn alt_z_shows_this_directory_in_the_other_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down enter alt-z");
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path().join("a"));
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_u_swaps_panels(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down enter ctrl-u");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_reloads(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("new"), b"").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        let has_new = commander.read_with(cx, |c, _| {
+            c.panel(Side::Left)
+                .entries()
+                .iter()
+                .any(|e| e.label == "new")
+        });
+        assert!(has_new);
+    }
+
+    #[gpui_kit::test]
+    fn typing_jumps_to_matching_name_and_ignores_misses(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("b");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
+        cx.simulate_keystrokes("x");
+        assert_eq!(
+            cursor(&commander, Side::Left, cx),
+            2,
+            "no name starts with bx"
+        );
+        cx.simulate_keystrokes("down f");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    }
+
+    #[gpui_kit::test]
+    fn f4_without_editor_does_not_crash(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down f4");
+        cx.run_until_parked();
+        // The error box takes the keyboard until dismissed.
+        cx.simulate_keystrokes("down escape");
+        cx.run_until_parked();
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
+    }
+
+    #[gpui_kit::test]
+    fn f7_creates_directory_from_dialog(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        cx.simulate_input("made/deep");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(tmp.path().join("made/deep").is_dir());
+        let under_cursor = commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        });
+        assert_eq!(under_cursor, "made");
+        // Focus is back on the panels.
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn f2_replaces_preselected_name_and_escape_cancels(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("notes.txt"), b"").unwrap();
+        cx.simulate_keystrokes("ctrl-r n f2");
+        cx.run_until_parked();
+        cx.simulate_input("ideas");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(tmp.path().join("ideas.txt").exists());
+
+        cx.simulate_keystrokes("f2");
+        cx.run_until_parked();
+        cx.simulate_input("other");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(tmp.path().join("ideas.txt").exists());
+        assert!(!tmp.path().join("other.txt").exists());
+    }
+
+    #[gpui_kit::test]
+    fn f2_onto_existing_name_keeps_both(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("down f2");
+        cx.run_until_parked();
+        cx.simulate_input("b");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(tmp.path().join("a").is_dir());
+        assert!(tmp.path().join("b").is_dir());
+    }
+
+    #[gpui_kit::test]
+    fn enter_submits_a_prompt_exactly_once(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let view = cx.update(|window, cx| {
+            window
+                .root::<gpui_kit::base::Root>()
+                .flatten()
+                .unwrap()
+                .read(cx)
+                .view()
+                .clone()
+                .downcast::<FileManager>()
+                .unwrap()
+        });
+        let submits = std::rc::Rc::new(std::cell::Cell::new(0));
+        view.update_in(cx, |this, window, cx| {
+            let submits = submits.clone();
+            this.prompt_name(
+                commands::Prompt {
+                    title: "Test",
+                    error_title: "Test failed",
+                    initial: "value",
+                    selection: 0..0,
+                },
+                std::rc::Rc::new(move |_, _, _| {
+                    submits.set(submits.get() + 1);
+                    Ok(())
+                }),
+                window,
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(submits.get(), 1);
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| {
+            use gpui_kit::component::WindowExt;
+            window.has_active_dialog(cx)
+        })
+    }
+
+    #[gpui_kit::test]
+    fn errors_stay_until_dismissed_then_prompt_can_be_corrected(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("down f2");
+        cx.run_until_parked();
+        cx.simulate_input("b");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        // Still there long after a toast would have faded.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_secs(30));
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box is showing");
+
+        // Dismiss the error; the prompt is still open with focus, so the name
+        // can be corrected and submitted.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "rename prompt is still open");
+        cx.simulate_keystrokes("backspace");
+        cx.simulate_input("fixed");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let names: Vec<_> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert!(!dialog_open(cx), "dialog still open; entries: {names:?}");
+        assert!(tmp.path().join("fixed").is_dir());
+        assert!(tmp.path().join("b").is_dir());
+    }
+
+    #[gpui_kit::test]
+    fn escape_on_error_also_returns_to_the_prompt(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("down f2");
+        cx.run_until_parked();
+        cx.simulate_input("b");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "only the error box closed");
+        cx.simulate_keystrokes("backspace");
+        cx.simulate_input("c");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(tmp.path().join("c").is_dir());
     }
 }

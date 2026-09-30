@@ -20,6 +20,12 @@ actions!(
         GoUp,
         ToggleSelection,
         SelectAll,
+        Rename,
+        Edit,
+        MakeDirectory,
+        SyncOtherPanel,
+        SwapPanels,
+        Reload,
         Quit
     ]
 );
@@ -40,5 +46,11 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("backspace", GoUp, context),
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
+        KeyBinding::new("f2", Rename, context),
+        KeyBinding::new("f4", Edit, context),
+        KeyBinding::new("f7", MakeDirectory, context),
+        KeyBinding::new("alt-z", SyncOtherPanel, context),
+        KeyBinding::new("ctrl-u", SwapPanels, context),
+        KeyBinding::new("ctrl-r", Reload, context),
     ]);
 }

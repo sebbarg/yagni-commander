@@ -5,13 +5,18 @@ mod panel_view;
 mod theme;
 mod window_state;
 
-use gpui_kit::{App, AppContext, Menu, MenuItem, WindowOptions};
+use gpui_kit::{App, AppContext, Global, Menu, MenuItem, WindowOptions};
 use yagni_commander_core::{Commander, Config, storage};
 
 use crate::actions::Quit;
 use crate::file_manager::FileManager;
 use crate::theme::Theme;
 use crate::window_state::WindowState;
+
+/// The loaded settings, available to every view.
+pub(crate) struct CurrentConfig(pub Config);
+
+impl Global for CurrentConfig {}
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -42,6 +47,7 @@ fn main() {
     gpui_kit::application().run(move |cx: &mut App| {
         gpui_kit::init(cx);
         Theme::default().install(cx);
+        cx.set_global(CurrentConfig(config));
         actions::bind_default_keys(cx);
 
         // gpui has no built-in quit: handle it and expose it in the menu bar.

@@ -22,6 +22,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Settings page in the UI:
   - Path to the external editor (used by F4).
   - File name sorting: case sensitive or insensitive.
+- Changes take effect immediately, without restarting: from the settings page, and when the file is edited by hand (watch the file, or at least reload it on Ctrl-R). Today a restart is needed; fix before v1.
 - Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings page edits this file; editing it by hand also works.
 
 ### Window position and size
@@ -43,22 +44,28 @@ Tabs per panel, like Double Commander.
 
 Toolbar with e.g. drive icons.
 
+### Error messages
+
+- Errors are shown in a centered, modal message box with a Dismiss button. It stays until dismissed (button, Enter or Escape). No fading toasts for errors.
+- After dismissing an error from a prompt (e.g. rename), focus returns to the prompt's text field so the input can be corrected.
+
 ## Keyboard
 
 | Key | Action |
 |---|---|
 | Space | Toggle selection of the entry under the cursor and move the cursor down. Selected entries are orange. ".." can't be selected. Changing directory clears the selection. |
 | Ctrl-A | Select all files and directories in the panel. |
-| F2 | Rename the file or directory under the cursor. |
+| F2 | Rename the file or directory under the cursor, in a dialog with the name preselected up to the last extension (like TC). Never overwrites an existing entry; a case-only rename (`foo` to `Foo`) is allowed. |
 | F3 | Built-in viewer (see below). |
-| F4 | Open the file or directory in the configured external editor. |
+| F4 | Open the file or directory in the configured external editor (the panel's own directory when the cursor is on ".."). The `editor` setting is split like a shell command, e.g. `code --wait`. |
 | F5 | Copy the selection, or the entry under the cursor if nothing is selected, to the other panel's directory (see File operations). |
 | F6 | Move, with the same rules as F5. |
-| F7 | Create a directory. |
+| F7 | Create a directory. Nested paths like `a/b/c` are allowed; nothing outside the current directory. |
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
 | Alt-Z | Set the other panel's path to this panel's path. |
 | Ctrl-U | Swap the two panels. |
 | Ctrl-R | Reload both panels. |
+| Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
 | 0-9, a-z, A-Z | Quick search (see below). |
 | Enter | On a directory: enter it. On a file: open it with its associated program (v2). |
 | Alt-F5 | Archive/compress the selection or current entry, with confirmation if the target exists (v2). |
@@ -68,10 +75,18 @@ Toolbar with e.g. drive icons.
 
 ### Quick search
 
-- Typed characters build a prefix. The cursor moves to the first entry whose name starts with it, case-insensitively.
+- Letters and digits (including non-ASCII letters like æ, ø) build a prefix. The cursor moves to the first entry whose name starts with it, case-insensitively.
 - If no entry matches, the keystroke is ignored and the cursor stays where it is.
 - No visible search box. The prefix resets after a short pause in typing (about one second) and on any other key or cursor movement.
 - Fuzzy matching (v2, if ever).
+
+### Hidden files
+
+- Hidden means the name starts with `.` (Linux and macOS). Files hidden only by the macOS Finder flag are always shown (v2, if needed).
+- Hidden files are not shown by default. Ctrl-. toggles them for both panels, and the choice is remembered across runs (state file).
+- When shown, hidden entries are drawn in a dimmer color (a theme role).
+- Hiding them deselects any selected hidden entries, so file operations never act on something invisible. Quick search only matches visible entries.
+- If the cursor is on an entry that gets hidden, it moves to the nearest visible entry.
 
 ### F3 viewer
 
@@ -94,10 +109,11 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 
 ## Build order (v1)
 
-1. ~~Adopt gpui-component; config and state storage.~~ Done (settings page UI comes with the menu, step 7).
+1. ~~Adopt gpui-component; config and state storage.~~ Done (settings page UI comes with the menu, step 8).
 2. ~~Selection model in core.~~ Done.
-3. F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.
-4. File-operation engine in core (copy, move, trash), with tests.
-5. F5/F6/F8 dialogs and progress.
-6. F3 viewer.
-7. Menu, About and the settings page.
+3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
+4. Ctrl-. hidden files toggle.
+5. File-operation engine in core (copy, move, trash), with tests.
+6. F5/F6/F8 dialogs and progress.
+7. F3 viewer.
+8. Menu, About and the settings page.

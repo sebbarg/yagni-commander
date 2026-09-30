@@ -1,6 +1,8 @@
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::fs_ops;
 use crate::panel::{Activation, Panel};
 use crate::sort::SortKey;
 
@@ -41,6 +43,12 @@ pub enum Command {
     ToggleSelection,
     /// Ctrl-A: select all files and directories.
     SelectAll,
+    /// Ctrl-U: swap the two panels.
+    SwapPanels,
+    /// Alt-Z: show the active panel's directory in the other panel too.
+    SyncOtherPanel,
+    /// Ctrl-R: re-read both panels.
+    Reload,
 }
 
 /// Result of a command that the UI may need to act on.
@@ -87,6 +95,44 @@ impl Commander {
 
     pub fn active(&self) -> Side {
         self.active
+    }
+
+    /// Quick search: moves the active panel's cursor to the first entry
+    /// starting with `prefix`. Returns false (and moves nothing) if none does.
+    pub fn jump_to_prefix(&mut self, prefix: &str) -> bool {
+        let panel = self.panel_mut(self.active);
+        match panel.find_prefix(prefix) {
+            Some(index) => {
+                panel.set_cursor(index);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// F2: renames `from` in the active panel's directory to `to`, then
+    /// puts the cursor on it.
+    pub fn rename(&mut self, from: &OsStr, to: &str) -> io::Result<()> {
+        fs_ops::rename(self.panel(self.active).path(), from, to)?;
+        self.refresh_after_change(OsStr::new(to))
+    }
+
+    /// F7: creates `name` (possibly `a/b/c`) in the active panel's directory,
+    /// then puts the cursor on it.
+    pub fn make_directory(&mut self, name: &str) -> io::Result<()> {
+        let created = fs_ops::make_directory(self.panel(self.active).path(), name)?;
+        self.refresh_after_change(&created)
+    }
+
+    /// Re-reads the active panel with the cursor on `select`, and the other
+    /// panel too if it shows the same directory.
+    fn refresh_after_change(&mut self, select: &OsStr) -> io::Result<()> {
+        let active = self.active;
+        self.panel_mut(active).reload(Some(select))?;
+        if self.left.path() == self.right.path() {
+            self.panel_mut(active.other()).reload(None)?;
+        }
+        Ok(())
     }
 
     /// Applies the case-sensitive sorting setting to both panels.
@@ -148,6 +194,16 @@ impl Commander {
                 panel.select_all();
                 Ok(())
             }
+            Command::SwapPanels => {
+                std::mem::swap(&mut self.left, &mut self.right);
+                Ok(())
+            }
+            Command::SyncOtherPanel => {
+                let path = panel.path().to_path_buf();
+                let select = panel.cursor_entry().map(|e| e.name.clone());
+                self.panel_mut(active.other()).show(path, select.as_deref())
+            }
+            Command::Reload => self.left.reload(None).and(self.right.reload(None)),
             Command::SortBy(side, key) => {
                 self.active = side;
                 self.panel_mut(side).sort_by(key);
@@ -379,5 +435,105 @@ mod tests {
         c.execute(Command::SelectAll);
         assert_eq!(c.panel(Side::Right).summary().selected(), 4);
         assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+    }
+
+    #[test]
+    fn swap_panels_exchanges_directories_and_keeps_active_side() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 3));
+        c.execute(Command::CursorTo(Side::Right, 1));
+        c.execute(Command::Activate);
+        c.execute(Command::SwapPanels);
+        assert_eq!(c.active(), Side::Right);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(c.panel(Side::Right).path(), tmp.path());
+        // Cursors travel with their panels.
+        assert_eq!(under_cursor(&c, Side::Right), "c");
+        assert_eq!(under_cursor(&c, Side::Left), "..");
+    }
+
+    #[test]
+    fn sync_other_panel_shows_same_directory_and_entry() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Right, 1));
+        c.execute(Command::Activate);
+        c.execute(Command::Focus(Side::Left));
+        c.execute(Command::CursorTo(Side::Left, 3));
+        c.execute(Command::SyncOtherPanel);
+        assert_eq!(c.panel(Side::Right).path(), tmp.path());
+        assert_eq!(under_cursor(&c, Side::Right), "c");
+        assert_eq!(c.active(), Side::Left);
+    }
+
+    #[test]
+    fn reload_picks_up_changes_in_both_panels() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 2));
+        fs::create_dir(tmp.path().join("new")).unwrap();
+        c.execute(Command::Reload);
+        let has_new = |side| c.panel(side).entries().iter().any(|e| e.label == "new");
+        assert!(has_new(Side::Left) && has_new(Side::Right));
+        assert_eq!(under_cursor(&c, Side::Left), "b");
+        assert!(c.error().is_none());
+    }
+
+    #[test]
+    fn reload_of_vanished_directory_is_reported() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 1));
+        c.execute(Command::Activate);
+        fs::remove_dir(tmp.path().join("a")).unwrap();
+        c.execute(Command::Reload);
+        assert!(c.error().is_some());
+    }
+
+    #[test]
+    fn jump_to_prefix_moves_cursor_or_reports_no_match() {
+        let (_tmp, mut c) = commander();
+        assert!(c.jump_to_prefix("B"));
+        assert_eq!(under_cursor(&c, Side::Left), "b");
+        assert!(c.jump_to_prefix("f"));
+        assert_eq!(under_cursor(&c, Side::Left), "f");
+        assert!(!c.jump_to_prefix("zz"));
+        assert_eq!(under_cursor(&c, Side::Left), "f");
+        assert!(!c.jump_to_prefix("."), "never matches ..");
+    }
+
+    #[test]
+    fn rename_moves_cursor_to_new_name_and_refreshes_other_panel() {
+        let (tmp, mut c) = commander();
+        c.rename(OsStr::new("f"), "g").unwrap();
+        assert_eq!(under_cursor(&c, Side::Left), "g");
+        assert!(tmp.path().join("g").exists());
+        let right: Vec<_> = c
+            .panel(Side::Right)
+            .entries()
+            .iter()
+            .map(|e| e.label.as_str())
+            .collect();
+        assert!(right.contains(&"g") && !right.contains(&"f"));
+    }
+
+    #[test]
+    fn failed_rename_changes_nothing() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Left, 1));
+        let err = c.rename(OsStr::new("a"), "b").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert!(tmp.path().join("a").is_dir());
+        assert_eq!(under_cursor(&c, Side::Left), "a");
+    }
+
+    #[test]
+    fn make_directory_selects_new_entry_in_active_panel() {
+        let (tmp, mut c) = commander();
+        c.execute(Command::CursorTo(Side::Right, 1));
+        c.execute(Command::Activate);
+        c.make_directory("x/y").unwrap();
+        assert!(tmp.path().join("a/x/y").is_dir());
+        assert_eq!(under_cursor(&c, Side::Right), "x");
+        assert!(c.make_directory("x").is_err());
+        // The left panel shows another directory and is untouched.
+        assert_eq!(under_cursor(&c, Side::Left), "..");
     }
 }

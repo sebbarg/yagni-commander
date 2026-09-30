@@ -113,7 +113,7 @@ impl Theme {
         colors.border = hex(c.border);
         colors.caret = hex(c.text);
         colors.ring = hex(c.accent);
-        colors.selection = hex(c.header_active_bg);
+        colors.selection = hex(with_alpha(c.accent, 0.35));
         colors.accent = hex(c.cursor_inactive_bg);
         colors.accent_foreground = hex(c.text);
         colors.primary = hex(c.accent);

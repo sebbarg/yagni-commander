@@ -177,6 +177,37 @@ impl Panel {
             .collect();
     }
 
+    /// First entry (in display order, never "..") whose name starts with
+    /// `prefix`, ignoring case.
+    pub fn find_prefix(&self, prefix: &str) -> Option<usize> {
+        let prefix = prefix.to_lowercase();
+        self.entries
+            .iter()
+            .position(|e| e.kind != EntryKind::Parent && e.sort_name.starts_with(&prefix))
+    }
+
+    /// What F4 opens: the entry under the cursor, or the panel's own
+    /// directory when the cursor is on "..".
+    pub fn cursor_path(&self) -> PathBuf {
+        match self.cursor_entry() {
+            Some(entry) if entry.kind != EntryKind::Parent => self.path.join(&entry.name),
+            _ => self.path.clone(),
+        }
+    }
+
+    /// Re-reads the directory, keeping the cursor on the same entry (or on
+    /// `select` if given) and the selection of entries that still exist.
+    pub(crate) fn reload(&mut self, select: Option<&OsStr>) -> io::Result<()> {
+        let keep = self.cursor_entry().map(|e| e.name.clone());
+        let select = select.or(keep.as_deref());
+        self.navigate(self.path.clone(), select)
+    }
+
+    /// Shows `path`, with the cursor on `select` if present.
+    pub(crate) fn show(&mut self, path: PathBuf, select: Option<&OsStr>) -> io::Result<()> {
+        self.navigate(path, select)
+    }
+
     /// The entry under the cursor.
     pub fn cursor_entry(&self) -> Option<&Entry> {
         self.entries.get(self.cursor)
@@ -586,5 +617,35 @@ mod tests {
         assert_eq!((summary.selected_dirs, summary.selected_files), (1, 1));
         assert_eq!(summary.selected_bytes, 3);
         assert_eq!((summary.selected(), summary.total()), (2, 4));
+    }
+
+    #[test]
+    fn find_prefix_is_case_insensitive_and_skips_parent() {
+        let tmp = fixture();
+        let panel = Panel::open(tmp.path()).unwrap();
+        assert_eq!(panel.find_prefix("B"), Some(2));
+        assert_eq!(panel.find_prefix("file"), Some(3));
+        assert_eq!(panel.find_prefix("."), None);
+        assert_eq!(panel.find_prefix("zzz"), None);
+    }
+
+    #[test]
+    fn cursor_path_is_entry_or_own_directory_on_parent() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        assert_eq!(panel.cursor_path(), tmp.path());
+        select(&mut panel, "file.txt");
+        assert_eq!(panel.cursor_path(), tmp.path().join("file.txt"));
+    }
+
+    #[test]
+    fn reload_can_move_cursor_to_a_given_entry() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        fs::create_dir(tmp.path().join("gamma")).unwrap();
+        panel.reload(Some(OsStr::new("gamma"))).unwrap();
+        assert_eq!(panel.cursor_entry().unwrap().label, "gamma");
+        panel.reload(None).unwrap();
+        assert_eq!(panel.cursor_entry().unwrap().label, "gamma");
     }
 }
