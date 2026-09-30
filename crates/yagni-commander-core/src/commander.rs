@@ -19,8 +19,8 @@ impl Side {
     }
 }
 
-/// Everything a frontend can ask the core to do. Frontends own the keymap
-/// and translate key presses into these.
+/// Everything the UI can ask the core to do. The UI owns the keymap and
+/// translates key presses into these.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     CursorUp,
@@ -39,7 +39,7 @@ pub enum Command {
     SortBy(Side, SortKey),
 }
 
-/// Result of a command that the frontend may need to act on.
+/// Result of a command that the UI may need to act on.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     Done,
@@ -53,7 +53,7 @@ pub struct Commander {
     left: Panel,
     right: Panel,
     active: Side,
-    /// Last error, shown by the frontend until the next successful command.
+    /// Last error, shown by the UI until the next successful command.
     error: Option<String>,
 }
 
@@ -90,7 +90,7 @@ impl Commander {
     }
 
     /// Runs a command. I/O errors are stored in [`Commander::error`] rather than
-    /// returned, since the frontend's only sensible reaction is to display them.
+    /// returned, since the UI's only sensible reaction is to display them.
     pub fn execute(&mut self, command: Command) -> Outcome {
         self.error = None;
         let active = self.active;

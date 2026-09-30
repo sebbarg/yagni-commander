@@ -34,7 +34,7 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub fn parent() -> Self {
+    pub(crate) fn parent() -> Self {
         Self {
             name: OsString::from(".."),
             label: "..".into(),
@@ -47,20 +47,15 @@ impl Entry {
             owner: None,
         }
     }
-
-    /// True for entries that Enter navigates into (including "..").
-    pub fn is_navigable(&self) -> bool {
-        matches!(self.kind, EntryKind::Parent | EntryKind::Dir)
-    }
 }
 
-/// Reads `dir` and returns its entries, unsorted (see [`crate::sort_entries`]).
+/// Reads `dir` and returns its entries, unsorted (see [`crate::sort::sort_entries`]).
 ///
 /// A ".." entry is included unless `dir` is a filesystem root.
 /// Entries whose metadata cannot be read are still listed, as files without size.
 /// Symlinks report kind, size and modification time of their target, but mode
 /// and owner of the link itself, like `ls -l`.
-pub fn read_entries(dir: &Path) -> io::Result<Vec<Entry>> {
+pub(crate) fn read_entries(dir: &Path) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut owners = OwnerCache::default();
     if dir.parent().is_some() {

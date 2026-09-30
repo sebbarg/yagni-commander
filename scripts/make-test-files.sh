@@ -4,15 +4,15 @@
 #
 # usage: scripts/make-test-files.sh [count] [dir]
 #   count  number of files (default 10000); also creates count/100 subdirectories
-#   dir    target directory (default /tmp/fm-test-<count>)
+#   dir    target directory (default /tmp/yagni-commander-test-<count>)
 #
 # Re-running with the same dir replaces it, but only if this script created it.
 
 set -euo pipefail
 
 count=${1:-10000}
-dir=${2:-/tmp/fm-test-$count}
-marker=.fm-test-files
+dir=${2:-/tmp/yagni-commander-test-$count}
+marker=.yagni-commander-test-files
 
 if ! [[ $count =~ ^[0-9]+$ ]]; then
     echo "count must be a non-negative integer, got: $count" >&2

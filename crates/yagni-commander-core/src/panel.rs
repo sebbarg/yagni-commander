@@ -18,17 +18,17 @@ pub struct Panel {
 
 /// What happened when the entry under the cursor was activated.
 #[derive(Debug, PartialEq, Eq)]
-pub enum Activation {
+pub(crate) enum Activation {
     /// The panel now shows a different directory.
     Navigated,
-    /// The cursor is on a file. The frontend decides what to do with it.
+    /// The cursor is on a file. The UI decides what to do with it.
     File(PathBuf),
     /// Nothing to activate (empty listing).
     None,
 }
 
 impl Panel {
-    pub fn open(path: impl AsRef<Path>) -> io::Result<Self> {
+    pub(crate) fn open(path: impl AsRef<Path>) -> io::Result<Self> {
         let path = std::path::absolute(path)?;
         let sort = Sort::default();
         let mut entries = read_entries(&path)?;
@@ -59,7 +59,7 @@ impl Panel {
 
     /// Column header click: sort by `key`, or reverse if already sorted by it.
     /// The cursor stays on the same entry.
-    pub fn sort_by(&mut self, key: SortKey) {
+    pub(crate) fn sort_by(&mut self, key: SortKey) {
         let keep = self.selected().map(|e| e.name.clone());
         self.sort = self.sort.toggled(key);
         sort_entries(&mut self.entries, self.sort);
@@ -72,17 +72,17 @@ impl Panel {
         self.entries.get(self.cursor)
     }
 
-    pub fn move_cursor(&mut self, delta: isize) {
+    pub(crate) fn move_cursor(&mut self, delta: isize) {
         self.set_cursor(self.cursor.saturating_add_signed(delta));
     }
 
     /// Moves the cursor to `index`, clamped to the listing.
-    pub fn set_cursor(&mut self, index: usize) {
+    pub(crate) fn set_cursor(&mut self, index: usize) {
         self.cursor = index.min(self.entries.len().saturating_sub(1));
     }
 
     /// Enter: descend into a directory, go up on "..", or report a file.
-    pub fn activate(&mut self) -> io::Result<Activation> {
+    pub(crate) fn activate(&mut self) -> io::Result<Activation> {
         let Some(entry) = self.selected() else {
             return Ok(Activation::None);
         };
@@ -98,18 +98,12 @@ impl Panel {
 
     /// Goes to the parent directory and puts the cursor on the directory we left.
     /// Does nothing at the filesystem root.
-    pub fn go_up(&mut self) -> io::Result<()> {
+    pub(crate) fn go_up(&mut self) -> io::Result<()> {
         let Some(parent) = self.path.parent().map(Path::to_path_buf) else {
             return Ok(());
         };
         let came_from = self.path.file_name().map(|n| n.to_os_string());
         self.navigate(parent, came_from.as_deref())
-    }
-
-    /// Re-reads the current directory, keeping the cursor on the same name if it still exists.
-    pub fn reload(&mut self) -> io::Result<()> {
-        let keep = self.selected().map(|e| e.name.clone());
-        self.navigate(self.path.clone(), keep.as_deref())
     }
 
     /// Loads `target` and only commits the change if reading succeeded,

@@ -55,7 +55,7 @@ impl Sort {
 
 /// Sorts TC-style: ".." first, then directories, then files. Within each group
 /// by `sort`, with ties broken by case-insensitive name.
-pub fn sort_entries(entries: &mut [Entry], sort: Sort) {
+pub(crate) fn sort_entries(entries: &mut [Entry], sort: Sort) {
     entries.sort_by(|a, b| compare(a, b, sort));
 }
 
