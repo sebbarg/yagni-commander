@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::fs_ops;
 use crate::panel::{Activation, Panel};
+use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,8 @@ pub struct Commander {
     active: Side,
     /// Last error, shown by the UI until the next successful command.
     error: Option<String>,
+    /// Quick search in the active panel. Any command ends it.
+    search: QuickSearch,
 }
 
 impl Commander {
@@ -82,6 +85,7 @@ impl Commander {
             right: Panel::open(right, show_hidden)?,
             active: Side::Left,
             error: None,
+            search: QuickSearch::default(),
         })
     }
 
@@ -108,17 +112,57 @@ impl Commander {
         self.left.shows_hidden()
     }
 
-    /// Quick search: moves the active panel's cursor to the first entry
-    /// starting with `prefix`. Returns false (and moves nothing) if none does.
-    pub fn jump_to_prefix(&mut self, prefix: &str) -> bool {
+    /// Whether typing `ch` starts or extends a quick search.
+    pub fn search_accepts(ch: char) -> bool {
+        QuickSearch::accepts(ch)
+    }
+
+    /// The quick search prefix, while the search box is open.
+    pub fn search(&self) -> Option<&str> {
+        self.search.prefix()
+    }
+
+    /// Quick search: appends `ch` and moves the active panel's cursor to the
+    /// first entry starting with the result. If none does, returns false and
+    /// changes nothing (the key is ignored).
+    pub fn search_type(&mut self, ch: char) -> bool {
+        let candidate = self.search.candidate(ch);
         let panel = self.panel_mut(self.active);
-        match panel.find_prefix(prefix) {
-            Some(index) => {
-                panel.set_cursor(index);
-                true
-            }
-            None => false,
+        let Some(index) = panel.find_prefix(&candidate) else {
+            return false;
+        };
+        panel.set_cursor(index);
+        self.search.set(candidate);
+        true
+    }
+
+    /// Down/Up while searching: the next or previous match, wrapping around.
+    /// Returns false if no search is open.
+    pub fn search_step(&mut self, forward: bool) -> bool {
+        let Some(prefix) = self.search.prefix() else {
+            return false;
+        };
+        let prefix = prefix.to_owned();
+        let panel = self.panel_mut(self.active);
+        if let Some(index) = panel.find_prefix_from(&prefix, panel.cursor(), forward) {
+            panel.set_cursor(index);
         }
+        true
+    }
+
+    /// Backspace while searching: drops the last character; the cursor stays.
+    /// Returns false if no search is open.
+    pub fn search_backspace(&mut self) -> bool {
+        let open = self.search.prefix().is_some();
+        self.search.backspace();
+        open
+    }
+
+    /// Escape: closes the search box. Returns false if none was open.
+    pub fn search_cancel(&mut self) -> bool {
+        let open = self.search.prefix().is_some();
+        self.search.clear();
+        open
     }
 
     /// F2: renames `from` in the active panel's directory to `to`, then
@@ -173,6 +217,7 @@ impl Commander {
     /// returned, since the UI's only sensible reaction is to display them.
     pub fn execute(&mut self, command: Command) -> Outcome {
         self.error = None;
+        self.search.clear();
         let active = self.active;
         let panel = self.panel_mut(active);
         let result = match command {
@@ -529,15 +574,41 @@ mod tests {
     }
 
     #[test]
-    fn jump_to_prefix_moves_cursor_or_reports_no_match() {
+    fn search_jumps_to_first_match_and_ignores_misses() {
         let (_tmp, mut c) = commander();
-        assert!(c.jump_to_prefix("B"));
+        assert_eq!(c.search(), None);
+        assert!(c.search_type('B'));
         assert_eq!(under_cursor(&c, Side::Left), "b");
-        assert!(c.jump_to_prefix("f"));
-        assert_eq!(under_cursor(&c, Side::Left), "f");
-        assert!(!c.jump_to_prefix("zz"));
-        assert_eq!(under_cursor(&c, Side::Left), "f");
-        assert!(!c.jump_to_prefix("."), "never matches ..");
+        assert_eq!(c.search(), Some("B"));
+        assert!(!c.search_type('z'));
+        assert_eq!(c.search(), Some("B"), "a miss keeps the prefix");
+        assert!(c.search_backspace());
+        assert_eq!(c.search(), None, "empty prefix closes the search");
+        assert!(!c.search_backspace());
+        assert!(!c.search_type('.'), "never matches ..");
+        assert_eq!(c.search(), None);
+    }
+
+    #[test]
+    fn search_steps_through_matches_until_a_command_ends_it() {
+        let (tmp, mut c) = commander();
+        fs::create_dir(tmp.path().join("bb")).unwrap();
+        c.execute(Command::Reload);
+        assert!(!c.search_step(true), "no search open");
+        c.search_type('b');
+        assert_eq!(under_cursor(&c, Side::Left), "b");
+        assert!(c.search_step(true));
+        assert_eq!(under_cursor(&c, Side::Left), "bb");
+        c.search_step(true);
+        assert_eq!(under_cursor(&c, Side::Left), "b", "wraps");
+        c.search_step(false);
+        assert_eq!(under_cursor(&c, Side::Left), "bb");
+        assert!(c.search_cancel());
+        assert!(!c.search_cancel());
+
+        c.search_type('a');
+        c.execute(Command::CursorDown);
+        assert_eq!(c.search(), None, "any command ends the search");
     }
 
     #[test]

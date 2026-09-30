@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use gpui_kit::{
     Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
+    UniformListScrollHandle, Window, div, prelude::*, px, relative, uniform_list,
 };
 use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
@@ -161,16 +161,39 @@ impl Render for PanelView {
                     .child(panel.path().display().to_string()),
             );
 
+        // The quick search box sits in the active panel's footer while open.
+        let search = commander.search().filter(|_| is_active).map(|prefix| {
+            div()
+                .flex_none()
+                .max_w(relative(0.6))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .px(px(6.0))
+                .rounded(px(3.0))
+                .border_1()
+                .border_color(colors.accent)
+                .bg(colors.panel_bg)
+                .text_color(colors.text)
+                .child(prefix.to_owned())
+        });
         let footer = div()
             .h(px(FOOTER_HEIGHT))
             .flex_none()
             .px(px(10.0))
             .flex()
             .items_center()
+            .gap(px(10.0))
             .bg(colors.header_bg)
             .text_color(colors.text_dim)
             .text_size(px(12.0))
-            .child(footer_text(&panel.summary()));
+            .children(search)
+            .child(
+                div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .child(footer_text(&panel.summary())),
+            );
 
         let border = if is_active {
             colors.accent

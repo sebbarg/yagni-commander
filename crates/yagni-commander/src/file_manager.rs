@@ -5,15 +5,15 @@ use gpui_kit::{
     App, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, SharedString,
     Subscription, Window, div, prelude::*, px, relative,
 };
-use yagni_commander_core::{Command, Commander, QuickSearch, Side};
+use yagni_commander_core::{Command, Commander, Side};
 
 mod commands;
 mod file_ops;
 
 use crate::actions::{
-    Activate, ButtonTest, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, EditNewFile,
-    FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, Move, PageDown, PageUp, Reload, Rename, SelectAll,
-    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleSelection, Trash,
+    Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Edit,
+    EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, Move, PageDown, PageUp, Reload, Rename,
+    SelectAll, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleSelection, Trash,
 };
 use crate::app_state::AppState;
 use crate::panel_view::PanelView;
@@ -51,7 +51,6 @@ pub struct FileManager {
     /// One-off message (e.g. a config problem) shown in the status line until
     /// the next command.
     notice: Option<SharedString>,
-    quick_search: QuickSearch,
     /// The copy, move or trash operation in progress.
     job: Option<file_ops::RunningJob>,
     _subscriptions: Vec<Subscription>,
@@ -88,7 +87,6 @@ impl FileManager {
             split_ratio: 0.5,
             dragging_split: false,
             notice: notice.map(Into::into),
-            quick_search: QuickSearch::default(),
             job: None,
             _subscriptions: subscriptions,
         };
@@ -107,8 +105,25 @@ impl FileManager {
 
     fn execute(&mut self, command: Command, cx: &mut Context<Self>) {
         self.notice = None;
-        self.quick_search.reset();
         execute(&self.commander, command, cx);
+    }
+
+    /// Runs a quick search step (see `Commander::search_*`); if no search is
+    /// open, runs `otherwise` instead.
+    fn search_or(
+        &mut self,
+        step: fn(&mut Commander) -> bool,
+        otherwise: Command,
+        cx: &mut Context<Self>,
+    ) {
+        let searching = self.commander.update(cx, |commander, cx| {
+            let searching = step(commander);
+            cx.notify();
+            searching
+        });
+        if !searching {
+            self.execute(otherwise, cx);
+        }
     }
 
     fn toggle_hidden(&mut self, cx: &mut Context<Self>) {
@@ -182,10 +197,21 @@ impl Render for FileManager {
             .on_action(
                 cx.listener(|this, _: &SwitchPanel, _, cx| this.execute(Command::SwitchPanel, cx)),
             )
-            .on_action(cx.listener(|this, _: &CursorUp, _, cx| this.execute(Command::CursorUp, cx)))
-            .on_action(
-                cx.listener(|this, _: &CursorDown, _, cx| this.execute(Command::CursorDown, cx)),
-            )
+            // While a quick search is open, Up/Down step through its matches
+            // and Backspace shortens it.
+            .on_action(cx.listener(|this, _: &CursorUp, _, cx| {
+                this.search_or(|c| c.search_step(false), Command::CursorUp, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CursorDown, _, cx| {
+                this.search_or(|c| c.search_step(true), Command::CursorDown, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CancelSearch, _, cx| {
+                this.commander.update(cx, |commander, cx| {
+                    if commander.search_cancel() {
+                        cx.notify();
+                    }
+                })
+            }))
             .on_action(
                 cx.listener(|this, _: &CursorHome, _, cx| this.execute(Command::CursorHome, cx)),
             )
@@ -193,7 +219,9 @@ impl Render for FileManager {
                 cx.listener(|this, _: &CursorEnd, _, cx| this.execute(Command::CursorEnd, cx)),
             )
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.execute(Command::Activate, cx)))
-            .on_action(cx.listener(|this, _: &GoUp, _, cx| this.execute(Command::GoUp, cx)))
+            .on_action(cx.listener(|this, _: &GoUp, _, cx| {
+                this.search_or(Commander::search_backspace, Command::GoUp, cx)
+            }))
             .on_action(cx.listener(|this, _: &ToggleSelection, _, cx| {
                 this.execute(Command::ToggleSelection, cx)
             }))
@@ -431,6 +459,10 @@ mod tests {
         assert!(has_new);
     }
 
+    fn search(commander: &Entity<Commander>, cx: &VisualTestContext) -> Option<String> {
+        commander.read_with(cx, |c, _| c.search().map(str::to_owned))
+    }
+
     #[gpui_kit::test]
     fn typing_jumps_to_matching_name_and_ignores_misses(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
@@ -442,8 +474,57 @@ mod tests {
             2,
             "no name starts with bx"
         );
-        cx.simulate_keystrokes("down f");
+        assert_eq!(search(&commander, cx).as_deref(), Some("b"));
+        cx.simulate_keystrokes("escape f");
         assert_eq!(cursor(&commander, Side::Left, cx), 3);
+        cx.simulate_keystrokes("home");
+        assert_eq!(search(&commander, cx), None, "other keys end the search");
+    }
+
+    #[gpui_kit::test]
+    fn up_and_down_step_through_search_matches(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::create_dir(tmp.path().join("bb")).unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"").unwrap();
+        // .., a, b, bb, b.txt, f
+        cx.simulate_keystrokes("ctrl-r b");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 4);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2, "wraps");
+        cx.simulate_keystrokes("up");
+        assert_eq!(cursor(&commander, Side::Left, cx), 4, "wraps back");
+        cx.simulate_keystrokes("b down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3, "only bb matches bb");
+        assert_eq!(search(&commander, cx).as_deref(), Some("bb"));
+    }
+
+    #[gpui_kit::test]
+    fn backspace_shortens_the_search_before_going_up(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down enter");
+        let inside = tmp.path().join("a");
+        std::fs::write(inside.join("xy"), b"").unwrap();
+        cx.simulate_keystrokes("ctrl-r x y backspace");
+        assert_eq!(search(&commander, cx).as_deref(), Some("x"));
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(search(&commander, cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), inside, "still here");
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn dot_starts_a_search_for_hidden_files(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("ctrl-. . d");
+        let label = commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        });
+        assert_eq!(label, ".dot");
     }
 
     #[gpui_kit::test]

@@ -20,5 +20,4 @@ pub use config::Config;
 pub use entry::{Entry, EntryKind};
 pub use format::{format_modified, format_permissions, format_size};
 pub use panel::{Panel, Summary};
-pub use quick_search::QuickSearch;
 pub use sort::{Sort, SortKey};

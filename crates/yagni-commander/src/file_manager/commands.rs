@@ -3,7 +3,6 @@
 
 use std::ops::Range;
 use std::rc::Rc;
-use std::time::Instant;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputState};
@@ -11,7 +10,7 @@ use gpui_kit::{
     App, AppContext, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement, SharedString,
     Window,
 };
-use yagni_commander_core::{EntryKind, QuickSearch, launch};
+use yagni_commander_core::{Commander, EntryKind, launch};
 
 use super::FileManager;
 use crate::CurrentConfig;
@@ -122,8 +121,9 @@ impl FileManager {
         );
     }
 
-    /// Letters and digits typed without modifiers jump to the first matching
-    /// name. Unmatched keys are ignored.
+    /// Printable characters typed without modifiers start or extend a quick
+    /// search: the cursor jumps to the first name starting with the typed
+    /// text, shown in a box in the panel footer. Unmatched keys are ignored.
     pub(super) fn on_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -139,21 +139,15 @@ impl FileManager {
         let (Some(ch), None) = (chars.next(), chars.next()) else {
             return;
         };
-        if !QuickSearch::accepts(ch) {
+        if !Commander::search_accepts(ch) {
             return;
         }
-        let now = Instant::now();
-        let prefix = self.quick_search.candidate(ch, now);
-        let found = self.commander.update(cx, |commander, cx| {
-            let found = commander.jump_to_prefix(&prefix);
-            if found {
+        self.notice = None;
+        self.commander.update(cx, |commander, cx| {
+            if commander.search_type(ch) {
                 cx.notify();
             }
-            found
         });
-        if found {
-            self.quick_search.accept(prefix, now);
-        }
         cx.stop_propagation();
     }
 

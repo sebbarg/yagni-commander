@@ -230,6 +230,25 @@ impl Panel {
             .position(|e| e.kind != EntryKind::Parent && e.sort_name.starts_with(&prefix))
     }
 
+    /// The next (or previous) entry after `from` whose name starts with
+    /// `prefix`, ignoring case and "..", wrapping around the listing.
+    pub fn find_prefix_from(&self, prefix: &str, from: usize, forward: bool) -> Option<usize> {
+        let prefix = prefix.to_lowercase();
+        let len = self.entries.len();
+        (1..=len)
+            .map(|step| {
+                if forward {
+                    (from + step) % len
+                } else {
+                    (from + len - step % len) % len
+                }
+            })
+            .find(|&ix| {
+                let e = &self.entries[ix];
+                e.kind != EntryKind::Parent && e.sort_name.starts_with(&prefix)
+            })
+    }
+
     /// What F4 opens: the entry under the cursor, or the panel's own
     /// directory when the cursor is on "..".
     pub fn cursor_path(&self) -> PathBuf {
@@ -692,6 +711,25 @@ mod tests {
         assert_eq!(panel.find_prefix("file"), Some(3));
         assert_eq!(panel.find_prefix("."), None);
         assert_eq!(panel.find_prefix("zzz"), None);
+    }
+
+    #[test]
+    fn find_prefix_from_steps_through_matches_and_wraps() {
+        let tmp = fixture();
+        fs::create_dir(tmp.path().join("apple")).unwrap();
+        let panel = Panel::open(tmp.path(), true).unwrap();
+        // "..", "alpha", "apple", "beta", "file.txt"
+        assert_eq!(panel.find_prefix_from("a", 1, true), Some(2));
+        assert_eq!(panel.find_prefix_from("a", 2, true), Some(1), "wraps");
+        assert_eq!(panel.find_prefix_from("a", 1, false), Some(2), "wraps back");
+        assert_eq!(panel.find_prefix_from("A", 2, false), Some(1));
+        assert_eq!(panel.find_prefix_from("f", 4, true), Some(4), "only match");
+        assert_eq!(panel.find_prefix_from("z", 0, true), None);
+        let empty = Panel {
+            entries: Vec::new(),
+            ..panel
+        };
+        assert_eq!(empty.find_prefix_from("a", 0, true), None);
     }
 
     #[test]

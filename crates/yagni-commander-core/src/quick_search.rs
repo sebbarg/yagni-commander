@@ -1,47 +1,41 @@
-//! Type-to-jump: letters and digits typed in quick succession form a prefix
-//! the cursor jumps to. There is no visible search box.
-
-use std::time::{Duration, Instant};
-
-/// A pause longer than this starts a new prefix.
-const RESET_AFTER: Duration = Duration::from_secs(1);
+//! Quick search: typed characters build a prefix, shown in a small box, and
+//! the cursor jumps to names starting with it. See [`crate::Commander::search_type`].
 
 #[derive(Debug, Default)]
-pub struct QuickSearch {
+pub(crate) struct QuickSearch {
     prefix: String,
-    last_key: Option<Instant>,
 }
 
 impl QuickSearch {
-    /// Whether `ch` starts or extends a quick search.
+    /// Whether typing `ch` starts or extends a quick search: any printable
+    /// character except space (which toggles selection).
     pub fn accepts(ch: char) -> bool {
-        ch.is_alphanumeric()
+        !ch.is_control() && !ch.is_whitespace()
     }
 
-    /// The prefix to try when `ch` is typed at `now`.
-    pub fn candidate(&self, ch: char, now: Instant) -> String {
-        let fresh = self
-            .last_key
-            .is_none_or(|last| now.saturating_duration_since(last) > RESET_AFTER);
-        let mut prefix = if fresh {
-            String::new()
-        } else {
-            self.prefix.clone()
-        };
+    /// The typed prefix, or `None` while no search is open.
+    pub(crate) fn prefix(&self) -> Option<&str> {
+        (!self.prefix.is_empty()).then_some(self.prefix.as_str())
+    }
+
+    /// The prefix with `ch` appended, to try before accepting it.
+    pub(crate) fn candidate(&self, ch: char) -> String {
+        let mut prefix = self.prefix.clone();
         prefix.push(ch);
         prefix
     }
 
-    /// Records that `prefix` matched, so the next key extends it.
-    pub fn accept(&mut self, prefix: String, now: Instant) {
+    pub(crate) fn set(&mut self, prefix: String) {
         self.prefix = prefix;
-        self.last_key = Some(now);
     }
 
-    /// Any other key or cursor movement ends the search.
-    pub fn reset(&mut self) {
+    /// Removes the last character; an empty prefix closes the search.
+    pub(crate) fn backspace(&mut self) {
+        self.prefix.pop();
+    }
+
+    pub(crate) fn clear(&mut self) {
         self.prefix.clear();
-        self.last_key = None;
     }
 }
 
@@ -50,44 +44,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepts_letters_and_digits_only() {
-        for ch in ['a', 'Z', '7', 'æ', 'ø'] {
+    fn accepts_printable_characters_but_not_space() {
+        for ch in ['a', 'Z', '7', 'æ', 'ø', '.', '-', '_'] {
             assert!(QuickSearch::accepts(ch), "{ch}");
         }
-        for ch in [' ', '.', '-', '_', '/'] {
-            assert!(!QuickSearch::accepts(ch), "{ch}");
+        for ch in [' ', '\t', '\n', '\u{7f}'] {
+            assert!(!QuickSearch::accepts(ch), "{ch:?}");
         }
     }
 
     #[test]
-    fn keys_in_quick_succession_extend_the_prefix() {
-        let t0 = Instant::now();
+    fn prefix_grows_shrinks_and_clears() {
         let mut search = QuickSearch::default();
-        assert_eq!(search.candidate('r', t0), "r");
-        search.accept("r".into(), t0);
-        let t1 = t0 + Duration::from_millis(500);
-        assert_eq!(search.candidate('e', t1), "re");
-        search.accept("re".into(), t1);
-        assert_eq!(search.candidate('a', t1 + RESET_AFTER), "rea");
-    }
-
-    #[test]
-    fn a_pause_or_reset_starts_over() {
-        let t0 = Instant::now();
-        let mut search = QuickSearch::default();
-        search.accept("re".into(), t0);
-        let later = t0 + RESET_AFTER + Duration::from_millis(1);
-        assert_eq!(search.candidate('x', later), "x");
-        search.reset();
-        assert_eq!(search.candidate('x', t0), "x");
-    }
-
-    #[test]
-    fn rejected_candidate_leaves_prefix_unchanged() {
-        let t0 = Instant::now();
-        let mut search = QuickSearch::default();
-        search.accept("re".into(), t0);
-        let _ = search.candidate('q', t0);
-        assert_eq!(search.candidate('a', t0), "rea");
+        assert_eq!(search.prefix(), None);
+        assert_eq!(search.candidate('n'), "n");
+        search.set("ne".into());
+        assert_eq!(search.candidate('w'), "new");
+        assert_eq!(search.prefix(), Some("ne"));
+        search.backspace();
+        assert_eq!(search.prefix(), Some("n"));
+        search.backspace();
+        assert_eq!(search.prefix(), None);
+        search.backspace();
+        search.set("x".into());
+        search.clear();
+        assert_eq!(search.prefix(), None);
     }
 }

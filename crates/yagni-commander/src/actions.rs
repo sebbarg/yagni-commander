@@ -34,6 +34,7 @@ actions!(
         Reload,
         ToggleHidden,
         ButtonTest,
+        CancelSearch,
         Quit
     ]
 );
@@ -71,6 +72,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-r", Reload, context),
         KeyBinding::new("ctrl-.", ToggleHidden, context),
+        KeyBinding::new("escape", CancelSearch, context),
         // Temporary, for trying the dialog button row. Remove before v1.
         KeyBinding::new("f12", ButtonTest, context),
     ]);

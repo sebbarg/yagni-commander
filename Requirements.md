@@ -73,7 +73,7 @@ Toolbar with e.g. drive icons.
 | Ctrl-U | Swap the two panels. |
 | Ctrl-R | Reload both panels. |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
-| 0-9, a-z, A-Z | Quick search (see below). |
+| Letters, digits, `.` and other printable keys | Quick search (see below). |
 | Enter | On a directory: enter it. On a file: open it with its associated program (v2). |
 | Alt-F5 | Archive/compress the selection or current entry, with confirmation if the target exists (v2). |
 | Alt-F9 | Extract the selection or current entry, with confirmation if the target exists (v2). |
@@ -82,9 +82,10 @@ Toolbar with e.g. drive icons.
 
 ### Quick search
 
-- Letters and digits (including non-ASCII letters like æ, ø) build a prefix. The cursor moves to the first entry whose name starts with it, case-insensitively.
-- If no entry matches, the keystroke is ignored and the cursor stays where it is.
-- No visible search box. The prefix resets after a short pause in typing (about one second) and on any other key or cursor movement.
+- Typing any printable character except space (letters, digits, `.`, `-`, ...) opens a small box in the active panel's footer showing the typed text, and moves the cursor to the first entry whose name starts with it, case-insensitively.
+- While the box is open, Down and Up move to the next and previous match, wrapping around at the ends. Backspace removes the last character (removing the last one closes the box); Escape closes it.
+- If no entry matches the longer text, the keystroke is ignored: the box and the cursor stay as they are.
+- Any other key, and any mouse click in a panel, closes the box. Enter closes it and opens the entry as usual. There is no timeout.
 - Fuzzy matching (v2, if ever).
 
 ### Hidden files
