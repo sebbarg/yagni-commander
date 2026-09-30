@@ -9,7 +9,7 @@ use yagni_commander_core::{Command, Commander, Side};
 
 use crate::actions::{
     Activate, CursorDown, CursorEnd, CursorHome, CursorUp, FILE_MANAGER_CONTEXT, GoUp, PageDown,
-    PageUp, SwitchPanel,
+    PageUp, SelectAll, SwitchPanel, ToggleSelection,
 };
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
@@ -173,6 +173,12 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &Activate, _, cx| this.execute(Command::Activate, cx)))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.execute(Command::GoUp, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSelection, _, cx| {
+                this.execute(Command::ToggleSelection, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &SelectAll, _, cx| this.execute(Command::SelectAll, cx)),
+            )
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.page(true, cx)))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
@@ -282,7 +288,7 @@ mod tests {
         cx.simulate_keystrokes("backspace");
         commander.read_with(cx, |c, _| {
             assert_eq!(c.panel(Side::Left).path(), tmp.path());
-            assert_eq!(c.panel(Side::Left).selected().unwrap().label, "b");
+            assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "b");
         });
     }
 
@@ -308,5 +314,29 @@ mod tests {
         cx.simulate_keystrokes("tab");
         let title = commander.read_with(cx, |c, _| window_title(c));
         assert_eq!(title, format!("{} - yagni-commander", tmp.path().display()));
+    }
+
+    fn selected(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> Vec<String> {
+        commander.read_with(cx, |c, _| {
+            c.panel(side).selection().map(|e| e.label.clone()).collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn space_selects_and_moves_down(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down space space");
+        assert_eq!(selected(&commander, Side::Left, cx), ["a", "b"]);
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+        cx.simulate_keystrokes("up space");
+        assert_eq!(selected(&commander, Side::Left, cx), ["a"]);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_a_selects_all_in_active_panel(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("tab ctrl-a");
+        assert_eq!(selected(&commander, Side::Right, cx), ["a", "b", "f"]);
+        assert!(selected(&commander, Side::Left, cx).is_empty());
     }
 }

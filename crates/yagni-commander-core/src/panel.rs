@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -14,6 +16,30 @@ pub struct Panel {
     entries: Vec<Entry>,
     cursor: usize,
     sort: Sort,
+    /// Names of selected entries. Kept by name so it survives re-sorting.
+    selection: HashSet<OsString>,
+}
+
+/// Counts and sizes for the panel footer. Directory sizes are unknown, so
+/// byte totals cover files only.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Summary {
+    pub dirs: usize,
+    pub files: usize,
+    pub bytes: u64,
+    pub selected_dirs: usize,
+    pub selected_files: usize,
+    pub selected_bytes: u64,
+}
+
+impl Summary {
+    pub fn selected(&self) -> usize {
+        self.selected_dirs + self.selected_files
+    }
+
+    pub fn total(&self) -> usize {
+        self.dirs + self.files
+    }
 }
 
 /// What happened when the entry under the cursor was activated.
@@ -38,6 +64,7 @@ impl Panel {
             entries,
             cursor: 0,
             sort,
+            selection: HashSet::new(),
         })
     }
 
@@ -64,7 +91,7 @@ impl Panel {
     }
 
     fn resort(&mut self, sort: Sort) {
-        let keep = self.selected().map(|e| e.name.clone());
+        let keep = self.cursor_entry().map(|e| e.name.clone());
         self.sort = sort;
         sort_entries(&mut self.entries, self.sort);
         self.cursor = keep
@@ -81,7 +108,77 @@ impl Panel {
         });
     }
 
-    pub fn selected(&self) -> Option<&Entry> {
+    pub fn is_selected(&self, entry: &Entry) -> bool {
+        self.selection.contains(&entry.name)
+    }
+
+    /// Selected entries in display order.
+    pub fn selection(&self) -> impl Iterator<Item = &Entry> {
+        self.entries.iter().filter(|e| self.is_selected(e))
+    }
+
+    /// What file operations act on: the selection, or else the entry under
+    /// the cursor. Never "..".
+    pub fn targets(&self) -> Vec<&Entry> {
+        if self.selection.is_empty() {
+            self.cursor_entry()
+                .filter(|e| e.kind != EntryKind::Parent)
+                .into_iter()
+                .collect()
+        } else {
+            self.selection().collect()
+        }
+    }
+
+    pub fn summary(&self) -> Summary {
+        let mut summary = Summary::default();
+        for entry in &self.entries {
+            let selected = self.is_selected(entry);
+            let bytes = entry.size.unwrap_or(0);
+            match entry.kind {
+                EntryKind::Parent => {}
+                EntryKind::Dir => {
+                    summary.dirs += 1;
+                    summary.selected_dirs += usize::from(selected);
+                }
+                EntryKind::File => {
+                    summary.files += 1;
+                    summary.bytes += bytes;
+                    if selected {
+                        summary.selected_files += 1;
+                        summary.selected_bytes += bytes;
+                    }
+                }
+            }
+        }
+        summary
+    }
+
+    /// Space: toggles selection of the entry under the cursor and moves the
+    /// cursor down, so repeated presses select a run of entries. ".." can't be
+    /// selected, but the cursor still moves past it.
+    pub(crate) fn toggle_selection(&mut self) {
+        if let Some(entry) = self.cursor_entry().filter(|e| e.kind != EntryKind::Parent) {
+            let name = entry.name.clone();
+            if !self.selection.remove(&name) {
+                self.selection.insert(name);
+            }
+        }
+        self.move_cursor(1);
+    }
+
+    /// Ctrl-A: selects every file and directory.
+    pub(crate) fn select_all(&mut self) {
+        self.selection = self
+            .entries
+            .iter()
+            .filter(|e| e.kind != EntryKind::Parent)
+            .map(|e| e.name.clone())
+            .collect();
+    }
+
+    /// The entry under the cursor.
+    pub fn cursor_entry(&self) -> Option<&Entry> {
         self.entries.get(self.cursor)
     }
 
@@ -96,7 +193,7 @@ impl Panel {
 
     /// Enter: descend into a directory, go up on "..", or report a file.
     pub(crate) fn activate(&mut self) -> io::Result<Activation> {
-        let Some(entry) = self.selected() else {
+        let Some(entry) = self.cursor_entry() else {
             return Ok(Activation::None);
         };
         match entry.kind {
@@ -119,14 +216,21 @@ impl Panel {
         self.navigate(parent, came_from.as_deref())
     }
 
-    /// Loads `target` and only commits the change if reading succeeded,
-    /// so a failed navigation leaves the panel untouched.
-    fn navigate(&mut self, target: PathBuf, select: Option<&std::ffi::OsStr>) -> io::Result<()> {
+    /// Loads `target` and only commits the change if reading succeeded, so a
+    /// failed navigation leaves the panel untouched. Changing directory clears
+    /// the selection; re-reading the same one keeps names that still exist.
+    fn navigate(&mut self, target: PathBuf, select: Option<&OsStr>) -> io::Result<()> {
         let mut entries = read_entries(&target)?;
         sort_entries(&mut entries, self.sort);
         let cursor = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(0);
+        if target == self.path {
+            self.selection
+                .retain(|name| entries.iter().any(|e| &e.name == name));
+        } else {
+            self.selection.clear();
+        }
         self.path = target;
         self.entries = entries;
         self.cursor = cursor;
@@ -175,11 +279,11 @@ mod tests {
         assert_eq!(panel.activate().unwrap(), Activation::Navigated);
         assert_eq!(panel.path(), tmp.path().join("beta"));
         assert_eq!(panel.cursor(), 0);
-        assert_eq!(panel.selected().unwrap().kind, EntryKind::Parent);
+        assert_eq!(panel.cursor_entry().unwrap().kind, EntryKind::Parent);
 
         assert_eq!(panel.activate().unwrap(), Activation::Navigated);
         assert_eq!(panel.path(), tmp.path());
-        assert_eq!(panel.selected().unwrap().label, "beta");
+        assert_eq!(panel.cursor_entry().unwrap().label, "beta");
     }
 
     #[test]
@@ -203,7 +307,7 @@ mod tests {
 
         assert!(panel.activate().is_err());
         assert_eq!(panel.path(), tmp.path());
-        assert_eq!(panel.selected().unwrap().label, "alpha");
+        assert_eq!(panel.cursor_entry().unwrap().label, "alpha");
     }
 
     #[cfg(unix)]
@@ -217,7 +321,7 @@ mod tests {
         assert_eq!(panel.path(), tmp.path().join("link"));
         panel.go_up().unwrap();
         assert_eq!(panel.path(), tmp.path());
-        assert_eq!(panel.selected().unwrap().label, "link");
+        assert_eq!(panel.cursor_entry().unwrap().label, "link");
     }
 
     #[test]
@@ -230,7 +334,7 @@ mod tests {
 
         panel.sort_by(SortKey::Name);
         assert_eq!(panel.entries()[1].label, "beta");
-        assert_eq!(panel.selected().unwrap().label, "beta");
+        assert_eq!(panel.cursor_entry().unwrap().label, "beta");
 
         panel.sort_by(SortKey::Size);
         panel.activate().unwrap();
@@ -275,8 +379,9 @@ mod tests {
             entries: Vec::new(),
             cursor: 0,
             sort: Sort::default(),
+            selection: HashSet::new(),
         };
-        assert!(panel.selected().is_none());
+        assert!(panel.cursor_entry().is_none());
         panel.move_cursor(3);
         assert_eq!(panel.cursor(), 0);
         assert_eq!(panel.activate().unwrap(), Activation::None);
@@ -297,7 +402,7 @@ mod tests {
         panel.go_up().unwrap();
         assert_eq!(panel.path(), Path::new("/"));
         assert!(panel.entries().iter().all(|e| e.kind != EntryKind::Parent));
-        assert_eq!(panel.selected().unwrap().label, "tmp");
+        assert_eq!(panel.cursor_entry().unwrap().label, "tmp");
     }
 
     #[cfg(target_os = "linux")]
@@ -327,11 +432,11 @@ mod tests {
         panel.set_case_sensitive(true);
         assert!(panel.sort().case_sensitive);
         assert_eq!(panel.entries()[1].label, "Zeta");
-        assert_eq!(panel.selected().unwrap().label, "alpha");
+        assert_eq!(panel.cursor_entry().unwrap().label, "alpha");
 
         panel.set_case_sensitive(false);
         assert_eq!(panel.entries()[3].label, "Zeta");
-        assert_eq!(panel.selected().unwrap().label, "alpha");
+        assert_eq!(panel.cursor_entry().unwrap().label, "alpha");
     }
 
     #[test]
@@ -342,5 +447,144 @@ mod tests {
         select(&mut panel, "alpha");
         panel.activate().unwrap();
         assert!(panel.sort().case_sensitive);
+    }
+
+    fn selected_labels(panel: &Panel) -> Vec<&str> {
+        panel.selection().map(|e| e.label.as_str()).collect()
+    }
+
+    #[test]
+    fn toggle_selects_then_moves_down_and_toggles_back() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        select(&mut panel, "alpha");
+
+        panel.toggle_selection();
+        assert_eq!(selected_labels(&panel), ["alpha"]);
+        assert_eq!(panel.cursor_entry().unwrap().label, "beta");
+
+        panel.toggle_selection();
+        assert_eq!(selected_labels(&panel), ["alpha", "beta"]);
+
+        select(&mut panel, "alpha");
+        panel.toggle_selection();
+        assert_eq!(selected_labels(&panel), ["beta"]);
+    }
+
+    #[test]
+    fn parent_entry_is_never_selected_but_cursor_moves_past_it() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        assert_eq!(panel.cursor(), 0);
+        panel.toggle_selection();
+        assert!(selected_labels(&panel).is_empty());
+        assert_eq!(panel.cursor(), 1);
+    }
+
+    #[test]
+    fn toggle_on_last_entry_stays_on_it() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        select(&mut panel, "file.txt");
+        panel.toggle_selection();
+        assert_eq!(selected_labels(&panel), ["file.txt"]);
+        assert_eq!(panel.cursor_entry().unwrap().label, "file.txt");
+    }
+
+    #[test]
+    fn select_all_skips_parent() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.select_all();
+        assert_eq!(selected_labels(&panel), ["alpha", "beta", "file.txt"]);
+        assert!(!panel.is_selected(&panel.entries()[0]));
+    }
+
+    #[test]
+    fn selection_survives_sorting_in_display_order() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        select(&mut panel, "alpha");
+        panel.toggle_selection();
+        panel.toggle_selection();
+        panel.sort_by(SortKey::Name);
+        assert_eq!(selected_labels(&panel), ["beta", "alpha"]);
+    }
+
+    #[test]
+    fn changing_directory_clears_selection() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.select_all();
+        select(&mut panel, "alpha");
+        panel.activate().unwrap();
+        assert!(selected_labels(&panel).is_empty());
+        panel.go_up().unwrap();
+        assert!(selected_labels(&panel).is_empty());
+    }
+
+    #[test]
+    fn rereading_same_directory_keeps_surviving_selection() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.select_all();
+        fs::remove_dir(tmp.path().join("beta")).unwrap();
+        let path = panel.path().to_path_buf();
+        panel.navigate(path, None).unwrap();
+        assert_eq!(selected_labels(&panel), ["alpha", "file.txt"]);
+    }
+
+    #[test]
+    fn failed_navigation_keeps_selection() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        panel.select_all();
+        select(&mut panel, "alpha");
+        fs::remove_dir_all(tmp.path().join("alpha")).unwrap();
+        assert!(panel.activate().is_err());
+        assert_eq!(selected_labels(&panel), ["alpha", "beta", "file.txt"]);
+    }
+
+    #[test]
+    fn targets_are_selection_or_cursor_entry_but_never_parent() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        assert!(panel.targets().is_empty(), "cursor on ..");
+
+        select(&mut panel, "beta");
+        let labels: Vec<_> = panel.targets().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["beta"]);
+
+        select(&mut panel, "file.txt");
+        panel.toggle_selection();
+        select(&mut panel, "alpha");
+        panel.toggle_selection();
+        let labels: Vec<_> = panel.targets().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["alpha", "file.txt"]);
+    }
+
+    #[test]
+    fn summary_counts_totals_and_selection() {
+        let tmp = fixture();
+        fs::write(tmp.path().join("more.txt"), b"123").unwrap();
+        let mut panel = Panel::open(tmp.path()).unwrap();
+        assert_eq!(
+            panel.summary(),
+            Summary {
+                dirs: 2,
+                files: 2,
+                bytes: 8,
+                ..Summary::default()
+            }
+        );
+
+        select(&mut panel, "alpha");
+        panel.toggle_selection();
+        select(&mut panel, "more.txt");
+        panel.toggle_selection();
+        let summary = panel.summary();
+        assert_eq!((summary.selected_dirs, summary.selected_files), (1, 1));
+        assert_eq!(summary.selected_bytes, 3);
+        assert_eq!((summary.selected(), summary.total()), (2, 4));
     }
 }

@@ -8,7 +8,9 @@ use gpui_kit::{
     Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
     UniformListScrollHandle, Window, div, prelude::*, px, uniform_list,
 };
-use yagni_commander_core::{Command, Commander, Entry, EntryKind, Side, SortKey};
+use yagni_commander_core::{
+    Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
+};
 
 use crate::columns::COLUMNS;
 use crate::file_manager::execute;
@@ -74,8 +76,12 @@ impl PanelView {
         let is_active = commander.active() == side;
         range
             .map(|ix| {
-                let cursor = (ix == panel.cursor()).then_some(is_active);
-                entry_row(&panel.entries()[ix], cursor, theme).on_mouse_down(
+                let entry = &panel.entries()[ix];
+                let row = RowState {
+                    cursor: (ix == panel.cursor()).then_some(is_active),
+                    selected: panel.is_selected(entry),
+                };
+                entry_row(entry, row, theme).on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                         execute(&this.commander, Command::CursorTo(side, ix), cx);
@@ -155,16 +161,6 @@ impl Render for PanelView {
                     .child(panel.path().display().to_string()),
             );
 
-        let dirs = panel
-            .entries()
-            .iter()
-            .filter(|e| e.kind == EntryKind::Dir)
-            .count();
-        let files = panel
-            .entries()
-            .iter()
-            .filter(|e| e.kind == EntryKind::File)
-            .count();
         let footer = div()
             .h(px(FOOTER_HEIGHT))
             .flex_none()
@@ -174,7 +170,7 @@ impl Render for PanelView {
             .bg(theme.header_bg)
             .text_color(theme.text_dim)
             .text_size(px(12.0))
-            .child(format!("{dirs} dirs, {files} files"));
+            .child(footer_text(&panel.summary()));
 
         let border = if is_active {
             theme.accent
@@ -208,18 +204,32 @@ impl Render for PanelView {
     }
 }
 
-/// `cursor`: `None` if not under the cursor, `Some(panel_is_active)` otherwise.
-fn entry_row(entry: &Entry, cursor: Option<bool>, theme: &Theme) -> Div {
-    let name_color = name_color(entry, theme);
-    let (fg, bg) = match cursor {
-        Some(true) => (theme.text_on_accent, Some(theme.accent)),
-        Some(false) => (name_color, Some(theme.cursor_inactive_bg)),
-        None => (name_color, None),
-    };
-    let detail = if cursor == Some(true) {
-        fg
+#[derive(Clone, Copy)]
+struct RowState {
+    /// `None` if not under the cursor, `Some(panel_is_active)` otherwise.
+    cursor: Option<bool>,
+    selected: bool,
+}
+
+fn entry_row(entry: &Entry, row: RowState, theme: &Theme) -> Div {
+    // Selected rows are orange throughout; under the active cursor the bar
+    // itself turns orange so selection stays visible.
+    let (name, detail) = if row.selected {
+        (theme.selected, theme.selected)
     } else {
-        theme.text_dim
+        (name_color(entry, theme), theme.text_dim)
+    };
+    let (fg, detail, bg) = match row.cursor {
+        Some(true) => {
+            let bar = if row.selected {
+                theme.selected
+            } else {
+                theme.accent
+            };
+            (theme.text_on_accent, theme.text_on_accent, Some(bar))
+        }
+        Some(false) => (name, detail, Some(theme.cursor_inactive_bg)),
+        None => (name, detail, None),
     };
     div()
         .w_full()
@@ -239,10 +249,60 @@ fn entry_row(entry: &Entry, cursor: Option<bool>, theme: &Theme) -> Div {
         }))
 }
 
+/// "2 dirs, 5 files, 1.2 MiB", or with a selection
+/// "3 of 7 selected, 512 B of 1.2 MiB".
+fn footer_text(summary: &Summary) -> String {
+    if summary.selected() == 0 {
+        format!(
+            "{} dirs, {} files, {}",
+            summary.dirs,
+            summary.files,
+            format_size(summary.bytes)
+        )
+    } else {
+        format!(
+            "{} of {} selected, {} of {}",
+            summary.selected(),
+            summary.total(),
+            format_size(summary.selected_bytes),
+            format_size(summary.bytes)
+        )
+    }
+}
+
 fn name_color(entry: &Entry, theme: &Theme) -> Rgba {
     match entry.kind {
         EntryKind::Parent | EntryKind::Dir if entry.is_symlink => theme.symlink,
         EntryKind::Parent | EntryKind::Dir => theme.dir,
         EntryKind::File => theme.text,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn footer_shows_totals_without_selection() {
+        let summary = Summary {
+            dirs: 2,
+            files: 5,
+            bytes: 1536,
+            ..Summary::default()
+        };
+        assert_eq!(footer_text(&summary), "2 dirs, 5 files, 1.5 KiB");
+    }
+
+    #[test]
+    fn footer_shows_selection_counts_and_sizes() {
+        let summary = Summary {
+            dirs: 2,
+            files: 5,
+            bytes: 1536,
+            selected_dirs: 1,
+            selected_files: 2,
+            selected_bytes: 512,
+        };
+        assert_eq!(footer_text(&summary), "3 of 7 selected, 512 B of 1.5 KiB");
     }
 }

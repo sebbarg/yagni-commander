@@ -41,7 +41,7 @@ Toolbar with e.g. drive icons.
 
 | Key | Action |
 |---|---|
-| Space | Toggle selection of the entry under the cursor. Selected entries use a different color. |
+| Space | Toggle selection of the entry under the cursor and move the cursor down. Selected entries are orange. ".." can't be selected. Changing directory clears the selection. |
 | Ctrl-A | Select all files and directories in the panel. |
 | F2 | Rename the file or directory under the cursor. |
 | F3 | Built-in viewer (see below). |
@@ -89,7 +89,7 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 ## Build order (v1)
 
 1. ~~Adopt gpui-component; config and state storage.~~ Done (settings page UI comes with the menu, step 7).
-2. Selection model in core.
+2. ~~Selection model in core.~~ Done.
 3. F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.
 4. File-operation engine in core (copy, move, trash), with tests.
 5. F5/F6/F8 dialogs and progress.

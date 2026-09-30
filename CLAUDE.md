@@ -36,7 +36,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 - Two panels side by side, draggable divider, resizable window.
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
-- Mouse: click selects (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
+- Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
+- Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
 - Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first.
 - Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
 - Quit: Cmd+Q, Alt+F4, the macOS app menu, or closing the last window.

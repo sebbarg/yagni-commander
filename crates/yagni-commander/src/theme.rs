@@ -20,6 +20,8 @@ pub struct Theme {
     pub symlink: Rgba,
     pub accent: Rgba,
     pub cursor_inactive_bg: Rgba,
+    /// Text of selected entries, and the cursor bar on a selected entry.
+    pub selected: Rgba,
     pub border: Rgba,
     pub error: Rgba,
 }
@@ -40,6 +42,7 @@ impl Theme {
             symlink: rgb(0x7dcfff),
             accent: rgb(0x7aa2f7),
             cursor_inactive_bg: rgb(0x292e42),
+            selected: rgb(0xff9e64),
             border: rgb(0x292e42),
             error: rgb(0xf7768e),
         }

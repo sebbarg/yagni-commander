@@ -18,6 +18,8 @@ actions!(
         PageDown,
         Activate,
         GoUp,
+        ToggleSelection,
+        SelectAll,
         Quit
     ]
 );
@@ -36,5 +38,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("pagedown", PageDown, context),
         KeyBinding::new("enter", Activate, context),
         KeyBinding::new("backspace", GoUp, context),
+        KeyBinding::new("space", ToggleSelection, context),
+        KeyBinding::new("ctrl-a", SelectAll, context),
     ]);
 }

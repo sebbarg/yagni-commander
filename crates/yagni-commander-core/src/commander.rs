@@ -37,6 +37,10 @@ pub enum Command {
     GoUp,
     /// Column header click on a panel.
     SortBy(Side, SortKey),
+    /// Space: toggle selection of the entry under the cursor, then move down.
+    ToggleSelection,
+    /// Ctrl-A: select all files and directories.
+    SelectAll,
 }
 
 /// Result of a command that the UI may need to act on.
@@ -136,6 +140,14 @@ impl Commander {
                 Ok(())
             }
             Command::GoUp => panel.go_up(),
+            Command::ToggleSelection => {
+                panel.toggle_selection();
+                Ok(())
+            }
+            Command::SelectAll => {
+                panel.select_all();
+                Ok(())
+            }
             Command::SortBy(side, key) => {
                 self.active = side;
                 self.panel_mut(side).sort_by(key);
@@ -215,8 +227,8 @@ mod tests {
         (tmp, c)
     }
 
-    fn selected(c: &Commander, side: Side) -> &str {
-        &c.panel(side).selected().unwrap().label
+    fn under_cursor(c: &Commander, side: Side) -> &str {
+        &c.panel(side).cursor_entry().unwrap().label
     }
 
     #[test]
@@ -287,13 +299,13 @@ mod tests {
     fn go_up_returns_to_parent_with_cursor_on_previous_dir() {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 2));
-        assert_eq!(selected(&c, Side::Left), "b");
+        assert_eq!(under_cursor(&c, Side::Left), "b");
         c.execute(Command::Activate);
         assert_eq!(c.panel(Side::Left).path(), tmp.path().join("b"));
 
         c.execute(Command::GoUp);
         assert_eq!(c.panel(Side::Left).path(), tmp.path());
-        assert_eq!(selected(&c, Side::Left), "b");
+        assert_eq!(under_cursor(&c, Side::Left), "b");
     }
 
     #[test]
@@ -353,5 +365,19 @@ mod tests {
         assert!(c.panel(Side::Right).sort().case_sensitive);
         c.set_case_sensitive_sort(false);
         assert!(!c.panel(Side::Left).sort().case_sensitive);
+    }
+
+    #[test]
+    fn selection_commands_act_on_the_active_panel() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::CursorDown);
+        c.execute(Command::ToggleSelection);
+        assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+        assert_eq!(under_cursor(&c, Side::Left), "b");
+
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::SelectAll);
+        assert_eq!(c.panel(Side::Right).summary().selected(), 4);
+        assert_eq!(c.panel(Side::Left).summary().selected(), 1);
     }
 }
