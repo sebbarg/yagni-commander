@@ -8,9 +8,9 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 As of 2026-09-30:
 
-- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), plus themes-as-data and modal error boxes.
-- **Next: step 5,** file-operation engine in core (copy, move, trash; background, per-file conflict prompt, error summary; see `Requirements.md`, File operations). Use the `trash` crate for F8. Revisit the rename check-then-act race (TOCTOU) there.
-- **Also required before v1:** config changes must apply without restart; background directory loading; resizable/configurable columns (see Known issues).
+- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), step 5 (file-operation engine, awaiting review), plus themes-as-data and modal error boxes.
+- **Next: step 6,** F5/F6/F8 dialogs and progress on top of `file_ops::Job`: confirm dialog (target directory = other panel), progress dialog with Cancel, conflict prompt (Overwrite, Skip, Overwrite all, Skip all, Cancel), error summary, reload both panels when finished. `Job` uses std channels, so the UI polls `try_event` (e.g. a gpui timer every ~50 ms while a job runs).
+- **Also required before v1:** config changes must apply without restart; background directory loading; a directory watcher that reloads panels on outside changes; resizable/configurable columns (see Known issues).
 - **Waiting on the owner to verify on real machines:** whether macOS still needs the full Xcode app with gpui-kit's runtime shaders; the "only Name sorting works" report; F4 with `editor = "code"` when launched from Finder (PATH); behavior on native Wayland (Plasma, Hyprland), which has never been tested here.
 
 ### How we work
@@ -38,11 +38,11 @@ As of 2026-09-30:
 
 ## Architecture
 
-- `crates/yagni-commander-core`: UI-agnostic core, no gpui. Modules: `commander` (dual-panel state, `Command`s, rename/mkdir/quick-search entry points), `panel` (listing, cursor, sort, selection, `Summary`), `entry` (reading directories), `sort`, `format` (size, time, permissions text), `fs_ops` (rename, make directory, name validation), `launch` (external editor), `quick_search`, `config`, `storage` (platform paths, TOML load/save, atomic writes).
+- `crates/yagni-commander-core`: UI-agnostic core, no gpui. Modules: `commander` (dual-panel state, `Command`s, rename/mkdir/quick-search entry points), `panel` (listing, cursor, sort, selection, `Summary`), `entry` (reading directories), `sort`, `format` (size, time, permissions text), `fs_ops` (rename, no-replace rename, make directory, name validation), `file_ops` (copy/move/trash engine `run`, background `Job`), `launch` (external editor), `quick_search`, `config`, `storage` (platform paths, TOML load/save, atomic writes).
 - `crates/yagni-commander`: the gpui app.
   - `Commander` lives in a gpui `Entity`, shared by the root `FileManager` view and two `PanelView` entities. Mutations go through `execute()` in `file_manager.rs`, which calls `cx.notify()`; views react via `observe`.
   - Keys map to gpui actions (`actions.rs`), actions map to core `Command`s or `FileManager` methods. The keymap is data, so a user config file can plug in there.
-  - `file_manager/commands.rs`: F2/F7 name prompt (`prompt_name`, a gpui-component `Dialog` with an `Input`), F4 editor launch, quick search key handling, `show_error`.
+  - `file_manager/commands.rs`: F2/F7/Shift-F4 name prompt (`prompt_name`, a gpui-component `Dialog` with an `Input`), F4 and Shift-F4 editor launch, quick search key handling, `show_error`.
   - The active `Theme` is a gpui `Global` (`theme.rs`); `Theme::install` also applies it to gpui-component. Built-in default: Tokyo Night (Omarchy's default).
   - Views take every color from `Theme::get(cx).colors`. `clippy.toml` bans gpui's color constructors (`rgb`, `hsla`, `black`, ...) so literals can't creep in; add a new role to `Colors` and every theme file instead.
   - The loaded `Config` is a gpui global, `CurrentConfig` (`main.rs`).
@@ -60,7 +60,7 @@ As of 2026-09-30:
 - Two panels side by side, draggable divider, resizable window; position and size restored on start.
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
-- F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing letters/digits jumps to the first matching name (1 s reset, no search box).
+- F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`; Shift-F4 asks for a file name, creates the file (or keeps an existing one), puts the cursor on it and opens it in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing letters/digits jumps to the first matching name (1 s reset, no search box).
 - Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
 - Directory names show as `[name]` (display only; ".." unbracketed).
 - Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
@@ -75,13 +75,15 @@ As of 2026-09-30:
 - Directory reading is synchronous and blocks the UI: ~320 ms for 100k entries on Linux, ~70% of it one `stat` per entry. Near-instant on macOS. Background loading is the real fix and is required for network mounts anyway.
 - Enter on a file does nothing yet (v2: open with associated program).
 - Config changes need a restart; they should apply immediately (see `Requirements.md`, Config).
-- Rename checks that the target doesn't exist, then renames: another process could create it in between (TOCTOU).
+- No-replace rename (F2, move) is atomic only on Linux glibc (`renameat2`). On macOS it checks, then renames, so another process could create the target in between (TOCTOU); fixing it needs `renamex_np`, which nix doesn't offer without our own `unsafe`.
 - No menu bar on Linux yet (gpui has no native Linux menu; needs an in-window menu, step 8). The macOS menu has only Quit.
 - A config problem shows in the status line and clears on the next keyboard command, not on mouse clicks.
 - `PanelView::visible_rows` reads gpui scroll-handle internals (public fields); likely to break on a gpui upgrade.
 - gpui cannot write file paths to the clipboard (copy in app, paste in Finder/Dolphin), and drag-out to other apps works on macOS and Wayland only (not X11). Both need platform code or another crate.
 
 ## Gotchas
+
+- Tests must never call the real `trash::delete` (it would fill the owner's trash): `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function.
 
 - gpui-component `Dialog` already maps Enter to its OK action (`on_ok`), even when a text input inside it has focus. Don't also handle the input's `PressEnter`, or OK runs twice (regression test: `enter_submits_a_prompt_exactly_once`).
 - Opening a dialog moves focus to it: focus a field inside it with `window.defer` after opening. After an error box closes, focus must be put back explicitly (`show_error`'s `refocus`).

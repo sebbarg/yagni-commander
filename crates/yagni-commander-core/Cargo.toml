@@ -13,6 +13,7 @@ jiff.workspace = true
 serde.workspace = true
 shlex.workspace = true
 toml.workspace = true
+trash.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

@@ -1,9 +1,10 @@
-//! Renaming and creating directories, with name validation.
+//! Renaming and creating directories, with name validation, and a rename
+//! that never replaces an existing entry.
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
@@ -26,7 +27,7 @@ fn validate_name(name: &str) -> io::Result<()> {
 /// True if both paths are the same file, e.g. `foo` and `FOO` on a
 /// case-insensitive filesystem.
 #[cfg(unix)]
-fn same_file(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
         (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
@@ -35,8 +36,29 @@ fn same_file(a: &Path, b: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn same_file(_: &Path, _: &Path) -> bool {
+pub(crate) fn same_file(_: &Path, _: &Path) -> bool {
     false
+}
+
+/// Renames `from` to `to`, failing with `AlreadyExists` if `to` exists.
+///
+/// Atomic on Linux (`renameat2` with `RENAME_NOREPLACE`). Elsewhere, and on
+/// Linux filesystems without that flag, it checks and then renames, so another
+/// process could still create `to` in between.
+pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        use nix::errno::Errno;
+        use nix::fcntl::{AT_FDCWD, RenameFlags, renameat2};
+        match renameat2(AT_FDCWD, from, AT_FDCWD, to, RenameFlags::RENAME_NOREPLACE) {
+            Err(Errno::EINVAL) => {} // not supported by this filesystem
+            result => return result.map_err(io::Error::from),
+        }
+    }
+    if to.symlink_metadata().is_ok() {
+        return Err(io::ErrorKind::AlreadyExists.into());
+    }
+    fs::rename(from, to)
 }
 
 /// Renames `from` to `to` within `dir`. Refuses to replace an existing entry,
@@ -48,13 +70,32 @@ pub(crate) fn rename(dir: &Path, from: &OsStr, to: &str) -> io::Result<()> {
     }
     let source = dir.join(from);
     let target = dir.join(to);
-    if target.symlink_metadata().is_ok() && !same_file(&source, &target) {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            format!("“{to}” already exists"),
-        ));
+    if same_file(&source, &target) {
+        return fs::rename(&source, &target);
     }
-    fs::rename(&source, &target)
+    rename_noreplace(&source, &target).map_err(|e| match e.kind() {
+        io::ErrorKind::AlreadyExists => io::Error::new(e.kind(), format!("“{to}” already exists")),
+        _ => e,
+    })
+}
+
+/// Creates an empty file `name` in `dir` and returns its path. An existing
+/// file is left as it is (Shift-F4 then just opens it); a directory is an error.
+pub(crate) fn create_file(dir: &Path, name: &str) -> io::Result<PathBuf> {
+    validate_name(name)?;
+    let path = dir.join(name);
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(_) => Ok(path),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !path.is_dir() => Ok(path),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            Err(io::Error::new(e.kind(), format!("“{name}” is a directory")))
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// Creates `relative` (one or more `/`-separated names) inside `dir` and
@@ -153,6 +194,47 @@ mod tests {
         fs::hard_link(&a, tmp.path().join("link")).unwrap();
         assert!(same_file(&a, &tmp.path().join("link")));
         assert!(!same_file(&a, &tmp.path().join("missing")));
+    }
+
+    #[test]
+    fn rename_noreplace_moves_or_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (a, b, c) = (
+            tmp.path().join("a"),
+            tmp.path().join("b"),
+            tmp.path().join("c"),
+        );
+        fs::write(&a, b"a").unwrap();
+        fs::create_dir(&b).unwrap(); // empty: plain rename(2) would replace it
+        assert_eq!(kind(rename_noreplace(&a, &b)), io::ErrorKind::AlreadyExists);
+        rename_noreplace(&a, &c).unwrap();
+        assert!(!a.exists() && c.is_file() && b.is_dir());
+        assert_eq!(kind(rename_noreplace(&a, &c)), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn create_file_makes_an_empty_file_or_keeps_an_existing_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = create_file(tmp.path(), "new.txt").unwrap();
+        assert_eq!(path, tmp.path().join("new.txt"));
+        assert_eq!(fs::read(&path).unwrap(), b"");
+        fs::write(&path, b"keep").unwrap();
+        assert_eq!(create_file(tmp.path(), "new.txt").unwrap(), path);
+        assert_eq!(fs::read(&path).unwrap(), b"keep");
+
+        fs::create_dir(tmp.path().join("dir")).unwrap();
+        assert_eq!(
+            kind(create_file(tmp.path(), "dir")),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(
+            kind(create_file(tmp.path(), "a/b")),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            kind(create_file(&tmp.path().join("missing"), "x")),
+            io::ErrorKind::NotFound
+        );
     }
 
     #[test]

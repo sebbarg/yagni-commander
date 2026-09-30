@@ -20,7 +20,8 @@ log = "0.4"
 shlex = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
-nix = { version = "0.31", default-features = false, features = ["user"] }
+nix = { version = "0.31", default-features = false, features = ["user", "fs"] }
+trash = "5"
 tempfile = "3"
 
 [workspace.lints.rust]

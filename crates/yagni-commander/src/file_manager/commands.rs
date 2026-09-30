@@ -1,5 +1,5 @@
 //! File manager commands that need more than a core `Command`: dialogs (F2,
-//! F7), launching the editor (F4) and quick search.
+//! F7, Shift-F4), launching the editor (F4) and quick search.
 
 use std::ops::Range;
 use std::rc::Rc;
@@ -87,20 +87,39 @@ impl FileManager {
     /// F4: open the entry under the cursor (or the directory, on "..") in
     /// the configured editor.
     pub(super) fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(editor) = cx.global::<CurrentConfig>().0.editor.clone() else {
-            show_error(
-                "Cannot open editor",
-                "No editor configured: set `editor` in config.toml.",
-                None,
-                window,
-                cx,
-            );
+        let Some(editor) = configured_editor(window, cx) else {
             return;
         };
         let path = self.active_panel(cx).cursor_path();
         if let Err(e) = launch::open_in_editor(&editor, &path) {
             show_error("Cannot open editor", e.to_string(), None, window, cx);
         }
+    }
+
+    /// Shift-F4: create a file (or pick an existing one) and open it in the
+    /// editor. Asks for the name only if an editor is configured.
+    pub(super) fn edit_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(editor) = configured_editor(window, cx) else {
+            return;
+        };
+        self.prompt_name(
+            Prompt {
+                title: "Edit new file",
+                error_title: "Cannot edit file",
+                initial: "",
+                selection: 0..0,
+            },
+            Rc::new(move |this, name, cx| {
+                let path = this.commander.update(cx, |commander, cx| {
+                    let result = commander.create_file(name);
+                    cx.notify();
+                    result
+                })?;
+                launch::open_in_editor(&editor, &path)
+            }),
+            window,
+            cx,
+        );
     }
 
     /// Letters and digits typed without modifiers jump to the first matching
@@ -208,6 +227,21 @@ impl FileManager {
                 })
         });
     }
+}
+
+/// The `editor` setting, or an error box saying it is missing.
+fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
+    let editor = cx.global::<CurrentConfig>().0.editor.clone();
+    if editor.is_none() {
+        show_error(
+            "Cannot open editor",
+            "No editor configured: set `editor` in config.toml.",
+            None,
+            window,
+            cx,
+        );
+    }
+    editor
 }
 
 /// A centered, modal error box that stays until dismissed (button, Enter or

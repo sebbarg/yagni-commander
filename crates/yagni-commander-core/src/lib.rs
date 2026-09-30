@@ -6,6 +6,7 @@
 mod commander;
 mod config;
 mod entry;
+pub mod file_ops;
 mod format;
 mod fs_ops;
 pub mod launch;

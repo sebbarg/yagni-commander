@@ -10,8 +10,8 @@ use yagni_commander_core::{Command, Commander, QuickSearch, Side};
 mod commands;
 
 use crate::actions::{
-    Activate, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, FILE_MANAGER_CONTEXT, GoUp,
-    MakeDirectory, PageDown, PageUp, Reload, Rename, SelectAll, SwapPanels, SwitchPanel,
+    Activate, CursorDown, CursorEnd, CursorHome, CursorUp, Edit, EditNewFile, FILE_MANAGER_CONTEXT,
+    GoUp, MakeDirectory, PageDown, PageUp, Reload, Rename, SelectAll, SwapPanels, SwitchPanel,
     SyncOtherPanel, ToggleHidden, ToggleSelection,
 };
 use crate::app_state::AppState;
@@ -211,6 +211,9 @@ impl Render for FileManager {
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &EditNewFile, window, cx| this.edit_new_file(window, cx)),
+            )
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
@@ -615,5 +618,44 @@ mod tests {
         cx.simulate_keystrokes("ctrl-.");
         assert_eq!(labels(cx, Side::Right), ["..", "a", "b", "f"]);
         assert!(!remembered(cx));
+    }
+
+    fn set_editor(editor: &str, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            cx.set_global(crate::CurrentConfig(yagni_commander_core::Config {
+                editor: Some(editor.to_owned()),
+                ..Default::default()
+            }))
+        });
+    }
+
+    #[gpui_kit::test]
+    fn shift_f4_creates_the_file_and_opens_the_editor(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        set_editor("true", cx); // exits at once, like a detached GUI editor
+        cx.simulate_keystrokes("shift-f4");
+        cx.run_until_parked();
+        cx.simulate_input("todo.md");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(tmp.path().join("todo.md").is_file());
+        let under_cursor = commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        });
+        assert_eq!(under_cursor, "todo.md");
+    }
+
+    #[gpui_kit::test]
+    fn shift_f4_without_editor_shows_an_error_instead_of_a_prompt(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("shift-f4");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        cx.simulate_input("x");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(!tmp.path().join("x").exists());
     }
 }

@@ -135,6 +135,14 @@ impl Commander {
         self.refresh_after_change(&created)
     }
 
+    /// Shift-F4: creates an empty file `name` in the active panel's directory
+    /// (or keeps an existing one), puts the cursor on it and returns its path.
+    pub fn create_file(&mut self, name: &str) -> io::Result<PathBuf> {
+        let path = fs_ops::create_file(self.panel(self.active).path(), name)?;
+        self.refresh_after_change(OsStr::new(name))?;
+        Ok(path)
+    }
+
     /// Re-reads the active panel with the cursor on `select`, and the other
     /// panel too if it shows the same directory.
     fn refresh_after_change(&mut self, select: &OsStr) -> io::Result<()> {
@@ -539,6 +547,21 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert!(tmp.path().join("a").is_dir());
         assert_eq!(under_cursor(&c, Side::Left), "a");
+    }
+
+    #[test]
+    fn create_file_selects_it_in_both_panels_showing_the_directory() {
+        let (tmp, mut c) = commander();
+        let path = c.create_file("new.txt").unwrap();
+        assert_eq!(path, tmp.path().join("new.txt"));
+        assert_eq!(under_cursor(&c, Side::Left), "new.txt");
+        assert!(
+            c.panel(Side::Right)
+                .entries()
+                .iter()
+                .any(|e| e.label == "new.txt")
+        );
+        assert!(c.create_file("a").is_err());
     }
 
     #[test]

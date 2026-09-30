@@ -64,6 +64,7 @@ Toolbar with e.g. drive icons.
 | F4 | Open the file or directory in the configured external editor (the panel's own directory when the cursor is on ".."). The `editor` setting is split like a shell command, e.g. `code --wait`. |
 | F5 | Copy the selection, or the entry under the cursor if nothing is selected, to the other panel's directory (see File operations). |
 | F6 | Move, with the same rules as F5. |
+| Shift-F4 | Create a file and open it in the editor. Asks for a name (a single name, no `/`); if that file already exists it is opened as is. Without a configured editor, shows the error instead of asking. |
 | F7 | Create a directory. Nested paths like `a/b/c` are allowed; nothing outside the current directory. |
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
 | Alt-Z | Set the other panel's path to this panel's path. |
@@ -110,8 +111,14 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 - Symlinks are copied as links. Modification times and permissions are preserved.
 - Errors on individual files are reported without aborting the rest of the operation, with a summary at the end.
 - Affected panels reload when the operation finishes.
+- An existing directory is merged into without asking; only files and symlinks get the conflict prompt. A file never replaces a directory or the other way round (error).
+- Overwriting writes a hidden temporary file next to the target and renames it over the target at the end, so a cancelled or failed overwrite leaves the old file intact. A cancelled new copy is removed.
+- Copying or moving something onto itself, or a directory into itself, is an error for that entry.
+- Times and permissions are preserved best effort: filesystems that can't store them (FAT, some network mounts) are not an error. A symlink's own time is not preserved.
+- Pipes, sockets and device files are not copied (error for that entry).
+- A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.
 - Queue of operations, like TC's F2 queue (v2).
-- Automatic reload when files change outside the app (v2).
+- A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2).
 
 ## Build order (v1)
 
@@ -119,7 +126,7 @@ Applies to F5 (copy), F6 (move) and F8 (trash).
 2. ~~Selection model in core.~~ Done.
 3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
 4. ~~Ctrl-. hidden files toggle.~~ Done.
-5. File-operation engine in core (copy, move, trash), with tests.
+5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
 6. F5/F6/F8 dialogs and progress.
 7. F3 viewer.
 8. Menu, About and the settings page.
