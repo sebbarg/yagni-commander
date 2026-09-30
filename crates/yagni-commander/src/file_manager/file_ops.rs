@@ -337,7 +337,7 @@ impl FileManager {
             });
             (label, on_press)
         };
-        // Skip is preselected: Enter never overwrites by accident.
+        // Overwrite is preselected, like TC: Enter replaces the target.
         let buttons = ButtonRow::build(
             [
                 button("Overwrite", Answer::Overwrite),
@@ -346,7 +346,7 @@ impl FileManager {
                 button("Skip all", Answer::SkipAll),
                 button("Cancel", Answer::Cancel),
             ],
-            2,
+            0,
             cx,
         );
         focus_when_open(buttons.focus_handle(cx), window, cx);

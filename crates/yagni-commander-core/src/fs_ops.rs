@@ -79,39 +79,73 @@ pub(crate) fn rename(dir: &Path, from: &OsStr, to: &str) -> io::Result<()> {
     })
 }
 
-/// Creates an empty file `name` in `dir` and returns its path and whether it
-/// was created. An existing file is left as it is (Shift-F4 then just opens
-/// it); a directory is an error.
-pub(crate) fn create_file(dir: &Path, name: &str) -> io::Result<(PathBuf, bool)> {
-    validate_name(name)?;
-    let path = dir.join(name);
-    match fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-    {
-        Ok(_) => Ok((path, true)),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !path.is_dir() => Ok((path, false)),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            Err(io::Error::new(e.kind(), format!("“{name}” is a directory")))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Creates `relative` (one or more `/`-separated names) inside `dir` and
-/// returns its first component, the entry that appears in `dir`.
-pub(crate) fn make_directory(dir: &Path, relative: &str) -> io::Result<OsString> {
-    let relative = relative.trim_end_matches('/');
+/// Checks a `/`-separated path typed by the user (F7, Shift-F4): relative,
+/// and every part a valid name, so nothing lands outside the directory.
+fn validate_relative(relative: &str) -> io::Result<()> {
     if relative.is_empty() {
         return Err(invalid("the name is empty"));
     }
     if Path::new(relative).is_absolute() {
         return Err(invalid("give a name inside the current directory"));
     }
-    for part in relative.split('/') {
-        validate_name(part)?;
+    relative.split('/').try_for_each(validate_name)
+}
+
+/// The first part of a validated relative path: the entry that appears in
+/// the directory, for the cursor.
+fn first_component(relative: &str) -> OsString {
+    match Path::new(relative).components().next() {
+        Some(Component::Normal(first)) => first.to_os_string(),
+        _ => unreachable!("validated names are normal components"),
     }
+}
+
+/// What Shift-F4 made.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NewFile {
+    pub path: PathBuf,
+    /// False if the file already existed (it is then just opened).
+    pub created: bool,
+    /// The entry in the directory to put the cursor on.
+    pub first: OsString,
+}
+
+/// Creates an empty file at `relative` (a name, or a path like `a/b/c.txt`
+/// whose missing directories are created) inside `dir`. An existing file is
+/// left as it is (Shift-F4 then just opens it); a directory is an error.
+pub(crate) fn create_file(dir: &Path, relative: &str) -> io::Result<NewFile> {
+    validate_relative(relative)?;
+    let path = dir.join(relative);
+    if let Some(parent) = path.parent().filter(|p| *p != dir) {
+        fs::create_dir_all(parent)?;
+    }
+    let created = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(_) => true,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists && !path.is_dir() => false,
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(io::Error::new(
+                e.kind(),
+                format!("“{relative}” is a directory"),
+            ));
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(NewFile {
+        path,
+        created,
+        first: first_component(relative),
+    })
+}
+
+/// Creates `relative` (one or more `/`-separated names) inside `dir` and
+/// returns its first component, the entry that appears in `dir`.
+pub(crate) fn make_directory(dir: &Path, relative: &str) -> io::Result<OsString> {
+    let relative = relative.trim_end_matches('/');
+    validate_relative(relative)?;
     let target = dir.join(relative);
     if target.symlink_metadata().is_ok() {
         return Err(io::Error::new(
@@ -120,10 +154,7 @@ pub(crate) fn make_directory(dir: &Path, relative: &str) -> io::Result<OsString>
         ));
     }
     fs::create_dir_all(&target)?;
-    match Path::new(relative).components().next() {
-        Some(Component::Normal(first)) => Ok(first.to_os_string()),
-        _ => unreachable!("validated names are normal components"),
-    }
+    Ok(first_component(relative))
 }
 
 #[cfg(test)]
@@ -216,16 +247,14 @@ mod tests {
     #[test]
     fn create_file_makes_an_empty_file_or_keeps_an_existing_one() {
         let tmp = tempfile::tempdir().unwrap();
-        let (path, created) = create_file(tmp.path(), "new.txt").unwrap();
-        assert!(created);
-        assert_eq!(path, tmp.path().join("new.txt"));
-        assert_eq!(fs::read(&path).unwrap(), b"");
-        fs::write(&path, b"keep").unwrap();
-        assert_eq!(
-            create_file(tmp.path(), "new.txt").unwrap(),
-            (path.clone(), false)
-        );
-        assert_eq!(fs::read(&path).unwrap(), b"keep");
+        let new = create_file(tmp.path(), "new.txt").unwrap();
+        assert!(new.created);
+        assert_eq!(new.path, tmp.path().join("new.txt"));
+        assert_eq!(new.first, "new.txt");
+        assert_eq!(fs::read(&new.path).unwrap(), b"");
+        fs::write(&new.path, b"keep").unwrap();
+        assert!(!create_file(tmp.path(), "new.txt").unwrap().created);
+        assert_eq!(fs::read(&new.path).unwrap(), b"keep");
 
         fs::create_dir(tmp.path().join("dir")).unwrap();
         assert_eq!(
@@ -233,13 +262,34 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
         assert_eq!(
-            kind(create_file(tmp.path(), "a/b")),
-            io::ErrorKind::InvalidInput
-        );
-        assert_eq!(
             kind(create_file(&tmp.path().join("missing"), "x")),
             io::ErrorKind::NotFound
         );
+    }
+
+    #[test]
+    fn create_file_accepts_a_relative_path_and_makes_its_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let new = create_file(tmp.path(), "notes/2026/todo.md").unwrap();
+        assert!(new.created);
+        assert_eq!(new.path, tmp.path().join("notes/2026/todo.md"));
+        assert_eq!(new.first, "notes");
+        assert!(new.path.is_file());
+        // An existing directory on the way is fine.
+        assert!(create_file(tmp.path(), "notes/other.md").unwrap().created);
+        for bad in ["/etc/x", "../x", "a/../../x", "a//b", "a/", ""] {
+            assert_eq!(
+                kind(create_file(tmp.path(), bad)),
+                io::ErrorKind::InvalidInput,
+                "{bad:?}"
+            );
+        }
+        fs::write(tmp.path().join("file"), b"").unwrap();
+        assert!(
+            create_file(tmp.path(), "file/x").is_err(),
+            "a file in the way"
+        );
+        assert!(!tmp.path().join("x").exists());
     }
 
     #[test]

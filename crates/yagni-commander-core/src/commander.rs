@@ -219,20 +219,22 @@ impl Commander {
         self.refresh_after_change(&result?)
     }
 
-    /// Shift-F4: creates an empty file `name` in the active panel's directory
-    /// (or keeps an existing one), puts the cursor on it and returns its path.
+    /// Shift-F4: creates an empty file at `name` (a name or a relative path
+    /// like `a/b/c.txt`) in the active panel's directory, or keeps an existing
+    /// one, puts the cursor on it (or on its first directory) and returns its
+    /// path.
     pub fn create_file(&mut self, name: &str) -> io::Result<PathBuf> {
         let dir = self.panel(self.active).path().to_path_buf();
         let result = fs_ops::create_file(&dir, name);
         // Only a file that was created counts as touched.
-        if !matches!(result, Ok((_, false))) {
+        if !matches!(&result, Ok(new) if !new.created) {
             self.note("new file", &dir.join(name), &result, |path| {
                 format!("created {}", path.display())
             });
         }
-        let (path, _) = result?;
-        self.refresh_after_change(OsStr::new(name))?;
-        Ok(path)
+        let new = result?;
+        self.refresh_after_change(&new.first)?;
+        Ok(new.path)
     }
 
     /// Re-reads the active panel with the cursor on `select`, and the other

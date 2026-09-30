@@ -124,12 +124,12 @@ typed renamed
 keys Return
 check "new.txt renamed to renamed.txt" test -f "$left/renamed.txt"
 
-echo "F5 copy onto an existing file: Left Left selects Overwrite"
+echo "F5 copy onto an existing file: Enter overwrites (preselected)"
 typed notes
 keys F5 Return
 sleep 1
 shot 03-conflict
-keys Left Left Return
+keys Return
 check "right/notes.txt overwritten" has "$right/notes.txt" hello
 check "left/notes.txt kept" has "$left/notes.txt" hello
 

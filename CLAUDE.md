@@ -6,13 +6,17 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Status and handoff (update at the end of every session)
 
-As of 2026-09-30:
+As of 2026-09-30, end of session (everything committed):
 
-- **Done (v1 build order in `Requirements.md`):** step 1 (gpui-kit + gpui-component, config and window state), step 2 (selection), step 3 (F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search), step 4 (Ctrl-. hidden files), step 5 (file-operation engine), step 6 (F5/F6/F8 dialogs and progress), plus themes-as-data and modal error boxes.
-- **Next: step 7, F3 viewer** (see `Requirements.md`, F3 viewer): read-only UTF-8 text in its own window, memory-mapped, lines indexed lazily, must open GB-sized files instantly.
-- **Temporary:** F12 opens a "Button test" dialog (`button_test` in `file_manager/commands.rs`) for trying the dialog button row. Remove before v1.
+- **Done (v1 build order in `Requirements.md`):** steps 1 to 6: gpui-kit + gpui-component, config and window state; selection; F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R; Ctrl-. hidden files; the file-operation engine; F5/F6/F8 with progress. Also done since, beyond the build order: `[name]` directory display, Shift-F4 new file, quick search box (Up/Down step through matches), our own dialog `ButtonRow` (arrow keys; Enter presses the highlighted button), Shift-F8/Shift-Del permanent delete, the operation log, themes-as-data, modal error boxes.
+- **Tests:** `cargo test --workspace` (77 app, 168 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 30+ checks on disk, screenshots in `target/smoke/`). Both green.
+- **Next: step 7, F3 viewer.** Decided (see `Requirements.md`, F3 viewer): TC-style, by byte position with positional reads (`read_at`), no mmap (`unsafe` is forbidden), byte-based scrollbar, Ctrl-End reads backwards, line numbers from a background scan. Still to work out: opening a second gpui window via gpui-kit (`open_window` wraps in `Root`), keys (Escape/F3/q close; Up/Down/PageUp/PageDown/Home/End), app tests and a smoke scenario.
+- **Owner decisions (2026-09-30):** Enter = Delete in the Shift-F8 confirm (like TC); Enter = Overwrite in the conflict prompt (like TC); quick search wraps around; Shift-F4 field starts empty and accepts a relative path (`a/b/c.txt`, like F7).
+- **Upstream bug, unreported by choice:** gpui-component `Dialog` binds Enter to OK for the whole dialog, ignoring the focused button (still on gpui-kit `main`; nearest related PR #3097). The owner decided not to file it for now; our `ButtonRow` works around it.
+- **Temporary:** F12 opens a "Button test" dialog (`button_test` in `file_manager/commands.rs`). Remove before v1.
 - **Also required before v1:** config changes must apply without restart; background directory loading; a directory watcher that reloads panels on outside changes; resizable/configurable columns (see Known issues).
-- **Waiting on the owner to verify on real machines:** whether macOS still needs the full Xcode app with gpui-kit's runtime shaders; the "only Name sorting works" report; F4 with `editor = "code"` when launched from Finder (PATH); behavior on native Wayland (Plasma, Hyprland), which has never been tested here.
+- **Verified by the owner:** F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh to show it).
+- **Waiting on the owner to verify on real machines:** `cargo test` on macOS (only ever run in the Linux container); `scripts/smoke.sh` on Kubuntu/Omarchy (needs the packages under Building); whether macOS still needs the full Xcode app with gpui-kit's runtime shaders; the "only Name sorting works" report; F4 with `editor = "code"` when launched from Finder (PATH); native Wayland (Plasma, Hyprland), never tested here; F5 byte progress on a real disk (the container clones files, so copies finish instantly).
 
 ### How we work
 
@@ -65,7 +69,7 @@ As of 2026-09-30:
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
 - F5 copy, F6 move (destination prompt prefilled with the other panel), F8/Del trash (confirm), Shift-F8/Shift-Del permanent delete (confirm), in the background with a progress dialog (after ~300 ms), Cancel, a per-file conflict prompt and an error summary; both panels reload at the end.
-- F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`; Shift-F4 asks for a file name, creates the file (or keeps an existing one), puts the cursor on it and opens it in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing opens a quick search box in the panel footer and jumps to the first name starting with the typed text; Down/Up step through matches (wrapping), Backspace shortens it, Escape or any other command closes it. The search state lives in `Commander` (`search_*`), so every command ends it.
+- F2 rename (name preselected up to the last extension; never overwrites; case-only rename allowed), F7 new directory (nested `a/b/c` allowed, nothing outside the current directory), F4 opens the entry (or the directory on "..") in `editor`; Shift-F4 asks for a file name or relative path (`a/b/c.txt`, missing folders created), creates the file (or keeps an existing one), puts the cursor on it (or its first folder) and opens it in `editor`. Alt-Z shows this directory in the other panel, Ctrl-U swaps panels, Ctrl-R reloads both. Typing opens a quick search box in the panel footer and jumps to the first name starting with the typed text; Down/Up step through matches (wrapping), Backspace shortens it, Escape or any other command closes it. The search state lives in `Commander` (`search_*`), so every command ends it.
 - Mouse: click moves the cursor (and focuses that panel), double-click activates, wheel scrolls the view without moving the cursor.
 - Directory names show as `[name]` (display only; ".." unbracketed).
 - Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
@@ -89,8 +93,8 @@ As of 2026-09-30:
 
 ## Gotchas
 
-- Tests must never call the real `trash::delete` (it would fill the owner's trash): core `file_ops` tests use `run_with` / `Job::spawn_with` with a fake trash function, and app tests set `FileManager::trash` to a fake (`use_fake_trash`). Only `scripts/smoke.sh` uses the real trash, with `XDG_DATA_HOME` in a temporary folder.
-- App tests of F5/F6 run a real worker thread: drive them with `advance_clock` + `run_until_parked` in a loop (`wait_until` in `file_manager.rs`); the poll timer only fires on the test clock.
+- Tests must never call the real `trash::delete` (it would fill the owner's trash): core `file_ops` tests pass `file_ops::Settings { trash: fake_trash, .. }` to `run` / `Job::spawn`, and app tests set `FileManager::trash` to a fake (`use_fake_trash`). Only `scripts/smoke.sh` uses the real trash, with `XDG_DATA_HOME` in a temporary folder.
+- App tests of F5/F6 run a real worker thread: drive them with `advance_clock` + `run_until_parked` in a loop (`wait_until` in `file_manager/tests.rs`); the poll timer only fires on the test clock.
 
 - gpui-component `Dialog` maps Enter to its OK action (`on_ok`) for the whole dialog, even when a text input or another button has focus (upstream bug, not reported as of 2026-09-30), and has no arrow-key navigation. So every dialog's buttons are our `ButtonRow` (`button_row.rs`), never `DialogFooter`/`DialogAction`/`open_alert_dialog`: it keeps its own selected button and binds Left/Right, Tab/Shift-Tab, Enter and Space in its own key context. Focus the row when a dialog opens (`focus_when_open`), except prompts, which focus their text field (Enter there still goes to `on_ok`; don't also handle the input's `PressEnter`, or OK runs twice: `enter_submits_a_prompt_exactly_once`).
 - Opening a dialog moves focus to it: focus a field inside it with `window.defer` after opening. After an error box closes, focus must be put back explicitly (`show_error`'s `refocus`).
@@ -104,6 +108,7 @@ As of 2026-09-30:
 - macOS: Xcode. gpui-kit enables gpui's `runtime_shaders` and `font-kit` features, so Metal shaders compile at runtime and the full Xcode app may no longer be required (unverified; if the build asks for `metal`, install Xcode and `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`).
 - Kubuntu: `sudo apt install build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev`
 - Arch/Omarchy: `sudo pacman -S --needed base-devel clang cmake libxkbcommon libxkbcommon-x11 wayland fontconfig freetype2 libx11 libxcb vulkan-icd-loader` plus the Vulkan driver for your GPU.
+- For `scripts/smoke.sh` (Linux only; package names not yet verified on the owner's machines): Kubuntu `sudo apt install xvfb xdotool imagemagick mesa-vulkan-drivers`; Arch `sudo pacman -S xorg-server-xvfb xdotool imagemagick vulkan-swrast`.
 
 ### Fresh dev container (Ubuntu 24.04, no display)
 

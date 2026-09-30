@@ -66,7 +66,7 @@ Toolbar with e.g. drive icons.
 | F4 | Open the file or directory in the configured external editor (the panel's own directory when the cursor is on ".."). The `editor` setting is split like a shell command, e.g. `code --wait`. |
 | F5 | Copy the selection, or the entry under the cursor if nothing is selected, to the other panel's directory (see File operations). |
 | F6 | Move, with the same rules as F5. |
-| Shift-F4 | Create a file and open it in the editor. Asks for a name (a single name, no `/`); if that file already exists it is opened as is. Without a configured editor, shows the error instead of asking. |
+| Shift-F4 | Create a file and open it in the editor. Asks for a name, which may be a relative path like `notes/2026/todo.md`: missing folders are created, nothing outside the current directory (like F7), and the cursor goes to the first part. The field starts empty. If that file already exists it is opened as is. Without a configured editor, shows the error instead of asking. |
 | F7 | Create a directory. Nested paths like `a/b/c` are allowed; nothing outside the current directory. |
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
 | Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. |
@@ -102,7 +102,10 @@ Toolbar with e.g. drive icons.
 ### F3 viewer
 
 - Read-only, UTF-8 text, in its own window.
-- Must open huge files (GB range) instantly: memory-mapped, with lines indexed lazily as you scroll.
+- Must open huge files (GB range) instantly, like TC's Lister. Works by byte position, never reading the whole file before showing it: open reads the first screenful; paging reads the next few KB (positional reads, `read_at`); Ctrl-End reads backwards from the end to the last line start; the scrollbar is a byte position that snaps to the next line start.
+- Not memory-mapped: in Rust that needs `unsafe` (forbidden), and another program shortening the file would crash the app (SIGBUS). Positional reads use the same OS file cache and are as fast here.
+- Line numbers ("line N of M", go to line) need a full scan; it runs in the background and they appear when it's done. The viewer is usable at once.
+- A single giant line (e.g. minified JSON) shows a window of it. A position inside a multi-byte UTF-8 character snaps to the next character.
 - Other encodings, hex view and search inside the viewer (v2).
 
 ## File operations
@@ -123,7 +126,7 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 - F5/F6 ask for the destination directory, prefilled with the other panel's path. A relative path is taken from the active panel's directory. It must be an existing directory other than the source directory (the prompt says so and stays open).
 - F8 and Del ask for confirmation first.
 - The progress dialog appears only if the job takes longer than about 300 ms, so quick copies don't flash a dialog. It counts files and bytes. Escape or Cancel stops the job at the next file (or 4 MiB chunk).
-- In the conflict prompt, Enter means Skip (never overwrite by accident) and Escape means Cancel. It shows both files' size and modification time.
+- In the conflict prompt, Enter means Overwrite (preselected, like TC) and Escape means Cancel. It shows both files' size and modification time.
 - One operation at a time (the queue is v2).
 - After a copy that finished without errors, the source panel's selection is cleared (like TC). Errors are listed in one error box at the end (the first 10, then "and N more").
 - A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.

@@ -520,10 +520,10 @@ fn f6_moves_the_selection_to_a_typed_directory(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn conflicts_are_asked_enter_skips_and_escape_cancels(cx: &mut TestAppContext) {
+fn conflicts_are_asked_escape_cancels_and_enter_overwrites(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open_with_target(cx);
     std::fs::write(tmp.path().join("a/f"), b"old").unwrap();
-    for key in ["enter", "escape"] {
+    for (key, expected) in [("escape", "old"), ("enter", "new")] {
         cx.simulate_keystrokes("f5");
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
@@ -533,7 +533,11 @@ fn conflicts_are_asked_enter_skips_and_escape_cancels(cx: &mut TestAppContext) {
         wait_until(cx, |cx| !job_running(cx));
         cx.run_until_parked();
         assert!(!dialog_open(cx), "progress closed after {key}");
-        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"old");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a/f")).unwrap(),
+            expected,
+            "{key}"
+        );
     }
 }
 
@@ -584,16 +588,18 @@ fn conflict(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
 fn conflict_buttons_follow_arrows_tab_space_and_enter(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open_with_target(cx);
     let target = tmp.path().join("a/f");
-    // Buttons: Overwrite, Overwrite all, Skip (selected), Skip all, Cancel.
+    // Buttons: Overwrite (selected), Overwrite all, Skip, Skip all, Cancel.
     for (keys, expected) in [
-        ("left left enter", "new"),
-        ("shift-tab shift-tab space", "new"),
+        ("enter", "new"),
+        ("left enter", "new"),
         ("right right enter", "old"),
-        ("tab left enter", "old"),
+        ("tab tab space", "old"),
+        ("right right right right enter", "old"),
         (
-            "left right right right right right left left left enter",
+            "right right right right right left left left left enter",
             "new",
         ),
+        ("tab tab shift-tab shift-tab space", "new"),
     ] {
         conflict(&tmp, cx);
         cx.simulate_keystrokes(keys);
@@ -1031,4 +1037,21 @@ fn background_jobs_write_to_the_operation_log(cx: &mut TestAppContext) {
     );
     assert!(text.contains(&copied), "{text}");
     assert!(text.contains("copy finished: 0 failed, 0 skipped"));
+}
+
+#[gpui_kit::test]
+fn shift_f4_creates_missing_folders_and_selects_the_first(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    set_editor("true", cx);
+    cx.simulate_keystrokes("shift-f4");
+    cx.run_until_parked();
+    cx.simulate_input("notes/2026/todo.md");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!dialog_open(cx));
+    assert!(tmp.path().join("notes/2026/todo.md").is_file());
+    let under_cursor = commander.read_with(cx, |c, _| {
+        c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+    });
+    assert_eq!(under_cursor, "notes");
 }
