@@ -1,10 +1,13 @@
 //! Actions and the default keymap. The keymap is data, so a user config file
 //! can later add or override bindings without touching the views.
 
+use gpui_kit::component::input;
 use gpui_kit::{App, KeyBinding, actions};
 
 /// Key context of the file manager's root view; scopes the bindings below.
 pub const FILE_MANAGER_CONTEXT: &str = "FileManager";
+/// Key context of gpui-base's text fields.
+const INPUT_CONTEXT: &str = "Input";
 /// Key context of a dialog's [`crate::button_row::ButtonRow`].
 pub const BUTTON_ROW_CONTEXT: &str = "ButtonRow";
 
@@ -129,6 +132,15 @@ pub fn bind_default_keys(cx: &mut App) {
             KeyBinding::new("alt", MenuAlt, context),
         ]);
     }
+    // Text fields: the classic clipboard keys next to gpui-base's Ctrl-C/X/V.
+    // Registered after gpui-base's own, so Shift-Del cuts instead of deleting
+    // a character.
+    let input = Some(INPUT_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("ctrl-insert", input::Copy, input),
+        KeyBinding::new("shift-delete", input::Cut, input),
+        KeyBinding::new("shift-insert", input::Paste, input),
+    ]);
     // More specific than the dialog's own Enter (always OK) and Root's Tab.
     let row = Some(BUTTON_ROW_CONTEXT);
     cx.bind_keys([

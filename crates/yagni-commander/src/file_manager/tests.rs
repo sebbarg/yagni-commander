@@ -1453,6 +1453,29 @@ fn menu_checks_follow_ctrl_dot_sorting_and_the_active_panel(cx: &mut TestAppCont
     assert!(native_check(cx, "Sort by name"));
 }
 
+#[gpui_kit::test]
+fn text_fields_take_the_classic_clipboard_keys(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("f7");
+    cx.run_until_parked();
+    cx.simulate_input("abc");
+    // Shift-Del cuts, Shift-Ins pastes.
+    cx.simulate_keystrokes("ctrl-a shift-delete");
+    let clipboard = |cx: &mut VisualTestContext| {
+        cx.read_from_clipboard()
+            .and_then(|item| item.text())
+            .map(|text| text.to_string())
+    };
+    assert_eq!(clipboard(cx).as_deref(), Some("abc"));
+    cx.simulate_keystrokes("shift-insert shift-insert");
+    // Ctrl-Ins copies.
+    cx.simulate_keystrokes("ctrl-a ctrl-insert end");
+    assert_eq!(clipboard(cx).as_deref(), Some("abcabc"));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(tmp.path().join("abcabc").is_dir());
+}
+
 // Settings.
 
 use yagni_commander_core::Setting;

@@ -6,10 +6,10 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Status and handoff (update at the end of every session)
 
-As of 2026-10-01, end of session (everything committed, last commit "Add the Settings dialog"):
+As of 2026-10-01, end of session (everything committed, last commit "Add Ctrl-Ins, Shift-Del, Shift-Ins to text fields"):
 
 - **Done (v1 build order in `Requirements.md`):** steps 1 to 7: gpui-kit + gpui-component, config and window state; selection; F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R; Ctrl-. hidden files; the file-operation engine; F5/F6/F8 with progress; the F3 viewer. Step 8: the menu (TC-style command menus with shortcut labels and check marks; native bar on macOS, in-window bar on Linux opened by F10 or a lone Alt), About, and the Settings dialog (Ctrl-,; changes apply at once and are saved key by key with comments kept; Ctrl-R re-reads the config). Beyond the build order: background directory loading; both panel folders and the active panel restored on start; `[name]` directory display, Shift-F4 new file, quick search box (Up/Down step through matches), our own dialog `ButtonRow` (arrow keys; Enter presses the highlighted button), Shift-F8/Shift-Del permanent delete, the operation log, themes-as-data, modal error boxes. Plans with their reasoning: `docs/superpowers/plans/` (F3 viewer, background loading, menu, settings).
-- **Tests:** `cargo test --workspace` (164 app, 242 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 40+ checks on disk, screenshots in `target/smoke/`). Both green.
+- **Tests:** `cargo test --workspace` (165 app, 242 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 40+ checks on disk, screenshots in `target/smoke/`). Both green.
 - **Next: the owner's choice.** The v1 build order is done. Left before v1 (see "Also required before v1" and Known issues): a directory watcher, resizable/configurable columns, removing the F12 test dialog.
 - **Later: right-click context menu.** Reuse `menus::popup` with its own `MenuEntry` list. Open decision: whether right-click selects, as in TC's default on Linux and Windows.
 - **Owner decisions (2026-09-30):** Enter = Delete in the Shift-F8 confirm (like TC); Enter = Overwrite in the conflict prompt (like TC); quick search wraps around; Shift-F4 field starts empty and accepts a relative path (`a/b/c.txt`, like F7).
@@ -86,6 +86,7 @@ As of 2026-10-01, end of session (everything committed, last commit "Add the Set
 - Optional operation log (`log = true`): every file created, copied, moved, renamed, trashed or deleted, one file per day, pruned after `log_keep_days`.
 - Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
 - Menu: Files, Commands, Show (hidden files, sort column, with check marks), Help (About); each item shows its key. macOS: the native menu bar, About and Quit in the app menu. Linux: an always-visible bar above the panels; F10 or a lone Alt opens it, arrows, Enter and Escape inside; other keys are ignored while it is open. Sorting is also available as actions (`SortBy*`), unbound by default.
+- Text fields (dialogs): Ctrl-C/X/V plus Ctrl-Ins, Shift-Del, Shift-Ins (bound in gpui-base's `Input` context in `actions.rs`; Shift-Del in the panels is still permanent delete).
 - Settings (Ctrl-, or the menu): editor, case-sensitive sorting, operation log on/off, days to keep logs. Changes apply at once and are saved to the config file without losing its comments. Ctrl-R also re-reads the config.
 - Quit: Cmd+Q (macOS), Alt+F4 (Linux), the menu, or closing the last window.
 

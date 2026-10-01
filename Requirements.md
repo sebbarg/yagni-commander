@@ -102,6 +102,7 @@ Toolbar with e.g. drive icons.
 | Ctrl-U | Swap the two panels. |
 | Ctrl-R | Reload both panels and re-read the config (see Config). |
 | Ctrl-, | Settings (see Config). |
+| In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
 | F10, Alt (alone) | Open the menu (Linux; see Menu). |
 | Letters, digits, `.` and other printable keys | Quick search (see below). |
