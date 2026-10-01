@@ -45,7 +45,8 @@ actions!(
         SortByPermissions,
         About,
         ToggleMenu,
-        MenuAlt
+        MenuAlt,
+        OpenSettings
     ]
 );
 
@@ -114,6 +115,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-r", Reload, context),
         KeyBinding::new("ctrl-.", ToggleHidden, context),
+        KeyBinding::new("ctrl-,", OpenSettings, context),
         KeyBinding::new("escape", CancelSearch, context),
         // Temporary, for trying the dialog button row. Remove before v1.
         KeyBinding::new("f12", ButtonTest, context),

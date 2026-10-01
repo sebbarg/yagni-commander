@@ -20,7 +20,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
-  - Settings gets an entry with the settings page. The temporary F12 Button test is not in the menu.
+  - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit. The temporary F12 Button test is not in the menu.
 - Check marks follow the state: the menus are rebuilt when hidden files or the active panel's sort change.
 - Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
 - Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10 and lone Alt do nothing.
@@ -29,11 +29,16 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 ### Config
 
-- Settings page in the UI:
-  - Path to the external editor (used by F4).
-  - File name sorting: case sensitive or insensitive.
-- Changes made in the settings page take effect immediately. Hand edits of the file take effect on restart or Ctrl-R (which also re-reads the config); no file watcher (decided 2026-10-01: with a settings page, hand edits are rare). Both come with the settings page (step 8).
-- Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings page edits this file; editing it by hand also works.
+- Settings dialog (decided 2026-10-01): a modal dialog titled "Settings", opened with Ctrl-, (all platforms) or the menu (Linux: Files > Settings..., above Quit; macOS: the app menu's Settings...). Fields, top to bottom:
+  - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes. A "Browse..." button that picks the program with a file dialog and fills in its path (v2, decided 2026-10-01); the field stays editable for arguments like `--wait`.
+  - **Sort names case-sensitively** (`case_sensitive_sort`): switch. Applies at once: both panels re-sort, keeping their selection.
+  - **Log file operations** (`log`): switch. On starts the log at once (including the startup cleanup of old log files); off stops logging. A copy or move already running keeps logging until it ends.
+  - **Keep logs for N days** (`log_keep_days`): number, 1 to 3650, described as "Older log files are deleted at startup". An invalid value shows an error at the field and is not saved.
+  - One button, Close (our `ButtonRow`). Escape closes; Enter closes too. Both save what was typed first. While the days value is invalid, Enter and Close keep the dialog open with the error showing; Escape closes and drops it. Tab/Shift-Tab move through the fields and the button; Space toggles a switch.
+- Saving: each change writes only its own key and keeps the rest of the file as it is (comments, layout, hand edits). A key that is only commented out (`# editor = ...`) gets a real line; emptying the editor removes its key. The new text is checked by parsing it before the file is replaced (atomic write). If writing fails, an error box says so and the change still applies for this session.
+- A config file that did not parse, or no config directory: the dialog shows that problem at the top and its fields are disabled. Fix the file, then Ctrl-R. A broken file is never overwritten.
+- Hand edits of the file take effect on restart or Ctrl-R; no file watcher (decided 2026-10-01: with a settings dialog, hand edits are rare). Ctrl-R reloads both panels and re-reads the config, applying editor, sort and logging. If the file does not parse, the status line shows "Config ignored: ..." and the current settings stay (at startup the app runs on defaults instead).
+- Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings dialog edits this file; editing it by hand also works.
 
 ### Window position and size, panel folders
 
@@ -95,7 +100,8 @@ Toolbar with e.g. drive icons.
 | Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. |
 | Alt-Z | Set the other panel's path to this panel's path. |
 | Ctrl-U | Swap the two panels. |
-| Ctrl-R | Reload both panels. |
+| Ctrl-R | Reload both panels and re-read the config (see Config). |
+| Ctrl-, | Settings (see Config). |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
 | F10, Alt (alone) | Open the menu (Linux; see Menu). |
 | Letters, digits, `.` and other printable keys | Quick search (see below). |
@@ -175,11 +181,11 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 
 ## Build order (v1)
 
-1. ~~Adopt gpui-component; config and state storage.~~ Done (settings page UI comes with the menu, step 8).
+1. ~~Adopt gpui-component; config and state storage.~~ Done (settings dialog: step 8).
 2. ~~Selection model in core.~~ Done.
 3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
 4. ~~Ctrl-. hidden files toggle.~~ Done.
 5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
 6. ~~F5/F6/F8 dialogs and progress.~~ Done.
 7. ~~F3 viewer.~~ Done.
-8. Menu, About and the settings page. (Menu and About done; the settings page is next.)
+8. ~~Menu, About and the settings page.~~ Done.

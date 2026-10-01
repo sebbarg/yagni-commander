@@ -43,6 +43,8 @@ pub enum StorageError {
     Io(PathBuf, io::Error),
     Parse(PathBuf, toml::de::Error),
     Serialize(toml::ser::Error),
+    /// A file that `toml` parsed but `toml_edit` could not.
+    Edit(PathBuf, String),
 }
 
 impl fmt::Display for StorageError {
@@ -51,6 +53,7 @@ impl fmt::Display for StorageError {
             StorageError::Io(path, e) => write!(f, "{e}: {}", path.display()),
             StorageError::Parse(path, e) => write!(f, "{} in {}", e.message(), path.display()),
             StorageError::Serialize(e) => write!(f, "cannot serialize: {e}"),
+            StorageError::Edit(path, e) => write!(f, "{e} in {}", path.display()),
         }
     }
 }

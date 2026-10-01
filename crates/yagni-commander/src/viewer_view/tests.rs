@@ -6,7 +6,7 @@ fn setup(cx: &mut TestAppContext) {
         gpui_kit::init(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
-        cx.set_global(crate::CurrentConfig(Default::default()));
+        cx.set_global(crate::config_state::CurrentConfig::default());
         crate::actions::bind_default_keys(cx);
     });
 }

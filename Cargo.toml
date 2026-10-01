@@ -20,6 +20,7 @@ log = "0.4"
 shlex = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
+toml_edit = "0.25"
 nix = { version = "0.31", default-features = false, features = ["user", "fs", "dir"] }
 trash = "5"
 unicode-width = "0.2"

@@ -7,7 +7,7 @@ fn setup(cx: &mut TestAppContext) {
         gpui_kit::init(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
-        cx.set_global(crate::CurrentConfig(Default::default()));
+        cx.set_global(crate::config_state::CurrentConfig::default());
         crate::actions::bind_default_keys(cx);
     });
 }
@@ -409,10 +409,13 @@ fn ctrl_dot_toggles_hidden_files_in_both_panels_and_remembers_it(cx: &mut TestAp
 
 fn set_editor(editor: &str, cx: &mut VisualTestContext) {
     cx.update(|_, cx| {
-        cx.set_global(crate::CurrentConfig(yagni_commander_core::Config {
-            editor: Some(editor.to_owned()),
+        cx.set_global(crate::config_state::CurrentConfig {
+            config: yagni_commander_core::Config {
+                editor: Some(editor.to_owned()),
+                ..Default::default()
+            },
             ..Default::default()
-        }))
+        })
     });
 }
 
@@ -1450,6 +1453,418 @@ fn menu_checks_follow_ctrl_dot_sorting_and_the_active_panel(cx: &mut TestAppCont
     assert!(native_check(cx, "Sort by name"));
 }
 
+// Settings.
+
+use yagni_commander_core::Setting;
+
+/// Points the app at a config file in `dir` holding `text`, loaded as at startup.
+fn use_config(dir: &std::path::Path, text: &str, cx: &mut VisualTestContext) -> std::path::PathBuf {
+    let path = dir.join("config.toml");
+    std::fs::write(&path, text).unwrap();
+    let state = crate::config_state::CurrentConfig::load(Some(path.clone()));
+    cx.update(|_, cx| cx.set_global(state));
+    path
+}
+
+fn config(cx: &mut VisualTestContext) -> yagni_commander_core::Config {
+    cx.update(|_, cx| {
+        cx.global::<crate::config_state::CurrentConfig>()
+            .config
+            .clone()
+    })
+}
+
+fn config_problem(cx: &mut VisualTestContext) -> Option<String> {
+    cx.update(|_, cx| {
+        cx.global::<crate::config_state::CurrentConfig>()
+            .problem
+            .clone()
+    })
+}
+
+fn use_log_dir(dir: &std::path::Path, cx: &mut VisualTestContext) {
+    let view = file_manager(cx);
+    view.update(cx, |this, _| this.log_dir = Some(dir.to_owned()));
+}
+
+fn change_setting(setting: Setting, cx: &mut VisualTestContext) {
+    let view = file_manager(cx);
+    cx.update(|window, cx| view.update(cx, |this, cx| this.change_setting(setting, window, cx)));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn changing_a_setting_applies_it_and_saves_only_that_key(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    std::fs::write(tmp.path().join("Zed"), b"").unwrap();
+    std::fs::write(tmp.path().join("apple"), b"").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "# mine\ncase_sensitive_sort = false\n", cx);
+    let names = |cx: &mut VisualTestContext| {
+        commander.read_with(cx, |c, _| {
+            c.panel(Side::Left)
+                .entries()
+                .iter()
+                .map(|e| e.label.clone())
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(names(cx), ["..", "a", "b", "apple", "f", "Zed"]);
+    change_setting(Setting::CaseSensitiveSort(true), cx);
+    assert_eq!(names(cx), ["..", "a", "b", "Zed", "apple", "f"]);
+    assert!(config(cx).case_sensitive_sort);
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# mine\ncase_sensitive_sort = true\n"
+    );
+}
+
+#[gpui_kit::test]
+fn turning_logging_on_and_off_takes_effect_at_once(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    use_log_dir(logs.path(), cx);
+    change_setting(Setting::Log(true), cx);
+    assert!(commander.read_with(cx, |c, _| c.log().is_some()));
+    cx.simulate_keystrokes("f7");
+    cx.simulate_input("logged");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(tmp.path().join("logged").is_dir());
+    assert_eq!(std::fs::read_dir(logs.path()).unwrap().count(), 1);
+    change_setting(Setting::Log(false), cx);
+    assert!(commander.read_with(cx, |c, _| c.log().is_none()));
+}
+
+#[gpui_kit::test]
+fn the_editor_setting_is_used_by_f4_at_once(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    change_setting(Setting::editor("true"), cx);
+    // Without an editor F4 shows an error box (f4_without_editor_does_not_crash).
+    cx.simulate_keystrokes("down f4");
+    cx.run_until_parked();
+    assert!(!dialog_open(cx));
+}
+
+#[gpui_kit::test]
+fn a_broken_config_is_never_written(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "log = maybe\n", cx);
+    assert!(config_problem(cx).is_some());
+    change_setting(Setting::Log(true), cx);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "log = maybe\n");
+    assert!(!config(cx).log);
+}
+
+#[gpui_kit::test]
+fn ctrl_r_rereads_the_config(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    use_log_dir(logs.path(), cx);
+    std::fs::write(
+        &path,
+        "editor = \"zed\"\ncase_sensitive_sort = true\nlog = true\n",
+    )
+    .unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    let now = config(cx);
+    assert_eq!(now.editor.as_deref(), Some("zed"));
+    assert!(now.case_sensitive_sort);
+    assert!(commander.read_with(cx, |c, _| c.panel(Side::Left).sort().case_sensitive));
+    assert!(commander.read_with(cx, |c, _| c.log().is_some()));
+}
+
+#[gpui_kit::test]
+fn ctrl_r_on_a_broken_config_keeps_the_settings_and_says_why(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "editor = \"zed\"\n", cx);
+    std::fs::write(&path, "editor = \n").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    assert_eq!(config(cx).editor.as_deref(), Some("zed"));
+    let view = file_manager(cx);
+    let notice = view.read_with(cx, |this, _| this.notice.clone());
+    assert!(notice.unwrap().starts_with("Config ignored: "));
+    assert!(config_problem(cx).is_some());
+    // Fixed and re-read: the problem is gone.
+    std::fs::write(&path, "editor = \"vim\"\n").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    assert_eq!(config(cx).editor.as_deref(), Some("vim"));
+    assert!(config_problem(cx).is_none());
+}
+
+// The settings dialog.
+
+/// Test windows start inactive; a real one is active when the user types.
+/// gpui reports focus changes (blur, focus-out) for the active window only.
+fn activate(cx: &mut VisualTestContext) {
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+}
+
+/// A full key press, down and up. `simulate_keystrokes` sends only key-down,
+/// and gpui turns Space or Enter on a focused button or switch into a click
+/// on key-up.
+fn press(cx: &mut VisualTestContext, key: &str) {
+    let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
+    cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: false,
+        prefer_character_input: false,
+    });
+    cx.simulate_event(gpui_kit::KeyUpEvent { keystroke });
+    cx.run_until_parked();
+}
+
+fn settings_open(cx: &mut VisualTestContext) -> bool {
+    cx.run_until_parked();
+    cx.debug_bounds("settings-editor").is_some()
+}
+
+#[gpui_kit::test]
+fn ctrl_comma_opens_settings_with_the_current_values(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "editor = \"vim\"\nlog_keep_days = 30\n", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    assert!(settings_open(cx));
+    let view = file_manager(cx);
+    let (editor, days) = view.read_with(cx, |this, cx| {
+        let s = this.settings.as_ref().unwrap().read(cx);
+        (s.editor_text(cx), s.days_text(cx))
+    });
+    assert_eq!((editor.as_str(), days.as_str()), ("vim", "30"));
+    cx.simulate_keystrokes("escape");
+    assert!(!settings_open(cx));
+}
+
+#[gpui_kit::test]
+fn typing_an_editor_saves_it_on_close(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "# keep me\n", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.simulate_input("code --wait");
+    cx.simulate_keystrokes("enter");
+    assert!(!settings_open(cx));
+    assert_eq!(config(cx).editor.as_deref(), Some("code --wait"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("# keep me\n"), "{text}");
+    assert!(text.contains("editor = \"code --wait\""), "{text}");
+}
+
+#[gpui_kit::test]
+fn escape_also_keeps_what_was_typed(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.simulate_input("zed");
+    cx.simulate_keystrokes("escape");
+    assert!(!settings_open(cx));
+    assert_eq!(config(cx).editor.as_deref(), Some("zed"));
+}
+
+#[gpui_kit::test]
+fn keys_reach_the_panels_after_settings_close(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-, escape");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down");
+    assert_eq!(cursor(&commander, Side::Left, cx), 1);
+}
+
+#[gpui_kit::test]
+fn tab_reaches_the_switches_and_space_toggles_them(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    use_log_dir(logs.path(), cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab"); // sort switch
+    press(cx, "space");
+    assert!(config(cx).case_sensitive_sort);
+    cx.simulate_keystrokes("tab"); // log switch
+    press(cx, "space");
+    assert!(config(cx).log);
+    assert!(commander.read_with(cx, |c, _| c.log().is_some()));
+    assert!(settings_open(cx));
+}
+
+#[gpui_kit::test]
+fn enter_on_a_switch_closes_without_toggling(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab");
+    press(cx, "enter");
+    assert!(!settings_open(cx));
+    assert!(!config(cx).case_sensitive_sort);
+}
+
+#[gpui_kit::test]
+fn clicking_a_switch_toggles_it(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    click(cx, "settings-sort", 1);
+    assert!(config(cx).case_sensitive_sort);
+}
+
+#[gpui_kit::test]
+fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "log_keep_days = 30\n", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab tab tab"); // editor -> sort -> log -> days
+    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_input("0");
+    cx.simulate_keystrokes("tab"); // leaving the field checks it
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-days-error").is_some());
+    assert_eq!(config(cx).log_keep_days, 30);
+    cx.simulate_keystrokes("shift-tab ctrl-a");
+    cx.simulate_input("14");
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-days-error").is_none());
+    assert_eq!(config(cx).log_keep_days, 14);
+    assert!(
+        std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("log_keep_days = 14")
+    );
+}
+
+#[gpui_kit::test]
+fn the_close_button_closes(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab tab tab tab"); // editor -> ... -> Close
+    press(cx, "space");
+    assert!(!settings_open(cx));
+}
+
+#[gpui_kit::test]
+fn a_broken_config_disables_the_dialog_and_says_why(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "log = maybe\n", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("settings-problem").is_some());
+    click(cx, "settings-sort", 1);
+    assert!(!config(cx).case_sensitive_sort);
+}
+
+#[gpui_kit::test]
+fn a_failed_save_shows_an_error_and_still_applies(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    std::fs::write(&path, "log = maybe\n").unwrap(); // broken since startup
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    click(cx, "settings-sort", 1);
+    cx.run_until_parked();
+    assert!(config(cx).case_sensitive_sort);
+    // The error box is on top of the settings dialog; dismiss it.
+    cx.simulate_keystrokes("enter");
+    assert!(settings_open(cx));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "log = maybe\n");
+}
+
+#[gpui_kit::test]
+fn the_menu_opens_settings(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.dispatch_action(crate::actions::OpenSettings);
+    assert!(settings_open(cx));
+}
+
+#[gpui_kit::test]
+fn a_save_failing_on_close_shows_its_error_after_closing(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    std::fs::write(&path, "log = maybe\n").unwrap(); // broken since startup
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.simulate_input("zed");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!settings_open(cx));
+    assert!(dialog_open(cx), "the error box shows");
+    assert_eq!(config(cx).editor.as_deref(), Some("zed"));
+}
+
+#[gpui_kit::test]
+fn closing_settings_does_not_undo_a_hand_edit(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "editor = \"vim\"\nlog_keep_days = 30\n", cx);
+    std::fs::write(&path, "editor = \"helix\"\nlog_keep_days = 9\n").unwrap();
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    click(cx, "settings-sort", 1); // saves, and reads the file's other keys
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("editor = \"helix\""), "{text}");
+    assert!(text.contains("log_keep_days = 9"), "{text}");
+    assert_eq!(config(cx).editor.as_deref(), Some("helix"));
+}
+
+#[gpui_kit::test]
+fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab tab tab ctrl-a");
+    cx.simulate_input("0");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(settings_open(cx));
+    assert!(cx.debug_bounds("settings-days-error").is_some());
+    // Escape still closes, dropping the invalid value.
+    cx.simulate_keystrokes("escape");
+    assert!(!settings_open(cx));
+    assert_eq!(config(cx).log_keep_days, 7);
+}
+
 // The menu bar: Linux only (macOS has the native one, no F10 or lone Alt).
 #[cfg(not(target_os = "macos"))]
 mod menu_bar {
@@ -1598,12 +2013,6 @@ mod menu_bar {
         click(cx, "row-left-1", 1);
         cx.simulate_modifiers_change(gpui_kit::Modifiers::none());
         assert_eq!(menu_open(cx), None);
-    }
-
-    /// Test windows start inactive; a real one is active when the user types.
-    fn activate(cx: &mut VisualTestContext) {
-        cx.update(|window, _| window.activate_window());
-        cx.run_until_parked();
     }
 
     #[gpui_kit::test]

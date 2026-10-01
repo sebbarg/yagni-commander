@@ -13,8 +13,8 @@ use gpui_kit::{
 use yagni_commander_core::{Commander, EntryKind, launch};
 
 use super::FileManager;
-use crate::CurrentConfig;
 use crate::button_row::{ButtonRow, OnPress};
+use crate::config_state::CurrentConfig;
 
 /// Handles the name typed into a prompt. An error keeps the dialog open.
 type Submit =
@@ -339,7 +339,7 @@ impl FileManager {
 
 /// The `editor` setting, or an error box saying it is missing.
 fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
-    let editor = cx.global::<CurrentConfig>().0.editor.clone();
+    let editor = cx.global::<CurrentConfig>().config.editor.clone();
     if editor.is_none() {
         show_error(
             "Cannot open editor",
@@ -355,7 +355,7 @@ fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
 /// A centered, modal error box that stays until dismissed (button, Enter or
 /// Escape). Focus goes to `refocus` afterwards, e.g. back into a prompt's
 /// text field so the user can correct the input.
-pub(super) fn show_error(
+pub(crate) fn show_error(
     title: &'static str,
     message: impl Into<SharedString>,
     refocus: Option<FocusHandle>,
@@ -440,7 +440,7 @@ impl FileManager {
 
 /// Opening a dialog moves focus to the dialog itself; this moves it on to
 /// `handle` (typically the dialog's button row) once the dialog is open.
-pub(super) fn focus_when_open(handle: FocusHandle, window: &mut Window, cx: &mut App) {
+pub(crate) fn focus_when_open(handle: FocusHandle, window: &mut Window, cx: &mut App) {
     window.defer(cx, move |window, cx| handle.focus(window, cx));
 }
 

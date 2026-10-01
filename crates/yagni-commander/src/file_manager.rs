@@ -6,20 +6,24 @@ use gpui_kit::{
     MouseDownEvent, MouseMoveEvent, SharedString, Subscription, Window, div, prelude::*, px,
     relative,
 };
-use yagni_commander_core::{Command, Commander, Side, SortKey};
+use std::path::PathBuf;
+use std::sync::Arc;
 
-mod commands;
+use yagni_commander_core::{Command, Commander, Config, Setting, Side, SortKey, config, oplog};
+
+pub(crate) mod commands;
 mod file_ops;
 mod loads;
 
 use crate::actions::{
     About, Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp,
-    Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move, PageDown,
-    PageUp, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions,
-    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
-    Trash, View,
+    Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move,
+    OpenSettings, PageDown, PageUp, Reload, Rename, SelectAll, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel,
+    ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
 };
 use crate::app_state::AppState;
+use crate::config_state::CurrentConfig;
 use crate::menu_bar::{self, MenuBar};
 use crate::menus::{self, MenuState};
 use crate::panel_view::PanelView;
@@ -53,7 +57,7 @@ pub struct FileManager {
     commander: Entity<Commander>,
     left: Entity<PanelView>,
     right: Entity<PanelView>,
-    focus: FocusHandle,
+    pub(crate) focus: FocusHandle,
     /// Left panel's share of the width, changed by dragging the divider.
     split_ratio: f32,
     dragging_split: bool,
@@ -70,6 +74,10 @@ pub struct FileManager {
     loads: Vec<loads::RunningLoad>,
     /// Whether the timer that collects their results is running.
     polling_loads: bool,
+    /// The open settings dialog's view.
+    pub(crate) settings: Option<Entity<crate::settings_dialog::SettingsView>>,
+    /// Where the operation log goes. Tests replace it.
+    pub(crate) log_dir: Option<PathBuf>,
     /// The in-window menu bar; `None` on macOS, which has the native one.
     menu_bar: Option<Entity<MenuBar>>,
     /// What the menus' check marks show; `None` before the first update.
@@ -154,6 +162,8 @@ impl FileManager {
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
+            settings: None,
+            log_dir: yagni_commander_core::storage::log_dir(),
             menu_bar,
             menu_state: None,
             alt_armed: false,
@@ -201,6 +211,86 @@ impl FileManager {
         }
     }
 
+    /// The settings dialog changed `setting`: saves just that key, then
+    /// applies the file's settings. Not while the file is broken or
+    /// missing. A failed save shows an error box; the change still applies.
+    pub(crate) fn change_setting(
+        &mut self,
+        setting: Setting,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = cx.global::<CurrentConfig>();
+        if current.problem.is_some() {
+            return;
+        }
+        let path = current.path.clone();
+        let mut config = current.config.clone();
+        config.set(&setting);
+        if config == current.config {
+            return;
+        }
+        match path.map(|path| config::save_setting(&path, &setting)) {
+            Some(Ok(on_disk)) => config = on_disk,
+            Some(Err(e)) => {
+                // Deferred: a save on close runs while the settings dialog
+                // is being closed, which would close this error box instead.
+                let message = e.to_string();
+                window.defer(cx, move |window, cx| {
+                    commands::show_error("Settings not saved", message, None, window, cx)
+                });
+            }
+            None => {}
+        }
+        self.apply_config(config, cx);
+    }
+
+    /// Makes `config` the settings in use: sort, log, and the global the
+    /// views read (editor). A copy or move already running keeps the log it
+    /// started with.
+    pub(crate) fn apply_config(&mut self, config: Config, cx: &mut Context<Self>) {
+        let old = cx.global::<CurrentConfig>().config.clone();
+        if config.case_sensitive_sort != old.case_sensitive_sort {
+            self.commander.update(cx, |c, cx| {
+                c.set_case_sensitive_sort(config.case_sensitive_sort);
+                cx.notify();
+            });
+        }
+        if config.log != old.log {
+            let (log, problem) = if config.log {
+                oplog::start(self.log_dir.as_deref(), true, config.log_keep_days)
+            } else {
+                (None, None)
+            };
+            self.commander
+                .update(cx, |c, _| c.set_log(log.map(Arc::new)));
+            if let Some(problem) = problem {
+                self.notice = Some(problem.into());
+            }
+        }
+        cx.global_mut::<CurrentConfig>().config = config;
+        cx.notify();
+    }
+
+    /// Ctrl-R: re-reads the config file. If it doesn't parse, the settings
+    /// stay and the status line says why.
+    fn reload_config(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = cx.global::<CurrentConfig>().path.clone() else {
+            return;
+        };
+        match Config::load_or_create(&path) {
+            Ok(config) => {
+                cx.global_mut::<CurrentConfig>().problem = None;
+                self.apply_config(config, cx);
+            }
+            Err(e) => {
+                let problem = format!("Config ignored: {e}");
+                self.notice = Some(problem.clone().into());
+                cx.global_mut::<CurrentConfig>().problem = Some(problem);
+            }
+        }
+    }
+
     fn active_panel<'a>(&self, cx: &'a App) -> &'a yagni_commander_core::Panel {
         let commander = self.commander.read(cx);
         commander.panel(commander.active())
@@ -213,7 +303,7 @@ impl FileManager {
 
     /// Closes the quick search box. Commands that go through
     /// [`Self::execute`] end it anyway; this is for those that open a dialog.
-    fn end_search(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn end_search(&mut self, cx: &mut Context<Self>) {
         self.commander.update(cx, |commander, cx| {
             if commander.search_cancel() {
                 cx.notify();
@@ -367,7 +457,10 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &SyncOtherPanel, _, cx| {
                 this.execute(Command::SyncOtherPanel, cx)
             }))
-            .on_action(cx.listener(|this, _: &Reload, _, cx| this.execute(Command::Reload, cx)))
+            .on_action(cx.listener(|this, _: &Reload, _, cx| {
+                this.execute(Command::Reload, cx);
+                this.reload_config(cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_action(
@@ -401,6 +494,9 @@ impl Render for FileManager {
                 this.sort_by(SortKey::Permissions, cx)
             }))
             .on_action(cx.listener(|this, _: &About, window, cx| this.about(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleMenu, window, cx| this.toggle_menu(window, cx)))
             .on_action(cx.listener(|this, _: &MenuAlt, window, cx| this.menu_alt(window, cx)))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {

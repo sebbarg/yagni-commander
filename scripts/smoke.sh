@@ -32,7 +32,7 @@ chmod 700 "$work/xdg"
 export DISPLAY=$display XDG_RUNTIME_DIR=$work/xdg XDG_CONFIG_HOME=$work/config \
     XDG_STATE_HOME=$work/state XDG_DATA_HOME=$work/data
 # `true` stands in for an editor: it starts and exits at once.
-printf 'editor = "true"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
+printf '# smoke config\neditor = "true"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
 # An old log file that startup must delete.
 logs=$work/state/yagni-commander/logs
 mkdir -p "$logs"
@@ -187,6 +187,19 @@ echo "menu: Help > About"
 keys F10 Left Down Return
 shot 07d-about
 keys Return
+
+echo "settings: Ctrl-, opens it; Space toggles the sort switch; Escape closes"
+cfg=$work/config/yagni-commander/config.toml
+keys ctrl+comma
+shot 07e-settings
+keys Tab space
+shot 07f-settings-toggled
+keys Escape
+check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
+check "config comment kept" grep -q "^# smoke config" "$cfg"
+check "other keys kept" grep -q '^editor = "true"' "$cfg"
+keys ctrl+comma Tab space Escape
+check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "a big folder loads in the background"
 typed many

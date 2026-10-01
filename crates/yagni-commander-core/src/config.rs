@@ -1,5 +1,7 @@
 //! User settings, stored as a hand-editable TOML file (see [`crate::storage`]).
 
+use std::fs;
+use std::ops::RangeInclusive;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -59,10 +61,106 @@ impl Config {
     }
 }
 
+/// One setting, as the settings dialog changes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Setting {
+    Editor(Option<String>),
+    CaseSensitiveSort(bool),
+    Log(bool),
+    LogKeepDays(u32),
+}
+
+impl Setting {
+    /// The editor as typed: surrounding spaces dropped, empty means none.
+    pub fn editor(text: &str) -> Self {
+        let text = text.trim();
+        Self::Editor((!text.is_empty()).then(|| text.to_owned()))
+    }
+}
+
+/// Allowed values of `log_keep_days`.
+pub const LOG_KEEP_DAYS: RangeInclusive<u32> = 1..=3650;
+
+/// Reads a typed `log_keep_days`.
+pub fn parse_keep_days(text: &str) -> Result<u32, &'static str> {
+    text.trim()
+        .parse()
+        .ok()
+        .filter(|days| LOG_KEEP_DAYS.contains(days))
+        .ok_or("Enter a number from 1 to 3650.")
+}
+
+impl Config {
+    pub fn set(&mut self, setting: &Setting) {
+        match setting {
+            Setting::Editor(editor) => self.editor = editor.clone(),
+            Setting::CaseSensitiveSort(on) => self.case_sensitive_sort = *on,
+            Setting::Log(on) => self.log = *on,
+            Setting::LogKeepDays(days) => self.log_keep_days = *days,
+        }
+    }
+}
+
+/// Writes one setting into the file at `path` (created from the template if
+/// missing) and returns the whole config as the file now has it. Only that
+/// key changes: comments, layout and other keys stay as they are on disk,
+/// including hand edits made since startup. A file that does not parse is
+/// left alone (`StorageError::Parse`).
+pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageError> {
+    // Creates the template if needed; refuses a broken file.
+    Config::load_or_create(path)?;
+    let text = fs::read_to_string(path).map_err(|e| StorageError::Io(path.to_owned(), e))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| StorageError::Edit(path.to_owned(), e.to_string()))?;
+    match setting {
+        Setting::Editor(None) => remove_keeping_comments(&mut doc, "editor"),
+        Setting::Editor(Some(editor)) => doc["editor"] = toml_edit::value(editor.as_str()),
+        Setting::CaseSensitiveSort(on) => doc["case_sensitive_sort"] = toml_edit::value(*on),
+        Setting::Log(on) => doc["log"] = toml_edit::value(*on),
+        Setting::LogKeepDays(days) => doc["log_keep_days"] = toml_edit::value(i64::from(*days)),
+    }
+    let text = doc.to_string();
+    let config: Config =
+        toml::from_str(&text).map_err(|e| StorageError::Parse(path.to_owned(), e))?;
+    storage::write_atomic(path, &text)?;
+    Ok(config)
+}
+
+/// Removes `key`. toml_edit keeps the comments and blank lines above a key
+/// as part of it; they move to the next key, or to the end of the file.
+fn remove_keeping_comments(doc: &mut toml_edit::DocumentMut, key: &str) {
+    let table = doc.as_table_mut();
+    let Some(index) = table.iter().position(|(k, _)| k == key) else {
+        return;
+    };
+    let above = table
+        .key(key)
+        .and_then(|k| k.leaf_decor().prefix())
+        .and_then(|p| p.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    table.remove(key);
+    if above.trim().is_empty() {
+        return;
+    }
+    if let Some((mut next, _)) = table.iter_mut().nth(index) {
+        let decor = next.leaf_decor_mut();
+        let own = decor
+            .prefix()
+            .and_then(|p| p.as_str())
+            .unwrap_or_default()
+            .to_owned();
+        decor.set_prefix(above + &own);
+        return;
+    }
+    let trailing = doc.trailing().as_str().unwrap_or_default().to_owned();
+    doc.set_trailing(above + &trailing);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     #[test]
     fn first_load_writes_template_and_returns_defaults() {
@@ -118,5 +216,134 @@ mod tests {
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);
+    }
+
+    const HAND_WRITTEN: &str = "\
+# my settings
+
+# the editor
+editor = \"vim\"
+
+log_keep_days = 30 # a month
+case_sensitive_sort = false
+";
+
+    #[test]
+    fn saving_keeps_comments_layout_and_other_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let config = save_setting(&path, &Setting::CaseSensitiveSort(true)).unwrap();
+        assert!(config.case_sensitive_sort);
+        assert_eq!(config.editor.as_deref(), Some("vim"));
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            HAND_WRITTEN.replace("case_sensitive_sort = false", "case_sensitive_sort = true")
+        );
+    }
+
+    #[test]
+    fn a_commented_out_key_gets_a_real_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        Config::load_or_create(&path).unwrap(); // the template: `# editor = "code"`
+        let config = save_setting(&path, &Setting::editor("code --wait")).unwrap();
+        assert_eq!(config.editor.as_deref(), Some("code --wait"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# yagni-commander settings"), "{text}");
+        assert!(text.contains("# editor = \"code\""), "comment kept: {text}");
+        assert!(
+            text.lines().any(|l| l == "editor = \"code --wait\""),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn emptying_the_editor_removes_its_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let config = save_setting(&path, &Setting::editor("  ")).unwrap();
+        assert_eq!(config.editor, None);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("editor = "), "{text}");
+        assert!(text.contains("log_keep_days = 30 # a month"), "{text}");
+        // The comments above the removed line stay.
+        assert!(
+            text.starts_with("# my settings\n\n# the editor\n"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn emptying_the_last_key_keeps_its_comments() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "log = true\n\n# the editor\neditor = \"vim\"\n").unwrap();
+        save_setting(&path, &Setting::Editor(None)).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("# the editor"), "{text}");
+        assert!(!text.contains("vim"), "{text}");
+    }
+
+    #[test]
+    fn saving_keeps_hand_edits_made_since_startup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let _at_startup = Config::load_or_create(&path).unwrap();
+        fs::write(&path, HAND_WRITTEN.replace("vim", "helix")).unwrap();
+        let config = save_setting(&path, &Setting::Log(true)).unwrap();
+        assert_eq!(config.editor.as_deref(), Some("helix"));
+        assert!(config.log);
+    }
+
+    #[test]
+    fn a_file_broken_since_startup_is_not_written() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "log = maybe\n").unwrap();
+        let err = save_setting(&path, &Setting::Log(true)).unwrap_err();
+        assert!(matches!(err, StorageError::Parse(..)), "{err}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), "log = maybe\n");
+    }
+
+    #[test]
+    fn a_missing_file_is_created_from_the_template() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("cfg/config.toml");
+        let config = save_setting(&path, &Setting::LogKeepDays(14)).unwrap();
+        assert_eq!(config.log_keep_days, 14);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("log_keep_days = 14"), "{text}");
+        assert!(text.contains("# Log files older than"), "{text}");
+    }
+
+    #[test]
+    fn set_changes_one_field() {
+        let mut config = Config::default();
+        config.set(&Setting::editor(" zed "));
+        config.set(&Setting::Log(true));
+        assert_eq!(config.editor.as_deref(), Some("zed"));
+        assert!(config.log);
+        assert!(!config.case_sensitive_sort);
+        config.set(&Setting::CaseSensitiveSort(true));
+        config.set(&Setting::LogKeepDays(3));
+        assert!(config.case_sensitive_sort);
+        assert_eq!(config.log_keep_days, 3);
+    }
+
+    #[test]
+    fn keep_days_must_be_1_to_3650() {
+        assert_eq!(parse_keep_days(" 30 "), Ok(30));
+        assert_eq!(parse_keep_days("1"), Ok(1));
+        assert_eq!(parse_keep_days("3650"), Ok(3650));
+        for bad in ["0", "3651", "-1", "", "x", "1.5"] {
+            assert_eq!(
+                parse_keep_days(bad),
+                Err("Enter a number from 1 to 3650."),
+                "{bad}"
+            );
+        }
     }
 }

@@ -4,7 +4,7 @@
 //! and renders the resulting state. Nothing in here knows about pixels or keys.
 
 mod commander;
-mod config;
+pub mod config;
 mod entry;
 pub mod file_ops;
 mod format;
@@ -19,7 +19,7 @@ pub mod storage;
 pub mod viewer;
 
 pub use commander::{Command, Commander, Outcome, Side};
-pub use config::Config;
+pub use config::{Config, Setting};
 pub use entry::{Entry, EntryKind};
 pub use format::{format_modified, format_permissions, format_size};
 pub use listing::{Listing, LoadRequest, read_listing};

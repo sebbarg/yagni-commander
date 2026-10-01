@@ -8,9 +8,9 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, Copy, Delete, Edit, EditNewFile, MakeDirectory, Move, Quit, Reload, Rename, SelectAll,
-    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
-    SyncOtherPanel, ToggleHidden, Trash, View,
+    About, Copy, Delete, Edit, EditNewFile, MakeDirectory, Move, OpenSettings, Quit, Reload,
+    Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
+    SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View,
 };
 
 pub enum MenuEntry {
@@ -80,6 +80,7 @@ fn check(label: &'static str, action: impl Action, checked: bool) -> MenuEntry {
 }
 
 const ABOUT: &str = "About yagni-commander";
+const SETTINGS: &str = "Settings...";
 
 /// Every menu, in bar order. With `mac`, About and Quit go to the app menu
 /// (the platform's convention) and there is no Help menu.
@@ -98,7 +99,12 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         item("Select all", SelectAll),
     ];
     if !mac {
-        files.extend([MenuEntry::Separator, item("Quit", Quit)]);
+        files.extend([
+            MenuEntry::Separator,
+            item(SETTINGS, OpenSettings),
+            MenuEntry::Separator,
+            item("Quit", Quit),
+        ]);
     }
     let sorted = |key| state.sort == key;
     let mut defs = vec![
@@ -138,7 +144,13 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
     if mac {
         let app = MenuDef {
             title: "yagni-commander",
-            entries: vec![item(ABOUT, About), MenuEntry::Separator, item("Quit", Quit)],
+            entries: vec![
+                item(ABOUT, About),
+                MenuEntry::Separator,
+                item(SETTINGS, OpenSettings),
+                MenuEntry::Separator,
+                item("Quit", Quit),
+            ],
         };
         defs.insert(0, app);
     } else {
@@ -250,6 +262,8 @@ mod tests {
                 "-",
                 "Select all",
                 "-",
+                "Settings...",
+                "-",
                 "Quit"
             ]
         );
@@ -277,7 +291,10 @@ mod tests {
         let defs = menus(STATE, true);
         let titles: Vec<_> = defs.iter().map(|d| d.title).collect();
         assert_eq!(titles, ["yagni-commander", "Files", "Commands", "Show"]);
-        assert_eq!(labels(&defs[0]), ["About yagni-commander", "-", "Quit"]);
+        assert_eq!(
+            labels(&defs[0]),
+            ["About yagni-commander", "-", "Settings...", "-", "Quit"]
+        );
         assert!(!labels(&defs[1]).contains(&"Quit"));
     }
 
@@ -312,6 +329,7 @@ mod tests {
         assert!(action("Copy").partial_eq(&crate::actions::Copy));
         assert!(action("Sort by owner").partial_eq(&crate::actions::SortByOwner));
         assert!(action("Hidden files").partial_eq(&crate::actions::ToggleHidden));
+        assert!(action("Settings...").partial_eq(&crate::actions::OpenSettings));
     }
 
     #[test]
