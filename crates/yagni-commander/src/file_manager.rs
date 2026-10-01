@@ -69,7 +69,8 @@ impl FileManager {
         let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, cx));
         let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
         let subscriptions = vec![
-            cx.observe_in(&commander, window, |this, _, window, cx| {
+            cx.observe_in(&commander, window, |this, commander, window, cx| {
+                AppState::remember_panels(&commander, cx);
                 this.update_title(window, cx);
                 cx.notify();
             }),
@@ -78,6 +79,7 @@ impl FileManager {
             }),
         ];
         AppState::remember_window(window.window_bounds(), cx);
+        AppState::remember_panels(&commander, cx);
 
         let focus = cx.focus_handle();
         window.focus(&focus, cx);

@@ -1097,3 +1097,22 @@ fn f3_on_a_fifo_shows_an_error(cx: &mut TestAppContext) {
     assert!(dialog_open(cx));
     let _ = commander;
 }
+
+#[gpui_kit::test]
+fn panel_paths_and_active_side_are_remembered(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    let state = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let s = &cx.global::<AppState>().state;
+            (s.left.clone(), s.right.clone(), s.active)
+        })
+    };
+    let root = Some(tmp.path().to_path_buf());
+    assert_eq!(state(cx), (root.clone(), root.clone(), Some(Side::Left)));
+    cx.simulate_keystrokes("tab down enter");
+    cx.run_until_parked();
+    assert_eq!(
+        state(cx),
+        (root, Some(tmp.path().join("a")), Some(Side::Right))
+    );
+}

@@ -23,6 +23,11 @@ pub fn state_file() -> Option<PathBuf> {
     Some(state_dir()?.join("state.toml"))
 }
 
+/// The user's home folder; `/` if there is none.
+pub fn home_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+}
+
 /// The operation log's directory: `logs` next to the state file.
 pub fn log_dir() -> Option<PathBuf> {
     Some(state_dir()?.join("logs"))

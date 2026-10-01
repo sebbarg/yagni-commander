@@ -200,12 +200,24 @@ check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-comm
 xdotool windowfocus "$window"
 sleep 0.5
 
-echo "quit"
+echo "quit (with the right panel active)"
+keys Tab
 keys alt+F4
 check "state file written" test -f "$work/state/yagni-commander/state.toml"
 check "hidden files hidden again in the state" grep -q "show_hidden = false" \
     "$work/state/yagni-commander/state.toml"
 check "viewer geometry in the state" grep -q "^\[viewer\]" "$work/state/yagni-commander/state.toml"
+check "panel folders in the state" grep -qF "right = \"$right\"" "$work/state/yagni-commander/state.toml"
+
+echo "restart without arguments: same folders, right panel active"
+"$app" >"$work/app2.log" 2>&1 &
+pids+=($!)
+check "reopened on the right folder" xdotool search --name "^$right - yagni-commander\$"
+shot 12-restart
+xdotool windowfocus "$(xdotool search --name "^$right - yagni-commander\$" | head -1)"
+sleep 0.5
+keys alt+F4
+check "restarted app quit" bash -c '! xdotool search --name "yagni-commander"'
 
 echo "operation log"
 check "old log deleted at startup" test ! -e "$logs/operations-2020-01-01.log"

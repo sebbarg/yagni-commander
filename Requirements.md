@@ -25,10 +25,12 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Changes take effect immediately, without restarting: from the settings page, and when the file is edited by hand (watch the file, or at least reload it on Ctrl-R). Today a restart is needed; fix before v1.
 - Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings page edits this file; editing it by hand also works.
 
-### Window position and size
+### Window position and size, panel folders
 
 - Saved automatically on exit and restored on start.
 - Kept in a state file separate from the config, so the config stays hand-editable.
+- Each panel reopens the folder it showed at exit, and the active panel stays active. A folder that is gone or unreadable falls back to its nearest readable parent, then to the home folder. First start (no state): both panels show the home folder.
+- Command-line folders override the saved ones: `yagni-commander a b` opens `a` and `b`; with one argument the right panel keeps its saved folder.
 
 ### Themes
 

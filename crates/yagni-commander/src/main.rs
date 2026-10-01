@@ -24,17 +24,23 @@ impl Global for CurrentConfig {}
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
-    let mut args = std::env::args().skip(1);
-    let left = args.next().unwrap_or_else(|| ".".into());
-    let right = args.next().unwrap_or_else(|| left.clone());
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let app_state = AppState::load();
+    let (left, right) = app_state.state.startup_dirs(&args, &storage::home_dir());
     let mut commander = match Commander::new(&left, &right, app_state.state.show_hidden) {
         Ok(commander) => commander,
         Err(e) => {
-            eprintln!("yagni-commander: cannot open {left} / {right}: {e}");
+            eprintln!(
+                "yagni-commander: cannot open {} / {}: {e}",
+                left.display(),
+                right.display()
+            );
             std::process::exit(1);
         }
     };
+    if let Some(active) = app_state.state.active {
+        commander.set_active(active);
+    }
 
     // A broken config is reported in the UI and never overwritten; the app
     // runs on defaults until the user fixes it.

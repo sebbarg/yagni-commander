@@ -9,7 +9,8 @@ use crate::panel::{Activation, Panel};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
     Right,
@@ -110,6 +111,10 @@ impl Commander {
 
     pub fn active(&self) -> Side {
         self.active
+    }
+
+    pub fn set_active(&mut self, side: Side) {
+        self.active = side;
     }
 
     /// Whether hidden entries are shown. Always the same for both panels.
@@ -769,5 +774,15 @@ mod tests {
                 format!("new file failed {d}/x: “x” is a directory"),
             ]
         );
+    }
+
+    #[test]
+    fn set_active_picks_the_panel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut commander = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        commander.set_active(Side::Right);
+        assert_eq!(commander.active(), Side::Right);
+        commander.set_active(Side::Left);
+        assert_eq!(commander.active(), Side::Left);
     }
 }

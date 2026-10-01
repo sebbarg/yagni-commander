@@ -9,7 +9,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 As of 2026-10-01, end of session (everything committed):
 
 - **Done (v1 build order in `Requirements.md`):** steps 1 to 7: gpui-kit + gpui-component, config and window state; selection; F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R; Ctrl-. hidden files; the file-operation engine; F5/F6/F8 with progress; the F3 viewer. Also done since, beyond the build order: `[name]` directory display, Shift-F4 new file, quick search box (Up/Down step through matches), our own dialog `ButtonRow` (arrow keys; Enter presses the highlighted button), Shift-F8/Shift-Del permanent delete, the operation log, themes-as-data, modal error boxes.
-- **Tests:** `cargo test --workspace` (97 app, 209 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 30+ checks on disk, screenshots in `target/smoke/`). Both green.
+- **Tests:** `cargo test --workspace` (101 app, 214 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 30+ checks on disk, screenshots in `target/smoke/`). Both green.
 - **Next: step 8, menu, About and the settings page.** The F3 plan and its reasoning: `docs/superpowers/plans/2026-10-01-f3-viewer.md`.
 - **Owner decisions (2026-09-30):** Enter = Delete in the Shift-F8 confirm (like TC); Enter = Overwrite in the conflict prompt (like TC); quick search wraps around; Shift-F4 field starts empty and accepts a relative path (`a/b/c.txt`, like F7).
 - **Upstream bug, unreported by choice:** gpui-component `Dialog` binds Enter to OK for the whole dialog, ignoring the focused button (still on gpui-kit `main`; nearest related PR #3097). The owner decided not to file it for now; our `ButtonRow` works around it.
@@ -56,7 +56,7 @@ As of 2026-10-01, end of session (everything committed):
   - Views take every color from `Theme::get(cx).colors`. `clippy.toml` bans gpui's color constructors (`rgb`, `hsla`, `black`, ...) so literals can't creep in; add a new role to `Colors` and every theme file instead.
   - The loaded `Config` is a gpui global, `CurrentConfig` (`main.rs`).
   - The window is opened with `gpui_kit::open_window`, which wraps `FileManager` in gpui-kit's `Root` (needed for dialogs).
-  - State file: `app_state.rs` keeps an `AppState` global (window geometry, updated via `observe_window_bounds`, `show_hidden`, and the last viewer geometry) and saves it on quit. It is loaded before the window opens, since `Commander::new` needs `show_hidden`. Window restore falls back to centered if the geometry no longer overlaps a display.
+  - State file: `app_state.rs` keeps an `AppState` global (window geometry, updated via `observe_window_bounds`; both panel folders and the active side, updated by `FileManager`'s observer of the `Commander`; `show_hidden`; the last viewer geometry) and saves it on quit. It is loaded before the window opens, since `Commander::new` needs `show_hidden` and the folders (`State::startup_dirs`: arguments, else saved folders through `nearest_dir`, else home). Window restore falls back to centered if the geometry no longer overlaps a display.
   - Hidden entries: `Panel` keeps them in a separate unsorted list while hidden, so `entries()` and every index (cursor, quick search, summary, selection) only see visible ones.
   - Column layout and cell text live in `columns.rs`; panel rendering in `panel_view.rs`.
 - Settings: `Config` is a hand-editable TOML file, created from a commented template on first start. A file that fails to parse is never overwritten; the app shows the error in the status line and runs on defaults.
@@ -67,7 +67,7 @@ As of 2026-10-01, end of session (everything committed):
 
 ## Current features
 
-- Two panels side by side, draggable divider, resizable window; position and size restored on start.
+- Two panels side by side, draggable divider, resizable window; position and size, both panel folders and the active panel restored on start (a deleted folder falls back to its nearest readable parent, then home; command-line folders override).
 - Tab switches panels; Up/Down/Home/End/PageUp/PageDown move the cursor; Enter enters a directory or goes up on ".."; Backspace goes up. Going up leaves the cursor on the directory you came from.
 - Selection: Space toggles the entry under the cursor and moves down; Ctrl-A selects all. Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change. `Panel::targets()` (selection, else the cursor entry, never "..") is what file operations will act on.
 - F5 copy, F6 move (destination prompt prefilled with the other panel), F8/Del trash (confirm), Shift-F8/Shift-Del permanent delete (confirm), in the background with a progress dialog (after ~300 ms), Cancel, a per-file conflict prompt and an error summary; both panels reload at the end.
@@ -131,12 +131,12 @@ Cargo is at `~/.cargo/bin/cargo` (not on PATH in non-login shells). A clean buil
 
 ## Commands
 
-- `cargo run --release -- [left-dir] [right-dir]`: run the app (the default workspace member).
+- `cargo run --release -- [left-dir] [right-dir]`: run the app (the default workspace member). Without arguments it reopens the folders from the last run.
 - `cargo test --workspace` and `cargo clippy --workspace --all-targets` (must be warning-free).
 - `cargo llvm-cov --workspace --summary-only`: coverage. Core is kept near 100%; the uncovered lines need root or a file owned by an unknown uid.
 - App tests live in `file_manager/tests.rs`. Mouse tests find elements by `debug_selector` (`row-left-3`, `header-right-Size`, `divider`, `search-left`) and `cx.debug_bounds`; a missing selector also means the element was not drawn. Jobs that must stay running use `use_fake_trash` plus a `hold` file.
 - App tests use gpui's `TestAppContext` (`#[gpui_kit::test]`) and build the window like the app does (`gpui_kit::init` + `Root`), so dialogs work. Drive them with `simulate_keystrokes` / `simulate_input` and `run_until_parked`; check dialogs with `window.has_active_dialog(cx)`. gpui's test window does not expose the title, so title text lives in a pure function.
-- `scripts/smoke.sh [screenshot-dir]`: runs the real debug build under Xvfb through the main features (quick search, F7, Shift-F4, F2, F5 with a conflict, F6, F8 into a temporary trash, Shift-Del, F12, Ctrl-., F3 on a 200,000-line file and a 300 KB single line, quit), checks the results on disk (including the operation log and its startup pruning) and saves screenshots to `target/smoke/`. Config, state and trash are in a temporary folder. Linux only; needs Xvfb, xdotool, ImageMagick.
+- `scripts/smoke.sh [screenshot-dir]`: runs the real debug build under Xvfb through the main features (quick search, F7, Shift-F4, F2, F5 with a conflict, F6, F8 into a temporary trash, Shift-Del, F12, Ctrl-., F3 on a 200,000-line file and a 300 KB single line, quit, restart without arguments onto the saved folders), checks the results on disk (including the operation log and its startup pruning) and saves screenshots to `target/smoke/`. Config, state and trash are in a temporary folder. Linux only; needs Xvfb, xdotool, ImageMagick.
 - `scripts/make-test-files.sh [count] [dir]`: create a large directory under `/tmp` for stress tests.
 - `RUST_LOG=info` shows gpui's platform logs (renderer, fonts, windowing).
 

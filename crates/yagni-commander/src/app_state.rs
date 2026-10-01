@@ -1,11 +1,12 @@
 //! What the app remembers across runs (the state file): the main window's
-//! position and size, and whether hidden files are shown.
+//! position and size, the panels' folders and which one is active, whether
+//! hidden files are shown, and where the last viewer was.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use gpui_kit::{App, Bounds, Global, Pixels, WindowBounds, point, px, size};
+use gpui_kit::{App, Bounds, Entity, Global, Pixels, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
-use yagni_commander_core::storage;
+use yagni_commander_core::{Commander, Side, nearest_dir, storage};
 
 const DEFAULT_WIDTH: f32 = 1200.0;
 const DEFAULT_HEIGHT: f32 = 800.0;
@@ -29,6 +30,26 @@ pub struct State {
     pub show_hidden: bool,
     /// Where the last viewer window was.
     pub viewer: Option<SavedWindow>,
+    /// The panels' folders and the active side at the last quit.
+    pub left: Option<PathBuf>,
+    pub right: Option<PathBuf>,
+    pub active: Option<Side>,
+}
+
+impl State {
+    /// The folders to open: command-line arguments first (left, then
+    /// right), else the remembered folders. A remembered folder that is gone
+    /// or unreadable falls back to its nearest readable parent, then `home`.
+    pub fn startup_dirs(&self, args: &[String], home: &Path) -> (PathBuf, PathBuf) {
+        let saved = |dir: &Option<PathBuf>| nearest_dir(dir.as_deref().unwrap_or(home), home);
+        let left = args
+            .first()
+            .map_or_else(|| saved(&self.left), PathBuf::from);
+        let right = args
+            .get(1)
+            .map_or_else(|| saved(&self.right), PathBuf::from);
+        (left, right)
+    }
 }
 
 /// The latest state, kept current while the app runs and written to the
@@ -130,6 +151,17 @@ impl AppState {
         cx.global_mut::<Self>().state.viewer = Some(SavedWindow::from_bounds(bounds));
     }
 
+    pub fn remember_panels(commander: &Entity<Commander>, cx: &mut App) {
+        let commander = commander.read(cx);
+        let left = commander.panel(Side::Left).path().to_path_buf();
+        let right = commander.panel(Side::Right).path().to_path_buf();
+        let active = commander.active();
+        let state = &mut cx.global_mut::<Self>().state;
+        state.left = Some(left);
+        state.right = Some(right);
+        state.active = Some(active);
+    }
+
     pub fn remember_show_hidden(show_hidden: bool, cx: &mut App) {
         cx.global_mut::<Self>().state.show_hidden = show_hidden;
     }
@@ -209,6 +241,9 @@ mod tests {
             window: Some(saved(10.0, 20.0)),
             show_hidden: true,
             viewer: Some(saved(30.0, 40.0)),
+            left: Some("/a/b".into()),
+            right: Some("/c".into()),
+            active: Some(Side::Right),
         };
         AppState {
             path: Some(path.clone()),
@@ -224,5 +259,53 @@ mod tests {
         let state: State = toml::from_str("").unwrap();
         assert_eq!(state, State::default());
         assert!(!state.show_hidden, "hidden files are hidden by default");
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn startup_uses_saved_paths_with_fallback() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let kept = tmp.path().join("kept");
+        std::fs::create_dir(&home).unwrap();
+        std::fs::create_dir(&kept).unwrap();
+        let state = State {
+            left: Some(kept.clone()),
+            right: Some(kept.join("deleted/deeper")),
+            ..State::default()
+        };
+        let (left, right) = state.startup_dirs(&[], &home);
+        assert_eq!(left, kept);
+        assert_eq!(right, kept, "a deleted folder falls back to its parent");
+    }
+
+    #[test]
+    fn startup_without_saved_paths_opens_home() {
+        let home = tempfile::tempdir().unwrap();
+        let (left, right) = State::default().startup_dirs(&[], home.path());
+        assert_eq!(
+            (left.as_path(), right.as_path()),
+            (home.path(), home.path())
+        );
+    }
+
+    #[test]
+    fn arguments_override_saved_paths() {
+        let home = tempfile::tempdir().unwrap();
+        let saved = home.path().join("saved");
+        std::fs::create_dir(&saved).unwrap();
+        let state = State {
+            left: Some(saved.clone()),
+            right: Some(saved.clone()),
+            ..State::default()
+        };
+        let (left, right) = state.startup_dirs(&args(&["x", "y"]), home.path());
+        assert_eq!((left, right), ("x".into(), "y".into()));
+        // One argument: the right panel keeps its saved path.
+        let (left, right) = state.startup_dirs(&args(&["x"]), home.path());
+        assert_eq!((left, right), ("x".into(), saved));
     }
 }
