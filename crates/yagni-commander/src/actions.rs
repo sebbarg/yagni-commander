@@ -37,7 +37,15 @@ actions!(
         ButtonTest,
         CancelSearch,
         View,
-        Quit
+        Quit,
+        SortByName,
+        SortBySize,
+        SortByModified,
+        SortByOwner,
+        SortByPermissions,
+        About,
+        ToggleMenu,
+        MenuAlt
     ]
 );
 
@@ -71,9 +79,15 @@ actions!(
 
 pub fn bind_default_keys(cx: &mut App) {
     let context = Some(FILE_MANAGER_CONTEXT);
+    // Menus show an action's last-registered binding, so each action's
+    // primary key comes last.
+    let quit = if cfg!(target_os = "macos") {
+        "cmd-q"
+    } else {
+        "alt-f4"
+    };
     cx.bind_keys([
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("alt-f4", Quit, None),
+        KeyBinding::new(quit, Quit, None),
         KeyBinding::new("tab", SwitchPanel, context),
         KeyBinding::new("up", CursorUp, context),
         KeyBinding::new("down", CursorDown, context),
@@ -92,10 +106,10 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("f5", Copy, context),
         KeyBinding::new("f6", Move, context),
         KeyBinding::new("f7", MakeDirectory, context),
-        KeyBinding::new("f8", Trash, context),
         KeyBinding::new("delete", Trash, context),
-        KeyBinding::new("shift-f8", Delete, context),
+        KeyBinding::new("f8", Trash, context),
         KeyBinding::new("shift-delete", Delete, context),
+        KeyBinding::new("shift-f8", Delete, context),
         KeyBinding::new("alt-z", SyncOtherPanel, context),
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-r", Reload, context),
@@ -104,6 +118,15 @@ pub fn bind_default_keys(cx: &mut App) {
         // Temporary, for trying the dialog button row. Remove before v1.
         KeyBinding::new("f12", ButtonTest, context),
     ]);
+    // The in-window menu bar (Linux; macOS has the native one). "alt" alone
+    // is gpui's modifier-only binding: Alt pressed and released with no
+    // other key in between.
+    if cfg!(not(target_os = "macos")) {
+        cx.bind_keys([
+            KeyBinding::new("f10", ToggleMenu, context),
+            KeyBinding::new("alt", MenuAlt, context),
+        ]);
+    }
     // More specific than the dialog's own Enter (always OK) and Root's Tab.
     let row = Some(BUTTON_ROW_CONTEXT);
     cx.bind_keys([

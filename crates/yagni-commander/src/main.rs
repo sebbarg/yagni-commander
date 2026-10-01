@@ -3,12 +3,14 @@ mod app_state;
 mod button_row;
 mod columns;
 mod file_manager;
+mod menu_bar;
+mod menus;
 mod panel_view;
 mod theme;
 mod viewer_view;
 mod windows;
 
-use gpui_kit::{App, AppContext, Global, Menu, MenuItem, WindowOptions};
+use gpui_kit::{App, AppContext, Global, WindowOptions};
 use yagni_commander_core::{Commander, Config, oplog, storage};
 
 use crate::actions::Quit;
@@ -57,34 +59,36 @@ fn main() {
     commander.set_log(log.map(std::sync::Arc::new));
     let notice = notice.or(log_problem);
 
-    gpui_kit::application().run(move |cx: &mut App| {
-        gpui_kit::init(cx);
-        Theme::default().install(cx);
-        cx.set_global(CurrentConfig(config));
-        actions::bind_default_keys(cx);
+    // The icon SVGs (e.g. the menus' check mark).
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(move |cx: &mut App| {
+            gpui_kit::init(cx);
+            Theme::default().install(cx);
+            cx.set_global(CurrentConfig(config));
+            actions::bind_default_keys(cx);
 
-        // gpui has no built-in quit: handle it and expose it in the menu bar.
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.set_menus([Menu::new("yagni-commander").items([MenuItem::action("Quit", Quit)])]);
+            // gpui has no built-in quit. The menus are set by the FileManager.
+            cx.on_action(|_: &Quit, cx| cx.quit());
 
-        let options = WindowOptions {
-            window_bounds: Some(app_state.initial_bounds(cx)),
-            ..Default::default()
-        };
-        cx.set_global(app_state);
-        cx.on_app_quit(|cx| {
-            cx.global::<AppState>().save();
-            async {}
-        })
-        .detach();
+            let options = WindowOptions {
+                window_bounds: Some(app_state.initial_bounds(cx)),
+                ..Default::default()
+            };
+            cx.set_global(app_state);
+            cx.on_app_quit(|cx| {
+                cx.global::<AppState>().save();
+                async {}
+            })
+            .detach();
 
-        let commander = cx.new(|_| commander);
-        // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
-        let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
-            cx.new(|cx| FileManager::new(commander, notice, window, cx))
-        })
-        .expect("failed to open window");
-        windows::close_all_when_main_closes(main_window, cx).detach();
-        cx.activate(true);
-    });
+            let commander = cx.new(|_| commander);
+            // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
+            let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| FileManager::new(commander, notice, window, cx))
+            })
+            .expect("failed to open window");
+            windows::close_all_when_main_closes(main_window, cx).detach();
+            cx.activate(true);
+        });
 }

@@ -171,6 +171,23 @@ keys ctrl+period
 shot 07-hidden-shown
 keys ctrl+period
 
+echo "menu: a lone Alt opens it, Escape closes it"
+keys alt
+shot 07a-menu-files
+keys Escape
+
+echo "menu: F10, Show > Hidden files"
+keys F10 Right Right
+shot 07b-menu-show
+keys Down Return
+shot 07c-hidden-from-menu
+keys ctrl+period
+
+echo "menu: Help > About"
+keys F10 Left Down Return
+shot 07d-about
+keys Return
+
 echo "a big folder loads in the background"
 typed many
 keys Return

@@ -686,6 +686,14 @@ fn center(cx: &mut VisualTestContext, selector: &str) -> gpui_kit::Point<gpui_ki
 
 fn click(cx: &mut VisualTestContext, selector: &str, click_count: usize) {
     let position = center(cx, selector);
+    click_at(cx, position, click_count);
+}
+
+fn click_at(
+    cx: &mut VisualTestContext,
+    position: gpui_kit::Point<gpui_kit::Pixels>,
+    click_count: usize,
+) {
     let modifiers = gpui_kit::Modifiers::default();
     let button = gpui_kit::MouseButton::Left;
     cx.simulate_event(gpui_kit::MouseDownEvent {
@@ -1330,4 +1338,358 @@ fn copy_and_move_wait_while_the_other_panel_loads(cx: &mut TestAppContext) {
         assert!(!dialog_open(cx), "{key}");
     }
     release(&tmp);
+}
+
+// Menu commands.
+
+fn sort_of(
+    commander: &Entity<Commander>,
+    side: Side,
+    cx: &VisualTestContext,
+) -> yagni_commander_core::Sort {
+    commander.read_with(cx, |c, _| c.panel(side).sort())
+}
+
+#[gpui_kit::test]
+fn sort_actions_sort_the_active_panel_and_repeat_reverses(cx: &mut TestAppContext) {
+    use yagni_commander_core::SortKey;
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("tab");
+    cx.dispatch_action(crate::actions::SortBySize);
+    let sort = sort_of(&commander, Side::Right, cx);
+    assert_eq!(sort.key, SortKey::Size);
+    assert!(sort.descending);
+    assert_eq!(sort_of(&commander, Side::Left, cx).key, SortKey::Name);
+    cx.dispatch_action(crate::actions::SortBySize);
+    assert!(!sort_of(&commander, Side::Right, cx).descending);
+    let actions: [(Box<dyn gpui_kit::Action>, SortKey); 4] = [
+        (Box::new(crate::actions::SortByModified), SortKey::Modified),
+        (Box::new(crate::actions::SortByOwner), SortKey::Owner),
+        (
+            Box::new(crate::actions::SortByPermissions),
+            SortKey::Permissions,
+        ),
+        (Box::new(crate::actions::SortByName), SortKey::Name),
+    ];
+    for (action, key) in actions {
+        cx.update(|window, cx| window.dispatch_action(action, cx));
+        assert_eq!(sort_of(&commander, Side::Right, cx).key, key);
+    }
+}
+
+#[gpui_kit::test]
+fn about_shows_a_dialog_and_ok_returns_to_the_panels(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.dispatch_action(crate::actions::About);
+    cx.run_until_parked();
+    assert!(dialog_open(cx));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!dialog_open(cx));
+    cx.simulate_keystrokes("down");
+    assert_eq!(cursor(&commander, Side::Left, cx), 1);
+}
+
+#[test]
+fn about_text_has_name_and_version() {
+    let text = super::commands::about_text();
+    assert!(text.contains("yagni-commander"));
+    assert!(text.contains(env!("CARGO_PKG_VERSION")));
+}
+
+#[gpui_kit::test]
+fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let view = file_manager(cx);
+    let focus = view.read_with(cx, |this, _| this.focus.clone());
+    let key = |action: &dyn gpui_kit::Action, cx: &mut VisualTestContext| {
+        cx.update(|window, _| {
+            window
+                .highest_precedence_binding_for_action_in(action, &focus)
+                .map(|b| b.keystrokes()[0].inner().unparse())
+        })
+    };
+    assert_eq!(key(&crate::actions::Trash, cx).as_deref(), Some("f8"));
+    assert_eq!(
+        key(&crate::actions::Delete, cx).as_deref(),
+        Some("shift-f8")
+    );
+    let quit = if cfg!(target_os = "macos") {
+        "cmd-q"
+    } else {
+        "alt-f4"
+    };
+    assert_eq!(key(&crate::actions::Quit, cx).as_deref(), Some(quit));
+}
+
+fn native_check(cx: &mut VisualTestContext, label: &str) -> bool {
+    cx.update(|_, cx| {
+        cx.get_menus()
+            .unwrap()
+            .iter()
+            .flat_map(|m| m.items.clone())
+            .any(|item| {
+                matches!(item, gpui_kit::OwnedMenuItem::Action { name, checked: true, .. }
+                    if name.as_str() == label)
+            })
+    })
+}
+
+#[gpui_kit::test]
+fn menu_checks_follow_ctrl_dot_sorting_and_the_active_panel(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    assert!(!native_check(cx, "Hidden files"));
+    assert!(native_check(cx, "Sort by name"));
+    cx.simulate_keystrokes("ctrl-.");
+    assert!(native_check(cx, "Hidden files"));
+    cx.dispatch_action(crate::actions::SortBySize);
+    assert!(native_check(cx, "Sort by size"));
+    assert!(!native_check(cx, "Sort by name"));
+    // The right panel still sorts by name.
+    cx.simulate_keystrokes("tab");
+    assert!(native_check(cx, "Sort by name"));
+}
+
+// The menu bar: Linux only (macOS has the native one, no F10 or lone Alt).
+#[cfg(not(target_os = "macos"))]
+mod menu_bar {
+    use super::*;
+
+    fn menu_open(cx: &mut VisualTestContext) -> Option<usize> {
+        let view = file_manager(cx);
+        // Draw a frame, as the app would: focus changes are reported then.
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        view.read_with(cx, |this, cx| {
+            this.menu_bar.as_ref().unwrap().read(cx).open_index()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn f10_opens_the_first_menu_and_enter_runs_an_item(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down"); // left cursor on row 1, right on row 0
+        cx.simulate_keystrokes("f10");
+        assert_eq!(menu_open(cx), Some(0));
+        cx.simulate_keystrokes("right");
+        assert_eq!(menu_open(cx), Some(1));
+        // Commands > Swap panels: Down selects the first item, Down again the second.
+        cx.simulate_keystrokes("down down enter");
+        assert_eq!(menu_open(cx), None);
+        // Both panels show the same folder, so the swap shows in the cursors.
+        assert_eq!(cursor(&commander, Side::Right, cx), 1);
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn left_and_right_wrap_between_menus(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("f10 left");
+        assert_eq!(menu_open(cx), Some(3));
+        cx.simulate_keystrokes("right");
+        assert_eq!(menu_open(cx), Some(0));
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_the_menu_and_keys_reach_the_panel_again(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("f10 down escape");
+        assert_eq!(menu_open(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+        cx.simulate_keystrokes("f10 f10");
+        assert_eq!(menu_open(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
+    }
+
+    #[gpui_kit::test]
+    fn menu_rename_opens_the_prompt_with_focus_in_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("down"); // on "a"
+        // Files > Rename is the 7th item.
+        cx.simulate_keystrokes("f10 down down down down down down down enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_input("z");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(tmp.path().join("z").is_dir());
+    }
+
+    #[gpui_kit::test]
+    fn menu_hidden_files_toggles_like_ctrl_dot(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        // Show is the 3rd menu, Hidden files its first item.
+        cx.simulate_keystrokes("f10 right right down enter");
+        assert!(commander.read_with(cx, |c, _| c.shows_hidden()));
+    }
+
+    #[gpui_kit::test]
+    fn clicking_a_title_opens_and_closes_its_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        click(cx, "menu-Commands", 1);
+        assert_eq!(menu_open(cx), Some(1));
+        click(cx, "menu-Commands", 1);
+        assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn hovering_another_title_switches_an_open_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        click(cx, "menu-Files", 1);
+        let position = center(cx, "menu-Show");
+        cx.simulate_mouse_move(position, None, gpui_kit::Modifiers::default());
+        assert_eq!(menu_open(cx), Some(2));
+    }
+
+    #[gpui_kit::test]
+    fn clicking_an_item_runs_it(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        click(cx, "menu-Show", 1);
+        // The first item (Hidden files) sits at the top of the popup.
+        let popup = bounds(cx, "menu-popup".into()).expect("popup drawn");
+        let at = gpui_kit::point(popup.center().x, popup.top() + gpui_kit::px(16.0));
+        click_at(cx, at, 1);
+        assert!(commander.read_with(cx, |c, _| c.shows_hidden()));
+        assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn clicking_the_panels_closes_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("f10");
+        click(cx, "row-left-1", 1);
+        assert_eq!(menu_open(cx), None);
+    }
+
+    // Lone Alt and keys while a menu is open.
+
+    fn alt_tap(cx: &mut VisualTestContext) {
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::alt());
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_lone_alt_opens_and_closes_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), Some(0));
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn alt_z_does_not_open_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::alt());
+        cx.simulate_keystrokes("alt-z");
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::none());
+        assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn alt_click_does_not_open_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::alt());
+        click(cx, "row-left-1", 1);
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::none());
+        assert_eq!(menu_open(cx), None);
+    }
+
+    /// Test windows start inactive; a real one is active when the user types.
+    fn activate(cx: &mut VisualTestContext) {
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn alt_released_after_a_window_switch_does_not_open_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::alt());
+        cx.deactivate_window();
+        activate(cx);
+        cx.simulate_modifiers_change(gpui_kit::Modifiers::none());
+        assert_eq!(menu_open(cx), None);
+        // The next lone Alt works again.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), Some(0));
+    }
+
+    #[gpui_kit::test]
+    fn deactivating_the_window_closes_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("f10");
+        cx.deactivate_window();
+        assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn keys_other_than_navigation_are_ignored_while_the_menu_is_open(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("f10");
+        cx.simulate_keystrokes("f7");
+        cx.simulate_input("x");
+        cx.simulate_keystrokes("tab ctrl-a space");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(menu_open(cx), Some(0));
+        assert_eq!(search(&commander, cx), None);
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+        assert!(!tmp.path().join("x").exists());
+        cx.simulate_keystrokes("escape down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_lone_alt_in_a_dialog_does_nothing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), None);
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn alt_held_while_switching_into_the_window_does_not_open_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.deactivate_window();
+        // Wayland reports the held Alt right after the window gets focus.
+        activate(cx);
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), None);
+        // A lone Alt a moment later works.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        alt_tap(cx);
+        assert_eq!(menu_open(cx), Some(0));
+    }
+
+    #[gpui_kit::test]
+    fn a_dialog_opening_closes_the_menu(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        activate(cx); // gpui reports focus changes for the active window only
+        cx.simulate_keystrokes("f10");
+        // E.g. a file operation's error summary arriving while the menu is open.
+        cx.dispatch_action(crate::actions::About);
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert_eq!(menu_open(cx), None);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        // Typing reaches the panels again.
+        cx.simulate_input("f");
+        assert_eq!(search(&commander, cx).as_deref(), Some("f"));
+    }
 }

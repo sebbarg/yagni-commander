@@ -14,8 +14,18 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 ### Menu
 
-- Main menu, following the framework's and platform's conventions (the macOS menu bar; an in-window menu on Linux).
-- v1 contents: Quit (Cmd-Q on macOS, Alt-F4 on Linux) and About (a dialog with name and version).
+- Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
+- Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
+  - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8); Select all (Ctrl-A); Quit (Linux only, Alt-F4).
+  - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R).
+  - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
+  - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
+  - Settings gets an entry with the settings page. The temporary F12 Button test is not in the menu.
+- Check marks follow the state: the menus are rebuilt when hidden files or the active panel's sort change.
+- Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
+- Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10 and lone Alt do nothing.
+- About: a dialog with the name and version (`CARGO_PKG_VERSION`) and an OK button.
+- Right-click context menu (later): it reuses the menu's item model and popup builder with its own item list. Open decision: whether right-click selects, as in TC's default on Linux and Windows.
 
 ### Config
 
@@ -87,6 +97,7 @@ Toolbar with e.g. drive icons.
 | Ctrl-U | Swap the two panels. |
 | Ctrl-R | Reload both panels. |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
+| F10, Alt (alone) | Open the menu (Linux; see Menu). |
 | Letters, digits, `.` and other printable keys | Quick search (see below). |
 | Enter | On a directory: enter it. On a file: open it with its associated program (v2). |
 | Alt-F5 | Archive/compress the selection or current entry, with confirmation if the target exists (v2). |
@@ -171,4 +182,4 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
 6. ~~F5/F6/F8 dialogs and progress.~~ Done.
 7. ~~F3 viewer.~~ Done.
-8. Menu, About and the settings page.
+8. Menu, About and the settings page. (Menu and About done; the settings page is next.)

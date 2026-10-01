@@ -362,6 +362,18 @@ pub(super) fn show_error(
     window: &mut Window,
     cx: &mut App,
 ) {
+    show_message(title, message, "Dismiss", refocus, window, cx);
+}
+
+/// A centered, modal message box with one `button`, like [`show_error`].
+pub(super) fn show_message(
+    title: &'static str,
+    message: impl Into<SharedString>,
+    button: &'static str,
+    refocus: Option<FocusHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let message = message.into();
     // After the dialog stack has finished restoring focus.
     let restore = move |refocus: &Option<FocusHandle>, window: &mut Window, cx: &mut App| {
@@ -376,7 +388,7 @@ pub(super) fn show_error(
             restore(&refocus, window, cx);
         }
     });
-    let buttons = ButtonRow::build([("Dismiss", dismiss)], 0, cx);
+    let buttons = ButtonRow::build([(button, dismiss)], 0, cx);
     focus_when_open(buttons.focus_handle(cx), window, cx);
     window.open_dialog(cx, move |dialog, _, _| {
         let refocus = refocus.clone();
@@ -391,6 +403,30 @@ pub(super) fn show_error(
                 true
             })
     });
+}
+
+/// The About box's text.
+pub(super) fn about_text() -> String {
+    format!(
+        "yagni-commander {}\nA dual-pane file manager.",
+        env!("CARGO_PKG_VERSION")
+    )
+}
+
+impl FileManager {
+    /// The menu's About item.
+    pub(super) fn about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
+        let refocus = Some(self.focus.clone());
+        show_message(
+            "About yagni-commander",
+            about_text(),
+            "OK",
+            refocus,
+            window,
+            cx,
+        );
+    }
 }
 
 /// Opening a dialog moves focus to the dialog itself; this moves it on to

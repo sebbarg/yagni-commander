@@ -2,28 +2,35 @@
 //! line, and the keyboard actions that drive the shared [`Commander`].
 
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, MouseButton, MouseDownEvent, MouseMoveEvent, SharedString,
-    Subscription, Window, div, prelude::*, px, relative,
+    App, Context, Entity, FocusHandle, Modifiers, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, SharedString, Subscription, Window, div, prelude::*, px,
+    relative,
 };
-use yagni_commander_core::{Command, Commander, Side};
+use yagni_commander_core::{Command, Commander, Side, SortKey};
 
 mod commands;
 mod file_ops;
 mod loads;
 
 use crate::actions::{
-    Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
-    Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, Move, PageDown, PageUp, Reload,
-    Rename, SelectAll, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleSelection,
+    About, Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp,
+    Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move, PageDown,
+    PageUp, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
     Trash, View,
 };
 use crate::app_state::AppState;
+use crate::menu_bar::{self, MenuBar};
+use crate::menus::{self, MenuState};
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
 const STATUS_HEIGHT: f32 = 22.0;
+/// An Alt press this soon after the window became active is the tail of a
+/// window switch, never a lone Alt for the menu.
+const ALT_AFTER_ACTIVATION: std::time::Duration = std::time::Duration::from_millis(200);
 /// Rows to page by before the list has been laid out.
 const FALLBACK_PAGE_ROWS: usize = 20;
 
@@ -63,6 +70,15 @@ pub struct FileManager {
     loads: Vec<loads::RunningLoad>,
     /// Whether the timer that collects their results is running.
     polling_loads: bool,
+    /// The in-window menu bar; `None` on macOS, which has the native one.
+    menu_bar: Option<Entity<MenuBar>>,
+    /// What the menus' check marks show; `None` before the first update.
+    menu_state: Option<MenuState>,
+    /// Alt went down alone and no mouse click or window switch followed (see
+    /// [`Self::menu_alt`]).
+    alt_armed: bool,
+    /// When the window last became active or inactive (`None` before that).
+    activated_at: Option<std::time::Instant>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -75,22 +91,55 @@ impl FileManager {
     ) -> Self {
         let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, cx));
         let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        let menu_bar = cfg!(not(target_os = "macos"))
+            .then(|| cx.new(|_| MenuBar::new(Vec::new(), focus.clone())));
+
         let subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
                 AppState::remember_panels(&commander, cx);
                 this.update_title(window, cx);
+                this.update_menus(cx);
                 cx.notify();
             }),
             cx.observe_window_bounds(window, |_, window, cx| {
                 AppState::remember_window(window.window_bounds(), cx);
             }),
+            // A window switch (Alt-Tab) between Alt's press and release must
+            // not open the menu; an open menu closes.
+            cx.observe_window_activation(window, |this, window, cx| {
+                this.activated_at = Some(cx.background_executor().now());
+                if !window.is_window_active() {
+                    this.alt_armed = false;
+                    if let Some(bar) = this.menu_bar.clone() {
+                        bar.update(cx, |bar, cx| bar.close(window, cx));
+                    }
+                }
+            }),
+            // While a menu is open, keys other than the menu's own are
+            // ignored. This runs before key bindings, which matters: the open
+            // menu has focus, but the file manager's bindings (F5, ...) are on
+            // the same dispatch path.
+            cx.intercept_keystrokes({
+                let bar = menu_bar.as_ref().map(Entity::downgrade);
+                let handle = window.window_handle();
+                move |event, window, cx| {
+                    let Some(bar) = bar.as_ref().and_then(|bar| bar.upgrade()) else {
+                        return;
+                    };
+                    if window.window_handle() == handle
+                        && bar.read(cx).is_open()
+                        && !menu_bar::passes(&event.keystroke)
+                    {
+                        cx.stop_propagation();
+                    }
+                }
+            }),
         ];
         AppState::remember_window(window.window_bounds(), cx);
         AppState::remember_panels(&commander, cx);
-
-        let focus = cx.focus_handle();
-        window.focus(&focus, cx);
 
         let this = Self {
             commander,
@@ -105,6 +154,10 @@ impl FileManager {
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
+            menu_bar,
+            menu_state: None,
+            alt_armed: false,
+            activated_at: None,
             _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
@@ -115,6 +168,37 @@ impl FileManager {
 
     fn update_title(&self, window: &mut Window, cx: &App) {
         window.set_window_title(&window_title(self.commander.read(cx)));
+    }
+
+    /// Rebuilds the menus when their check marks change.
+    fn update_menus(&mut self, cx: &mut Context<Self>) {
+        let state = MenuState::of(self.commander.read(cx));
+        if self.menu_state == Some(state) {
+            return;
+        }
+        self.menu_state = Some(state);
+        let mac = cfg!(target_os = "macos");
+        cx.set_menus(menus::to_gpui(&menus::menus(state, mac)));
+        if let Some(bar) = &self.menu_bar {
+            bar.update(cx, |bar, cx| bar.set_menus(menus::menus(state, false), cx));
+        }
+    }
+
+    /// F10: opens or closes the menu bar (Linux).
+    fn toggle_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
+        if let Some(bar) = self.menu_bar.clone() {
+            bar.update(cx, |bar, cx| bar.toggle(window, cx));
+        }
+    }
+
+    /// A lone Alt (gpui's "alt" binding: pressed and released with no key in
+    /// between). gpui doesn't count mouse clicks or window switches in
+    /// between, so `alt_armed` covers those.
+    fn menu_alt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.alt_armed) {
+            self.toggle_menu(window, cx);
+        }
     }
 
     fn active_panel<'a>(&self, cx: &'a App) -> &'a yagni_commander_core::Panel {
@@ -176,6 +260,12 @@ impl FileManager {
         self.execute(Command::ToggleHidden, cx);
         let show = self.commander.read(cx).shows_hidden();
         AppState::remember_show_hidden(show, cx);
+    }
+
+    /// Sorts the active panel by `key`; the same key again reverses.
+    fn sort_by(&mut self, key: SortKey, cx: &mut Context<Self>) {
+        let side = self.commander.read(cx).active();
+        self.execute(Command::SortBy(side, key), cx);
     }
 
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
@@ -301,6 +391,30 @@ impl Render for FileManager {
             .on_action(
                 cx.listener(|this, _: &EditNewFile, window, cx| this.edit_new_file(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &SortByName, _, cx| this.sort_by(SortKey::Name, cx)))
+            .on_action(cx.listener(|this, _: &SortBySize, _, cx| this.sort_by(SortKey::Size, cx)))
+            .on_action(
+                cx.listener(|this, _: &SortByModified, _, cx| this.sort_by(SortKey::Modified, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SortByOwner, _, cx| this.sort_by(SortKey::Owner, cx)))
+            .on_action(cx.listener(|this, _: &SortByPermissions, _, cx| {
+                this.sort_by(SortKey::Permissions, cx)
+            }))
+            .on_action(cx.listener(|this, _: &About, window, cx| this.about(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleMenu, window, cx| this.toggle_menu(window, cx)))
+            .on_action(cx.listener(|this, _: &MenuAlt, window, cx| this.menu_alt(window, cx)))
+            .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
+                // Wayland reports an Alt still held from Alt-Tab right after
+                // the window gets focus; that press belongs to the switch.
+                let now = cx.background_executor().now();
+                let settled = this
+                    .activated_at
+                    .is_none_or(|at| now - at > ALT_AFTER_ACTIVATION);
+                if event.modifiers == Modifiers::alt() && settled {
+                    this.alt_armed = true;
+                }
+            }))
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.alt_armed = false))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(
@@ -316,6 +430,7 @@ impl Render for FileManager {
             .bg(colors.window_bg)
             .text_color(colors.text)
             .text_size(px(14.0))
+            .when_some(self.menu_bar.clone(), |d, bar| d.child(bar))
             .child(
                 div()
                     .flex()
