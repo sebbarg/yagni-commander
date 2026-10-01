@@ -6,7 +6,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Status and handoff (update at the end of every session)
 
-As of 2026-10-01, end of session (menu work uncommitted, waiting for the owner's review; last commit "Session handoff: next is the menu"):
+As of 2026-10-01, end of session (everything committed, last commit "Add the menu and About"):
 
 - **Done (v1 build order in `Requirements.md`):** steps 1 to 7: gpui-kit + gpui-component, config and window state; selection; F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R; Ctrl-. hidden files; the file-operation engine; F5/F6/F8 with progress; the F3 viewer. Step 8 so far: the menu (TC-style command menus with shortcut labels and check marks; native bar on macOS, in-window bar on Linux opened by F10 or a lone Alt) and About. Beyond the build order: background directory loading; both panel folders and the active panel restored on start; `[name]` directory display, Shift-F4 new file, quick search box (Up/Down step through matches), our own dialog `ButtonRow` (arrow keys; Enter presses the highlighted button), Shift-F8/Shift-Del permanent delete, the operation log, themes-as-data, modal error boxes. Plans with their reasoning: `docs/superpowers/plans/` (F3 viewer, background loading, menu).
 - **Tests:** `cargo test --workspace` (140 app, 233 core; app tests cover every key, mouse action and dialog) and `scripts/smoke.sh` (real app under Xvfb, 40+ checks on disk, screenshots in `target/smoke/`). Both green.
