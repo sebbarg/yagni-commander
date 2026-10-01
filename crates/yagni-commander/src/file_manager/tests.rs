@@ -1055,3 +1055,45 @@ fn shift_f4_creates_missing_folders_and_selects_the_first(cx: &mut TestAppContex
     });
     assert_eq!(under_cursor, "notes");
 }
+
+fn viewers(cx: &mut VisualTestContext) -> usize {
+    let windows = cx.windows();
+    windows
+        .into_iter()
+        .filter(|w| crate::viewer_view::tests::viewer_in(*w, cx).is_some())
+        .count()
+}
+
+#[gpui_kit::test]
+fn f3_opens_a_viewer_window_per_file(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("end f3"); // "f"
+    cx.run_until_parked();
+    assert_eq!(viewers(cx), 1);
+    cx.simulate_keystrokes("f3");
+    cx.run_until_parked();
+    assert_eq!(viewers(cx), 2);
+}
+
+#[gpui_kit::test]
+fn f3_on_a_directory_or_parent_does_nothing(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("f3 down f3"); // ".." then "a"
+    cx.run_until_parked();
+    assert_eq!(viewers(cx), 0);
+    assert!(!dialog_open(cx));
+}
+
+#[gpui_kit::test]
+fn f3_on_a_fifo_shows_an_error(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    std::process::Command::new("mkfifo")
+        .arg(tmp.path().join("pipe"))
+        .status()
+        .unwrap();
+    cx.simulate_keystrokes("ctrl-r end f3"); // "pipe" sorts after "f"
+    cx.run_until_parked();
+    assert_eq!(viewers(cx), 0);
+    assert!(dialog_open(cx));
+    let _ = commander;
+}

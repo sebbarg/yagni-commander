@@ -27,6 +27,8 @@ pub struct SavedWindow {
 pub struct State {
     pub window: Option<SavedWindow>,
     pub show_hidden: bool,
+    /// Where the last viewer window was.
+    pub viewer: Option<SavedWindow>,
 }
 
 /// The latest state, kept current while the app runs and written to the
@@ -114,6 +116,20 @@ impl AppState {
         cx.global_mut::<Self>().state.window = Some(SavedWindow::from_bounds(bounds));
     }
 
+    /// Where to open a viewer: where the last one was, if that still fits the
+    /// displays, otherwise over the main window.
+    pub fn viewer_bounds(&self, main: WindowBounds, cx: &App) -> WindowBounds {
+        let displays: Vec<_> = cx.displays().iter().map(|d| d.bounds()).collect();
+        self.state
+            .viewer
+            .and_then(|saved| saved.restore(&displays))
+            .unwrap_or(main)
+    }
+
+    pub fn remember_viewer(bounds: WindowBounds, cx: &mut App) {
+        cx.global_mut::<Self>().state.viewer = Some(SavedWindow::from_bounds(bounds));
+    }
+
     pub fn remember_show_hidden(show_hidden: bool, cx: &mut App) {
         cx.global_mut::<Self>().state.show_hidden = show_hidden;
     }
@@ -192,6 +208,7 @@ mod tests {
         let state = State {
             window: Some(saved(10.0, 20.0)),
             show_hidden: true,
+            viewer: Some(saved(30.0, 40.0)),
         };
         AppState {
             path: Some(path.clone()),

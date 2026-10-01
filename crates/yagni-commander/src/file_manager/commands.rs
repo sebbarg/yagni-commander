@@ -125,6 +125,31 @@ impl FileManager {
         );
     }
 
+    /// F3: view the file under the cursor in a new window. Directories and
+    /// ".." do nothing; files that can't be viewed (FIFOs, devices,
+    /// unreadable files) show an error.
+    pub(super) fn view_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
+        let panel = self.active_panel(cx);
+        if panel
+            .cursor_entry()
+            .is_none_or(|e| e.kind != EntryKind::File)
+        {
+            return;
+        }
+        let path = panel.cursor_path();
+        let main = window.window_bounds();
+        if let Err(e) = crate::viewer_view::open(path, main, cx) {
+            show_error(
+                "Cannot view file",
+                e.to_string(),
+                Some(self.focus.clone()),
+                window,
+                cx,
+            );
+        }
+    }
+
     /// Printable characters typed without modifiers start or extend a quick
     /// search: the cursor jumps to the first name starting with the typed
     /// text, shown in a box in the panel footer. Unmatched keys are ignored.

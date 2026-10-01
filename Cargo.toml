@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 nix = { version = "0.31", default-features = false, features = ["user", "fs", "dir"] }
 trash = "5"
+unicode-width = "0.2"
 tempfile = "3"
 
 [workspace.lints.rust]

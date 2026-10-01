@@ -14,7 +14,7 @@ use crate::actions::{
     Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
     Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, Move, PageDown, PageUp, Reload,
     Rename, SelectAll, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleSelection,
-    Trash,
+    Trash, View,
 };
 use crate::app_state::AppState;
 use crate::panel_view::PanelView;
@@ -252,6 +252,7 @@ impl Render for FileManager {
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
+            .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))
             .on_action(cx.listener(|this, _: &Copy, window, cx| {
                 this.copy_or_move(file_ops::Kind::Copy, window, cx)
             }))

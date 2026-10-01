@@ -44,6 +44,8 @@ mkdir -p "$left/docs" "$right"
 printf hello >"$left/notes.txt"
 printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
+seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
+head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
 
 pids=()
 cleanup() {
@@ -167,11 +169,43 @@ keys ctrl+period
 shot 07-hidden-shown
 keys ctrl+period
 
+echo "F3 viewer"
+typed big
+keys F3
+check "viewer window open" xdotool search --name "big.txt - yagni-commander"
+# No window manager here to focus the new window.
+xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
+sleep 0.5
+shot 08-viewer
+keys ctrl+End
+shot 09-viewer-end
+keys w Right Right
+shot 10-viewer-nowrap
+keys Escape
+check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+
+echo "F3 viewer on a giant single line"
+typed oneline
+keys F3
+check "viewer window open" xdotool search --name "oneline.txt - yagni-commander"
+# No window manager here to focus the new window.
+xdotool windowfocus "$(xdotool search --name "oneline.txt - yagni-commander" | head -1)"
+sleep 0.5
+keys ctrl+End
+shot 11-viewer-oneline-end
+keys q
+check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+
 echo "quit"
 keys alt+F4
 check "state file written" test -f "$work/state/yagni-commander/state.toml"
 check "hidden files hidden again in the state" grep -q "show_hidden = false" \
     "$work/state/yagni-commander/state.toml"
+check "viewer geometry in the state" grep -q "^\[viewer\]" "$work/state/yagni-commander/state.toml"
 
 echo "operation log"
 check "old log deleted at startup" test ! -e "$logs/operations-2020-01-01.log"

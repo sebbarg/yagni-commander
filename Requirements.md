@@ -101,12 +101,20 @@ Toolbar with e.g. drive icons.
 
 ### F3 viewer
 
-- Read-only, UTF-8 text, in its own window.
-- Must open huge files (GB range) instantly, like TC's Lister. Works by byte position, never reading the whole file before showing it: open reads the first screenful; paging reads the next few KB (positional reads, `read_at`); Ctrl-End reads backwards from the end to the last line start; the scrollbar is a byte position that snaps to the next line start.
-- Not memory-mapped: in Rust that needs `unsafe` (forbidden), and another program shortening the file would crash the app (SIGBUS). Positional reads use the same OS file cache and are as fast here.
-- Line numbers ("line N of M", go to line) need a full scan; it runs in the background and they appear when it's done. The viewer is usable at once.
-- A single giant line (e.g. minified JSON) shows a window of it. A position inside a multi-byte UTF-8 character snaps to the next character.
-- Other encodings, hex view and search inside the viewer (v2).
+- Read-only, UTF-8 text. Every F3 opens its own window, so several files can be compared side by side. F3 on a directory or ".." does nothing; on a FIFO, socket or device it shows an error (reading a FIFO would block).
+- Window title `<file name> - yagni-commander`. The first viewer opens over the main window at its size; after that the last viewer geometry is reused (one slot in the state file). Closing the main window quits the app and closes all viewers.
+- Must open huge files (GB range) instantly, like TC's Lister. Works by byte position, never reading the whole file before showing it: open reads the first screenful; paging reads the next few KB (positional reads, `read_at`); Ctrl-End reads backwards from the end; the scrollbar is a byte position; the row containing it is shown (never past the last screen).
+- Not memory-mapped: in Rust that needs `unsafe` (forbidden), and another program shortening the file would crash the app (SIGBUS). Positional reads use the same OS file cache and are as fast here. If the file shrinks while open, reads past the end show nothing and the next scroll clamps.
+- Monospace font. Lines end at `\n`; a `\r` before it is dropped. Tabs expand to the next multiple of 8 columns; wide (CJK) characters take 2 columns. Invalid UTF-8 bytes and control characters (including a lone `\r`) show as a dim `·` (theme role `hidden`), so binary files never break the layout. A position inside a multi-byte character snaps to the next character.
+- Wrap mode (always the start mode): word wrap at the window width, breaking at the last space or tab that fits, else mid-word. `W` toggles no-wrap mode, keeping the top line in place: rows are file lines, Left/Right scroll horizontally (8 columns), and lines longer than 10,000 characters are cut into 10,000-character rows.
+- Giant lines (e.g. minified JSON): inside a line longer than 64 KiB, rows also break at every 64 KiB-aligned offset, so scrolling up never scans more than one block back. The visible effect is one short row every 64 KiB.
+- Keys: Escape or `q` close (not F3, which is find next in v2); Up/Down one row; PageUp/PageDown one screen; Home/Ctrl-Home start of file; End/Ctrl-End end of file; `W` wrap toggle; Left/Right in no-wrap mode. Mouse wheel scrolls rows; the scrollbar can be dragged.
+- Status line: file name, size, percentage (by byte), wrap or no wrap, and "line N of M" (of the top row). Line numbers need a full scan; it runs in the background ("counting lines..." until done) and stops when the window closes. The viewer is usable at once.
+- Go to line (v2; the line scan already keeps per-MiB line counts for it).
+- Search (v2): Ctrl-F prompts for the text; F3 finds the next match, Shift-F3 the previous one.
+- Selection and copy (v2), like TC's Lister: no keyboard cursor. Drag selects (auto-scrolling past the top or bottom edge), Shift-click extends, double-click selects a word, triple-click a line, Ctrl-A selects all, Ctrl-C copies, a click clears. The selection is a byte range in the file, so it survives scrolling, `W` and resizing. Copy takes the original bytes (tabs and `\r\n` kept; invalid UTF-8 becomes U+FFFD) and is capped at 64 MiB (an error box above that). Keyboard selection only if it turns out to be missing.
+- Other encodings, following a growing file (v2).
+- Hex mode (v2): classic layout, 16 bytes per row: offset, hex codes, then the same bytes as characters (`.` for non-printable).
 
 ## File operations
 
@@ -149,5 +157,5 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 4. ~~Ctrl-. hidden files toggle.~~ Done.
 5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
 6. ~~F5/F6/F8 dialogs and progress.~~ Done.
-7. F3 viewer.
+7. ~~F3 viewer.~~ Done.
 8. Menu, About and the settings page.

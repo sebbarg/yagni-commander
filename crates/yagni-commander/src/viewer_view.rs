@@ -1,0 +1,481 @@
+//! The F3 viewer: a read-only window on one file. All byte work is in
+//! `yagni_commander_core::viewer`; this draws the rows around the top byte
+//! position, handles keys and the mouse, and shows the line count once the
+//! background scan finishes.
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use gpui_kit::component::ActiveTheme;
+use gpui_kit::{
+    App, AppContext, Context, FocusHandle, HighlightStyle, SharedString, StyledText, Subscription,
+    Window, WindowBounds, WindowOptions, div, font, prelude::*, px,
+};
+use yagni_commander_core::format_size;
+use yagni_commander_core::viewer::{Document, FileSource, LineIndex, Row, Wrap, count_lines};
+
+use crate::actions::VIEWER_CONTEXT;
+use crate::actions::viewer::{
+    Close, End, LineDown, LineUp, PageDown, PageUp, ScrollLeft, ScrollRight, Start, ToggleWrap,
+};
+use crate::app_state::AppState;
+use crate::theme::Theme;
+
+const PADDING: f32 = 8.0;
+const LINE_HEIGHT: f32 = 18.0;
+const STATUS_HEIGHT: f32 = 22.0;
+const SCROLLBAR_WIDTH: f32 = 12.0;
+/// Columns per Left/Right.
+const H_STEP: u32 = 8;
+/// Before the first layout.
+const FALLBACK_ROWS: usize = 20;
+
+pub fn window_title(path: &Path) -> String {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    format!("{name} - yagni-commander")
+}
+
+/// Opens `path` in a new viewer window, placed where the last viewer was or
+/// over the main window (`main`).
+pub fn open(path: PathBuf, main: WindowBounds, cx: &mut App) -> io::Result<()> {
+    let source = FileSource::open(&path)?;
+    let options = WindowOptions {
+        window_bounds: Some(cx.global::<AppState>().viewer_bounds(main, cx)),
+        ..Default::default()
+    };
+    gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| ViewerView::new(path, source, window, cx))
+    })
+    .map_err(io::Error::other)?;
+    Ok(())
+}
+
+pub struct ViewerView {
+    path: PathBuf,
+    doc: Document<FileSource>,
+    focus: FocusHandle,
+    wrap: bool,
+    /// Byte position of the top row (always a row start).
+    top: u64,
+    /// Columns per row in wrap mode, from the last layout.
+    cols: u32,
+    screen_rows: usize,
+    /// No-wrap mode: first column shown.
+    h_offset: u32,
+    /// Widest row on screen, for clamping `h_offset`.
+    widest: u32,
+    lines: Option<Arc<LineIndex>>,
+    /// Line of `top`, cached while `top` doesn't change.
+    top_line: Option<(u64, u64)>,
+    cancel_count: Arc<AtomicBool>,
+    /// Texts of the rows last drawn (tests read them).
+    shown: Vec<String>,
+    /// Bytes shown, for the scrollbar thumb and the percentage.
+    shown_end: u64,
+    dragging_thumb: bool,
+    /// Fractional rows of wheel scrolling not applied yet.
+    wheel_rows: f32,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl ViewerView {
+    fn new(path: PathBuf, source: FileSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        window.set_window_title(&window_title(&path));
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        let subscriptions = vec![cx.observe_window_bounds(window, |_, window, cx| {
+            AppState::remember_viewer(window.window_bounds(), cx);
+        })];
+        AppState::remember_viewer(window.window_bounds(), cx);
+
+        let cancel_count = Arc::new(AtomicBool::new(false));
+        if let Ok(counter) = source.try_clone() {
+            let cancel = cancel_count.clone();
+            let counting = cx
+                .background_executor()
+                .spawn(async move { count_lines(&counter, &cancel) });
+            cx.spawn(async move |this, cx| {
+                if let Ok(Some(index)) = counting.await {
+                    let _ = this.update(cx, |this, cx| {
+                        this.lines = Some(Arc::new(index));
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
+
+        Self {
+            path,
+            doc: Document::new(source),
+            focus,
+            wrap: true,
+            top: 0,
+            cols: 80,
+            screen_rows: FALLBACK_ROWS,
+            h_offset: 0,
+            widest: 0,
+            lines: None,
+            top_line: None,
+            cancel_count,
+            shown: Vec::new(),
+            shown_end: 0,
+            dragging_thumb: false,
+            wheel_rows: 0.0,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    fn layout(&self) -> Wrap {
+        if self.wrap {
+            Wrap::Columns(self.cols)
+        } else {
+            Wrap::Off
+        }
+    }
+
+    fn set_top(&mut self, top: u64, cx: &mut Context<Self>) {
+        self.top = top;
+        cx.notify();
+    }
+
+    fn down(&mut self, by: usize, cx: &mut Context<Self>) {
+        let top = self
+            .doc
+            .scroll_down(self.top, by, self.screen_rows, self.layout());
+        self.set_top(top, cx);
+    }
+
+    fn up(&mut self, by: usize, cx: &mut Context<Self>) {
+        let top = self.doc.scroll_up(self.top, by, self.layout());
+        self.set_top(top, cx);
+    }
+
+    fn page(&self) -> usize {
+        self.screen_rows.saturating_sub(1).max(1)
+    }
+
+    fn end(&mut self, cx: &mut Context<Self>) {
+        let top = self.doc.last_top(self.screen_rows, self.layout());
+        self.set_top(top, cx);
+    }
+
+    fn toggle_wrap(&mut self, cx: &mut Context<Self>) {
+        self.wrap = !self.wrap;
+        self.h_offset = 0;
+        let top = self.doc.row_start_at(self.top, self.layout());
+        self.set_top(top, cx);
+    }
+
+    fn scroll_h(&mut self, right: bool, cx: &mut Context<Self>) {
+        if self.wrap {
+            return;
+        }
+        let max = self.widest.saturating_sub(self.cols);
+        self.h_offset = if right {
+            (self.h_offset + H_STEP).min(max.max(self.h_offset))
+        } else {
+            self.h_offset.saturating_sub(H_STEP)
+        };
+        cx.notify();
+    }
+
+    fn close(&mut self, window: &mut Window) {
+        window.remove_window();
+    }
+
+    /// Rows and columns that fit the window, from the monospace font.
+    fn measure(&self, window: &mut Window, cx: &App) -> (usize, u32) {
+        let theme = cx.theme();
+        let font = font(theme.mono_font_family.clone());
+        let text_system = window.text_system();
+        let char_width = text_system
+            .advance(text_system.resolve_font(&font), theme.mono_font_size, 'M')
+            .map(|s| f32::from(s.width))
+            .unwrap_or(8.0)
+            .max(1.0);
+        let viewport = window.viewport_size();
+        let width = f32::from(viewport.width) - 2.0 * PADDING - SCROLLBAR_WIDTH;
+        let height = f32::from(viewport.height) - 2.0 * PADDING - STATUS_HEIGHT;
+        let rows = (height / LINE_HEIGHT).floor().max(1.0) as usize;
+        let cols = (width / char_width).floor().max(1.0) as u32;
+        (rows, cols)
+    }
+
+    /// "file.txt · 1.2 MiB · 37% · wrap · line 120 of 5,000"
+    pub(crate) fn status_text(&mut self) -> String {
+        let name = self
+            .path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let len = self.doc.len();
+        let percent = (self.shown_end * 100)
+            .checked_div(len)
+            .unwrap_or(100)
+            .min(100);
+        let mode = if self.wrap { "wrap" } else { "no wrap" };
+        let line = match &self.lines {
+            None => "counting lines...".to_owned(),
+            Some(index) => {
+                let top_line = match self.top_line {
+                    Some((top, line)) if top == self.top => line,
+                    _ => {
+                        let line = index.line_of(&mut self.doc, self.top);
+                        self.top_line = Some((self.top, line));
+                        line
+                    }
+                };
+                if index.lines() == 0 {
+                    "0 lines".to_owned()
+                } else {
+                    format!("line {top_line} of {}", index.lines())
+                }
+            }
+        };
+        format!(
+            "{name} · {} · {percent}% · {mode} · {line}",
+            format_size(len)
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn top(&self) -> u64 {
+        self.top
+    }
+    #[cfg(test)]
+    pub(crate) fn wraps(&self) -> bool {
+        self.wrap
+    }
+    #[cfg(test)]
+    pub(crate) fn h_offset(&self) -> u32 {
+        self.h_offset
+    }
+    #[cfg(test)]
+    pub(crate) fn shown(&self) -> &[String] {
+        &self.shown
+    }
+    #[cfg(test)]
+    pub(crate) fn screen_rows(&self) -> usize {
+        self.screen_rows
+    }
+}
+
+impl Drop for ViewerView {
+    fn drop(&mut self) {
+        self.cancel_count.store(true, Ordering::Relaxed);
+    }
+}
+
+impl ViewerView {
+    /// Scrollbar track geometry in window coordinates: (top, height). The
+    /// layout is fixed (padding, status line), so it follows from the window.
+    fn track(window: &Window) -> (f32, f32) {
+        let height = f32::from(window.viewport_size().height) - 2.0 * PADDING - STATUS_HEIGHT;
+        (PADDING, height.max(1.0))
+    }
+
+    /// Shows the row containing the byte at `fraction` of the file, but never
+    /// past the last screen.
+    fn jump_to(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        let len = self.doc.len();
+        if len == 0 {
+            return;
+        }
+        let pos = (len as f64 * f64::from(fraction.clamp(0.0, 1.0))) as u64;
+        let wrap = self.layout();
+        let top = self.doc.row_start_at(pos, wrap);
+        let last = self.doc.last_top(self.screen_rows, wrap);
+        self.set_top(top.min(last), cx);
+    }
+
+    fn drag_to(&mut self, y: f32, window: &Window, cx: &mut Context<Self>) {
+        let (top, height) = Self::track(window);
+        self.jump_to((y - top) / height, cx);
+    }
+
+    fn on_wheel(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
+        let dy = f32::from(event.delta.pixel_delta(px(LINE_HEIGHT)).y);
+        self.wheel_rows += dy / LINE_HEIGHT;
+        let whole = self.wheel_rows.trunc();
+        self.wheel_rows -= whole;
+        let rows = whole.abs() as usize;
+        if whole < 0.0 {
+            self.down(rows, cx);
+        } else if whole > 0.0 {
+            self.up(rows, cx);
+        }
+    }
+
+    fn render_scrollbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = &Theme::get(cx).colors;
+        let len = self.doc.len().max(1) as f32;
+        let start = self.top as f32 / len;
+        let size = ((self.shown_end - self.top) as f32 / len).max(0.02);
+        div()
+            .id("viewer-scrollbar")
+            .debug_selector(|| "viewer-scrollbar".into())
+            .w(px(SCROLLBAR_WIDTH))
+            .h_full()
+            .flex_none()
+            .relative()
+            .on_mouse_down(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    this.dragging_thumb = true;
+                    this.drag_to(f32::from(event.position.y), window, cx);
+                }),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "viewer-thumb".into())
+                    .absolute()
+                    .left(px(2.0))
+                    .right(px(2.0))
+                    .top(gpui_kit::relative(start.min(1.0 - size)))
+                    .h(gpui_kit::relative(size.min(1.0)))
+                    .rounded(px(3.0))
+                    .bg(if self.dragging_thumb {
+                        colors.accent
+                    } else {
+                        colors.border
+                    }),
+            )
+    }
+}
+
+impl Render for ViewerView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (rows, cols) = self.measure(window, cx);
+        self.screen_rows = rows;
+        if cols != self.cols {
+            self.cols = cols;
+            if self.wrap {
+                self.top = self.doc.row_start_at(self.top, self.layout());
+            }
+        }
+        let visible: Vec<Row> = self.doc.rows(self.top, rows, self.layout());
+        self.shown_end = visible.last().map_or(self.top, |r| r.end);
+        self.widest = visible.iter().map(|r| r.width).max().unwrap_or(0);
+
+        let colors = Theme::get(cx).colors.clone();
+        let dim = HighlightStyle {
+            color: Some(colors.hidden.into()),
+            ..Default::default()
+        };
+        self.shown.clear();
+        let mut row_elements = Vec::with_capacity(visible.len());
+        for (ix, row) in visible.iter().enumerate() {
+            let (text, dims) = if self.wrap {
+                (row.text.clone(), row.dim.clone())
+            } else {
+                row.visible(self.h_offset, self.cols)
+            };
+            self.shown.push(text.clone());
+            let styled = StyledText::new(SharedString::from(text))
+                .with_highlights(dims.into_iter().map(|r| (r, dim)));
+            row_elements.push(
+                div()
+                    .debug_selector(move || format!("viewer-row-{ix}"))
+                    .h(px(LINE_HEIGHT))
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .child(styled),
+            );
+        }
+
+        let status = self.status_text();
+        let error = self.doc.error().map(str::to_owned);
+        let theme = cx.theme();
+        let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+
+        div()
+            .key_context(VIEWER_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &Close, window, _| this.close(window)))
+            .on_action(cx.listener(|this, _: &LineDown, _, cx| this.down(1, cx)))
+            .on_action(cx.listener(|this, _: &LineUp, _, cx| this.up(1, cx)))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
+                let page = this.page();
+                this.down(page, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
+                let page = this.page();
+                this.up(page, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Start, _, cx| this.set_top(0, cx)))
+            .on_action(cx.listener(|this, _: &End, _, cx| this.end(cx)))
+            .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
+            .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
+            .on_action(cx.listener(|this, _: &ScrollRight, _, cx| this.scroll_h(true, cx)))
+            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
+            .on_mouse_move(
+                cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+                    if !this.dragging_thumb {
+                        return;
+                    }
+                    if event.pressed_button == Some(gpui_kit::MouseButton::Left) {
+                        this.drag_to(f32::from(event.position.y), window, cx);
+                    } else {
+                        this.dragging_thumb = false; // released outside the window
+                        cx.notify();
+                    }
+                }),
+            )
+            .on_mouse_up(
+                gpui_kit::MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.dragging_thumb = false;
+                    cx.notify();
+                }),
+            )
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(colors.panel_bg)
+            .text_color(colors.text)
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .p(px(PADDING))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .font_family(mono)
+                            .text_size(mono_size)
+                            .line_height(px(LINE_HEIGHT))
+                            .children(row_elements),
+                    )
+                    .child(self.render_scrollbar(cx)),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "viewer-status".into())
+                    .h(px(STATUS_HEIGHT))
+                    .flex_none()
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .bg(colors.header_bg)
+                    .text_size(px(12.0))
+                    .text_color(colors.text_dim)
+                    .child(match error {
+                        Some(e) => div()
+                            .text_color(colors.error)
+                            .child(format!("Read error: {e}")),
+                        None => div().child(status),
+                    }),
+            )
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests;

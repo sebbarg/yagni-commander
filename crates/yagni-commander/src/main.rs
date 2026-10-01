@@ -5,6 +5,8 @@ mod columns;
 mod file_manager;
 mod panel_view;
 mod theme;
+mod viewer_view;
+mod windows;
 
 use gpui_kit::{App, AppContext, Global, Menu, MenuItem, WindowOptions};
 use yagni_commander_core::{Commander, Config, oplog, storage};
@@ -59,13 +61,6 @@ fn main() {
         // gpui has no built-in quit: handle it and expose it in the menu bar.
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.set_menus([Menu::new("yagni-commander").items([MenuItem::action("Quit", Quit)])]);
-        // Keep macOS from leaving a windowless process behind.
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
 
         let options = WindowOptions {
             window_bounds: Some(app_state.initial_bounds(cx)),
@@ -80,10 +75,11 @@ fn main() {
 
         let commander = cx.new(|_| commander);
         // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
-        gpui_kit::open_window(options, cx, |window, cx| {
+        let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
             cx.new(|cx| FileManager::new(commander, notice, window, cx))
         })
         .expect("failed to open window");
+        windows::close_all_when_main_closes(main_window, cx).detach();
         cx.activate(true);
     });
 }

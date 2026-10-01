@@ -36,9 +36,33 @@ actions!(
         ToggleHidden,
         ButtonTest,
         CancelSearch,
+        View,
         Quit
     ]
 );
+
+/// Key context of a viewer window.
+pub const VIEWER_CONTEXT: &str = "Viewer";
+
+/// Viewer actions; a module of their own because some names repeat the file
+/// manager's.
+pub mod viewer {
+    gpui_kit::actions!(
+        viewer,
+        [
+            Close,
+            LineUp,
+            LineDown,
+            PageUp,
+            PageDown,
+            Start,
+            End,
+            ToggleWrap,
+            ScrollLeft,
+            ScrollRight
+        ]
+    );
+}
 
 actions!(
     button_row,
@@ -62,6 +86,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
         KeyBinding::new("f2", Rename, context),
+        KeyBinding::new("f3", View, context),
         KeyBinding::new("f4", Edit, context),
         KeyBinding::new("shift-f4", EditNewFile, context),
         KeyBinding::new("f5", Copy, context),
@@ -88,5 +113,24 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", TabPrev, row),
         KeyBinding::new("enter", PressButton, row),
         KeyBinding::new("space", PressButton, row),
+    ]);
+    let ctx = Some(VIEWER_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("escape", viewer::Close, ctx),
+        KeyBinding::new("q", viewer::Close, ctx),
+        // Without a window manager (or where it doesn't take Alt-F4), close
+        // only this window instead of quitting the app.
+        KeyBinding::new("alt-f4", viewer::Close, ctx),
+        KeyBinding::new("up", viewer::LineUp, ctx),
+        KeyBinding::new("down", viewer::LineDown, ctx),
+        KeyBinding::new("pageup", viewer::PageUp, ctx),
+        KeyBinding::new("pagedown", viewer::PageDown, ctx),
+        KeyBinding::new("home", viewer::Start, ctx),
+        KeyBinding::new("ctrl-home", viewer::Start, ctx),
+        KeyBinding::new("end", viewer::End, ctx),
+        KeyBinding::new("ctrl-end", viewer::End, ctx),
+        KeyBinding::new("w", viewer::ToggleWrap, ctx),
+        KeyBinding::new("left", viewer::ScrollLeft, ctx),
+        KeyBinding::new("right", viewer::ScrollRight, ctx),
     ]);
 }

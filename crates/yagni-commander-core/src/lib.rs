@@ -15,6 +15,7 @@ mod panel;
 mod quick_search;
 mod sort;
 pub mod storage;
+pub mod viewer;
 
 pub use commander::{Command, Commander, Outcome, Side};
 pub use config::Config;
