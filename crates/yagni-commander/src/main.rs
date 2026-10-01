@@ -26,18 +26,17 @@ fn main() {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let app_state = AppState::load();
-    let (left, right) = app_state.state.startup_dirs(&args, &storage::home_dir());
-    let mut commander = match Commander::new(&left, &right, app_state.state.show_hidden) {
-        Ok(commander) => commander,
-        Err(e) => {
-            eprintln!(
-                "yagni-commander: cannot open {} / {}: {e}",
-                left.display(),
-                right.display()
-            );
+    // Folders given on the command line must exist; the user typed them.
+    // (Saved folders are not checked: an offline mount would block here.)
+    for arg in &args {
+        if !std::path::Path::new(arg).is_dir() {
+            eprintln!("yagni-commander: not a directory: {arg}");
             std::process::exit(1);
         }
-    };
+    }
+    let home = storage::home_dir();
+    let (left, right) = app_state.state.startup_dirs(&args, &home);
+    let mut commander = Commander::start(left, right, app_state.state.show_hidden, home);
     if let Some(active) = app_state.state.active {
         commander.set_active(active);
     }

@@ -9,6 +9,7 @@ use yagni_commander_core::{Command, Commander, Side};
 
 mod commands;
 mod file_ops;
+mod loads;
 
 use crate::actions::{
     Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
@@ -56,6 +57,12 @@ pub struct FileManager {
     job: Option<file_ops::RunningJob>,
     /// What F8 uses. Tests replace it so they never touch the real trash.
     trash: yagni_commander_core::file_ops::TrashFn,
+    /// Runs directory reads; `None` reads them inline (tests).
+    load: Option<loads::LoadFn>,
+    /// Directory reads in progress.
+    loads: Vec<loads::RunningLoad>,
+    /// Whether the timer that collects their results is running.
+    polling_loads: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -70,6 +77,7 @@ impl FileManager {
         let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
         let subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
+                this.start_loads(window, cx);
                 AppState::remember_panels(&commander, cx);
                 this.update_title(window, cx);
                 cx.notify();
@@ -94,9 +102,14 @@ impl FileManager {
             notice: notice.map(Into::into),
             job: None,
             trash: yagni_commander_core::file_ops::system_trash,
+            load: Some(loads::spawn_load),
+            loads: Vec::new(),
+            polling_loads: false,
             _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
+        // Startup's reads: the observer above starts them.
+        this.commander.update(cx, |_, cx| cx.notify());
         this
     }
 
@@ -140,6 +153,23 @@ impl FileManager {
         if !searching {
             self.execute(otherwise, cx);
         }
+    }
+
+    /// Escape: closes the quick search box, else stops loading the active
+    /// panel (see `Commander::cancel_load`).
+    fn escape(&mut self, cx: &mut Context<Self>) {
+        self.commander.update(cx, |c, cx| {
+            let active = c.active();
+            if c.search_cancel() || c.cancel_load(active) {
+                cx.notify();
+            }
+        });
+    }
+
+    /// Whether the active panel is reading a folder; its dialogs and file
+    /// operations wait until it is done.
+    fn active_loading(&self, cx: &App) -> bool {
+        self.active_panel(cx).loading().is_some()
     }
 
     fn toggle_hidden(&mut self, cx: &mut Context<Self>) {
@@ -222,7 +252,7 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &CursorDown, _, cx| {
                 this.search_or(|c| c.search_step(true), Command::CursorDown, cx)
             }))
-            .on_action(cx.listener(|this, _: &CancelSearch, _, cx| this.end_search(cx)))
+            .on_action(cx.listener(|this, _: &CancelSearch, _, cx| this.escape(cx)))
             .on_action(
                 cx.listener(|this, _: &CursorHome, _, cx| this.execute(Command::CursorHome, cx)),
             )

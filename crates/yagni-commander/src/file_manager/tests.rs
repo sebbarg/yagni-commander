@@ -1,15 +1,8 @@
 use super::*;
 use gpui_kit::{TestAppContext, VisualTestContext};
 
-/// A file manager window on a directory with dirs `a`, `b`, file `f` and
-/// hidden file `.dot` (not shown), using the default keymap.
-fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
-    let tmp = tempfile::tempdir().unwrap();
-    std::fs::create_dir(tmp.path().join("a")).unwrap();
-    std::fs::create_dir(tmp.path().join("b")).unwrap();
-    std::fs::write(tmp.path().join("f"), b"").unwrap();
-    std::fs::write(tmp.path().join(".dot"), b"").unwrap();
-
+/// The globals and keymap a file manager window needs.
+fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.set_global(Theme::default());
@@ -17,16 +10,33 @@ fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Commander>, &mut 
         cx.set_global(crate::CurrentConfig(Default::default()));
         crate::actions::bind_default_keys(cx);
     });
+}
+
+/// A file manager window on `commander`, wrapped in Root like the real
+/// window so dialogs and notifications work. Reads run on threads.
+fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut VisualTestContext {
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
+        gpui_kit::base::Root::new(view, window, cx)
+    });
+    cx
+}
+
+/// A file manager window on a directory with dirs `a`, `b`, file `f` and
+/// hidden file `.dot` (not shown), using the default keymap. Directory reads
+/// run inline, so keys take effect at once.
+fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("a")).unwrap();
+    std::fs::create_dir(tmp.path().join("b")).unwrap();
+    std::fs::write(tmp.path().join("f"), b"").unwrap();
+    std::fs::write(tmp.path().join(".dot"), b"").unwrap();
+
+    setup(cx);
     let commander = Commander::new(tmp.path(), tmp.path(), false).unwrap();
     let commander = cx.new(|_| commander);
-    // Wrapped in Root like the real window, so dialogs and notifications work.
-    let (_, cx) = cx.add_window_view({
-        let commander = commander.clone();
-        |window, cx| {
-            let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
-            gpui_kit::base::Root::new(view, window, cx)
-        }
-    });
+    let cx = window_on(commander.clone(), cx);
+    file_manager(cx).update(cx, |this, _| this.load = None);
     (tmp, commander, cx)
 }
 
@@ -1115,4 +1125,209 @@ fn panel_paths_and_active_side_are_remembered(cx: &mut TestAppContext) {
         state(cx),
         (root, Some(tmp.path().join("a")), Some(Side::Right))
     );
+}
+
+// Loads that wait while a file named `hold` exists in the folder being read,
+// so a test can keep a panel loading.
+
+fn held_load(
+    request: yagni_commander_core::LoadRequest,
+) -> std::sync::mpsc::Receiver<std::io::Result<yagni_commander_core::Listing>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hold = request.path.join("hold");
+        let start = std::time::Instant::now();
+        while hold.exists() && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let _ = tx.send(yagni_commander_core::read_listing(&request));
+    });
+    rx
+}
+
+fn use_held_loads(cx: &mut VisualTestContext) {
+    file_manager(cx).update(cx, |this, _| this.load = Some(held_load));
+}
+
+/// Enters "a" while `a/hold` keeps the load pending.
+fn enter_held_a(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
+    use_held_loads(cx);
+    std::fs::write(tmp.path().join("a/hold"), b"").unwrap();
+    cx.simulate_keystrokes("down enter");
+}
+
+fn release(tmp: &tempfile::TempDir) {
+    let _ = std::fs::remove_file(tmp.path().join("a/hold"));
+}
+
+fn loading(commander: &Entity<Commander>, cx: &VisualTestContext) -> bool {
+    commander.read_with(cx, |c, _| c.panel(Side::Left).loading().is_some())
+}
+
+#[gpui_kit::test]
+fn a_slow_folder_keeps_the_old_listing_until_it_is_read(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    assert!(loading(&commander, cx));
+    cx.simulate_keystrokes("down");
+    assert_eq!(
+        cursor(&commander, Side::Left, cx),
+        1,
+        "keys for the loading panel wait"
+    );
+    release(&tmp);
+    wait_until(cx, |cx| {
+        path(&commander, Side::Left, cx) == tmp.path().join("a")
+    });
+    assert!(!loading(&commander, cx));
+}
+
+#[gpui_kit::test]
+fn escape_cancels_a_load(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    cx.simulate_keystrokes("escape");
+    assert!(!loading(&commander, cx));
+    release(&tmp);
+    for _ in 0..5 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert_eq!(
+        path(&commander, Side::Left, cx),
+        tmp.path(),
+        "the late result is dropped"
+    );
+}
+
+#[gpui_kit::test]
+fn tab_and_the_other_panel_work_while_one_loads(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    cx.simulate_keystrokes("tab down");
+    commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Right));
+    assert_eq!(cursor(&commander, Side::Right, cx), 1);
+    release(&tmp);
+    wait_until(cx, |cx| {
+        path(&commander, Side::Left, cx) == tmp.path().join("a")
+    });
+}
+
+#[gpui_kit::test]
+fn dialogs_wait_while_the_panel_loads(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    for key in ["f2", "f5", "f6", "f7", "f8", "shift-f8", "f3"] {
+        cx.simulate_keystrokes(key);
+        assert!(!dialog_open(cx), "{key}");
+    }
+    assert_eq!(viewers(cx), 0);
+    release(&tmp);
+}
+
+fn dead_load(
+    request: yagni_commander_core::LoadRequest,
+) -> std::sync::mpsc::Receiver<std::io::Result<yagni_commander_core::Listing>> {
+    drop(request);
+    std::sync::mpsc::channel().1 // sender dropped: like a thread that never started
+}
+
+#[gpui_kit::test]
+fn a_loader_that_dies_reports_an_error(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    file_manager(cx).update(cx, |this, _| this.load = Some(dead_load));
+    cx.simulate_keystrokes("down enter");
+    wait_until(cx, |cx| !loading(&commander, cx));
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    assert!(commander.read_with(cx, |c, _| c.error().is_some()));
+}
+
+#[gpui_kit::test]
+fn the_loading_indicator_shows_after_a_moment(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    assert!(
+        bounds(cx, "loading-left".into()).is_none(),
+        "not right away"
+    );
+    wait_until(cx, |cx| bounds(cx, "loading-left".into()).is_some());
+    release(&tmp);
+    wait_until(cx, |cx| {
+        path(&commander, Side::Left, cx) == tmp.path().join("a")
+    });
+    assert!(bounds(cx, "loading-left".into()).is_none());
+}
+
+#[test]
+fn loading_text_names_the_folder_and_the_count() {
+    assert_eq!(
+        crate::panel_view::loading_text(std::path::Path::new("/mnt/nas"), 12),
+        "Loading /mnt/nas... 12 entries"
+    );
+}
+
+#[gpui_kit::test]
+fn startup_reads_both_panels_in_the_background(cx: &mut TestAppContext) {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("kept")).unwrap();
+    setup(cx);
+    let commander = Commander::start(
+        tmp.path().join("kept"),
+        tmp.path().join("gone"),
+        false,
+        tmp.path().to_path_buf(),
+    );
+    let commander = cx.new(|_| commander);
+    let cx = window_on(commander.clone(), cx);
+    wait_until(cx, |cx| {
+        commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).is_loaded() && c.panel(Side::Right).is_loaded()
+        })
+    });
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("kept"));
+    assert_eq!(
+        path(&commander, Side::Right, cx),
+        tmp.path(),
+        "fell back to the parent"
+    );
+}
+
+#[gpui_kit::test]
+fn a_long_load_does_not_redraw_without_news(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    enter_held_a(&tmp, cx);
+    wait_until(cx, |cx| bounds(cx, "loading-left".into()).is_some());
+    let notified = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _watch = cx.update(|_, cx| {
+        let notified = notified.clone();
+        cx.observe(&commander, move |_, _| notified.set(notified.get() + 1))
+    });
+    // Half a second with no new entries (the read waits on `hold`).
+    for _ in 0..50 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+    assert!(notified.get() <= 1, "{} redraws", notified.get());
+    release(&tmp);
+    wait_until(cx, |cx| {
+        path(&commander, Side::Left, cx) == tmp.path().join("a")
+    });
+}
+
+#[gpui_kit::test]
+fn copy_and_move_wait_while_the_other_panel_loads(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    use_held_loads(cx);
+    std::fs::write(tmp.path().join("a/hold"), b"").unwrap();
+    cx.simulate_keystrokes("tab down enter tab"); // right loads "a"; left active
+    assert!(commander.read_with(cx, |c, _| c.panel(Side::Right).loading().is_some()));
+    for key in ["f5", "f6"] {
+        cx.simulate_keystrokes(key);
+        assert!(!dialog_open(cx), "{key}");
+    }
+    release(&tmp);
 }

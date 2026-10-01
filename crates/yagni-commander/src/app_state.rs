@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Bounds, Entity, Global, Pixels, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
-use yagni_commander_core::{Commander, Side, nearest_dir, storage};
+use yagni_commander_core::{Commander, Side, storage};
 
 const DEFAULT_WIDTH: f32 = 1200.0;
 const DEFAULT_HEIGHT: f32 = 800.0;
@@ -38,10 +38,10 @@ pub struct State {
 
 impl State {
     /// The folders to open: command-line arguments first (left, then
-    /// right), else the remembered folders. A remembered folder that is gone
-    /// or unreadable falls back to its nearest readable parent, then `home`.
+    /// right), else the remembered folders, else `home`. Nothing is read
+    /// here; the background read falls back to a parent or home if needed.
     pub fn startup_dirs(&self, args: &[String], home: &Path) -> (PathBuf, PathBuf) {
-        let saved = |dir: &Option<PathBuf>| nearest_dir(dir.as_deref().unwrap_or(home), home);
+        let saved = |dir: &Option<PathBuf>| dir.clone().unwrap_or_else(|| home.to_path_buf());
         let left = args
             .first()
             .map_or_else(|| saved(&self.left), PathBuf::from);
@@ -266,20 +266,15 @@ mod tests {
     }
 
     #[test]
-    fn startup_uses_saved_paths_with_fallback() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let kept = tmp.path().join("kept");
-        std::fs::create_dir(&home).unwrap();
-        std::fs::create_dir(&kept).unwrap();
+    fn startup_uses_saved_paths_without_reading_them() {
         let state = State {
-            left: Some(kept.clone()),
-            right: Some(kept.join("deleted/deeper")),
+            left: Some("/net/nas/gone".into()),
+            right: Some("/b".into()),
             ..State::default()
         };
-        let (left, right) = state.startup_dirs(&[], &home);
-        assert_eq!(left, kept);
-        assert_eq!(right, kept, "a deleted folder falls back to its parent");
+        // Not checked here: the background read falls back if needed.
+        let (left, right) = state.startup_dirs(&[], Path::new("/home/u"));
+        assert_eq!((left, right), ("/net/nas/gone".into(), "/b".into()));
     }
 
     #[test]

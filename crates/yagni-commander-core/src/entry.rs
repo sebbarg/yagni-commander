@@ -4,6 +4,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,8 +65,9 @@ pub(crate) fn is_hidden_name(name: &OsStr) -> bool {
 /// A ".." entry is included unless `dir` is a filesystem root.
 /// Entries whose metadata cannot be read are still listed, as files without size.
 /// Symlinks report kind, size and modification time of their target, but mode
-/// and owner of the link itself, like `ls -l`.
-pub(crate) fn read_entries(dir: &Path) -> io::Result<Vec<Entry>> {
+/// and owner of the link itself, like `ls -l`. `progress` counts the entries
+/// read so far (for the loading indicator).
+pub(crate) fn read_entries(dir: &Path, progress: &AtomicUsize) -> io::Result<Vec<Entry>> {
     let mut entries = Vec::new();
     let mut owners = OwnerCache::default();
     if dir.parent().is_some() {
@@ -74,6 +76,7 @@ pub(crate) fn read_entries(dir: &Path) -> io::Result<Vec<Entry>> {
 
     for dirent in fs::read_dir(dir)? {
         let Ok(dirent) = dirent else { continue };
+        progress.fetch_add(1, Ordering::Relaxed);
         let name = dirent.file_name();
         let label = name.to_string_lossy().into_owned();
         let link_meta = dirent.metadata().ok();
@@ -163,7 +166,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join(".dot"), b"").unwrap();
         fs::write(tmp.path().join("plain.txt"), b"").unwrap();
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let hidden = |n: &str| entries.iter().find(|e| e.label == n).unwrap().is_hidden();
         assert!(hidden(".dot"));
         assert!(!hidden("plain.txt"));
@@ -172,7 +175,7 @@ mod tests {
 
     #[test]
     fn root_has_no_parent_entry() {
-        let entries = read_entries(Path::new("/")).unwrap();
+        let entries = read_entries(Path::new("/"), &AtomicUsize::new(0)).unwrap();
         assert!(entries.iter().all(|e| e.kind != EntryKind::Parent));
     }
 
@@ -184,7 +187,7 @@ mod tests {
         std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("link")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("nope"), tmp.path().join("broken")).unwrap();
 
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let find = |n: &str| entries.iter().find(|e| e.label == n).unwrap();
         assert_eq!(find("link").kind, EntryKind::Dir);
         assert!(find("link").is_symlink);
@@ -202,7 +205,7 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
         std::os::unix::fs::symlink(&path, tmp.path().join("link")).unwrap();
 
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let find = |n: &str| entries.iter().find(|e| e.label == n).unwrap();
         assert_eq!(find("f").mode.unwrap() & 0o7777, 0o640);
         assert!(find("f").owner.as_deref().unwrap().contains(':'));
@@ -213,7 +216,7 @@ mod tests {
     #[test]
     fn missing_directory_is_an_error() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(read_entries(&tmp.path().join("missing")).is_err());
+        assert!(read_entries(&tmp.path().join("missing"), &AtomicUsize::new(0)).is_err());
     }
 
     #[test]
@@ -222,7 +225,7 @@ mod tests {
         fs::create_dir(tmp.path().join("dir")).unwrap();
         fs::write(tmp.path().join("five"), b"12345").unwrap();
 
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         assert_eq!(entries.len(), 3);
         let find = |n: &str| entries.iter().find(|e| e.label == n).unwrap();
         assert_eq!(find("..").kind, EntryKind::Parent);
@@ -238,7 +241,7 @@ mod tests {
     fn sort_name_is_lowercased_label() {
         let tmp = tempfile::tempdir().unwrap();
         File::create(tmp.path().join("MiXeD")).unwrap();
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let e = entries.iter().find(|e| e.label == "MiXeD").unwrap();
         assert_eq!(e.sort_name, "mixed");
     }
@@ -249,7 +252,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         fs::write(tmp.path().join("target"), b"1234567").unwrap();
         std::os::unix::fs::symlink(tmp.path().join("target"), tmp.path().join("link")).unwrap();
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let link = entries.iter().find(|e| e.label == "link").unwrap();
         assert_eq!(link.size, Some(7));
         assert!(link.is_symlink);
@@ -261,7 +264,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         File::create(tmp.path().join("a")).unwrap();
         File::create(tmp.path().join("b")).unwrap();
-        let entries = read_entries(tmp.path()).unwrap();
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
         let owner = |n: &str| {
             entries
                 .iter()

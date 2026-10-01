@@ -2,7 +2,7 @@
 //! and a summary footer. Reads its panel from the shared [`Commander`].
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
@@ -139,6 +139,11 @@ impl Render for PanelView {
         let commander = self.commander.read(cx);
         let panel = commander.panel(self.side);
         let is_active = commander.active() == self.side;
+        // Shown once a read has taken a while (see `file_manager/loads.rs`).
+        let loading = panel
+            .loading()
+            .filter(|l| l.visible)
+            .map(|l| loading_text(&l.path, l.entries_read()));
 
         let header = div()
             .h(px(HEADER_HEIGHT))
@@ -156,13 +161,19 @@ impl Render for PanelView {
             } else {
                 colors.text_dim
             })
-            .child(
-                div()
+            .child(match &loading {
+                Some(text) => div()
+                    .debug_selector(|| format!("loading-{}", side_name(self.side)))
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_start()
+                    .child(text.clone()),
+                None => div()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis_start()
                     .child(panel.path().display().to_string()),
-            );
+            });
 
         // The quick search box sits in the active panel's footer while open.
         let search = commander.search().filter(|_| is_active).map(|prefix| {
@@ -213,7 +224,8 @@ impl Render for PanelView {
             cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
         )
         .track_scroll(&self.scroll)
-        .flex_1();
+        .flex_1()
+        .when(loading.is_some(), |list| list.opacity(0.5));
 
         div()
             .size_full()
@@ -295,6 +307,11 @@ fn footer_text(summary: &Summary) -> String {
             format_size(summary.bytes)
         )
     }
+}
+
+/// Header text while a folder takes a while to read.
+pub(crate) fn loading_text(path: &Path, entries: usize) -> String {
+    format!("Loading {}... {entries} entries", path.display())
 }
 
 /// For test selectors.

@@ -2,8 +2,11 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
+use crate::listing::Listing;
 use crate::sort::{Sort, SortKey, sort_entries};
 
 /// One side of the commander: a directory listing with a cursor.
@@ -25,6 +28,13 @@ pub struct Panel {
     sort: Sort,
     /// Names of selected entries. Kept by name so it survives re-sorting.
     selection: HashSet<OsString>,
+    /// The folder being read for this panel, if any.
+    loading: Option<Loading>,
+    /// False until the first listing arrives (startup).
+    loaded: bool,
+    /// A re-read was asked for while another read was pending: the folder
+    /// may have changed after that read listed it.
+    pub(crate) stale: bool,
 }
 
 /// Counts and sizes for the panel footer. Directory sizes are unknown, so
@@ -49,7 +59,43 @@ impl Summary {
     }
 }
 
-/// What happened when the entry under the cursor was activated.
+/// A directory a panel should show next, once read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Navigation {
+    pub target: PathBuf,
+    /// Entry to put the cursor on.
+    pub select: Option<OsString>,
+}
+
+/// What Enter on the cursor entry leads to.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Enter {
+    Dir(Navigation),
+    File(PathBuf),
+    None,
+}
+
+/// A directory being read for a panel. The panel keeps showing its old
+/// listing meanwhile.
+#[derive(Debug)]
+pub struct Loading {
+    pub(crate) id: u64,
+    pub path: PathBuf,
+    pub(crate) select: Option<OsString>,
+    pub progress: Arc<AtomicUsize>,
+    /// Set once the load took long enough to show the indicator.
+    pub visible: bool,
+}
+
+impl Loading {
+    pub fn entries_read(&self) -> usize {
+        self.progress.load(Ordering::Relaxed)
+    }
+}
+
+/// What happened when the entry under the cursor was activated (the tests'
+/// synchronous wrappers).
+#[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Activation {
     /// The panel now shows a different directory.
@@ -61,20 +107,108 @@ pub(crate) enum Activation {
 }
 
 impl Panel {
-    pub(crate) fn open(path: impl AsRef<Path>, show_hidden: bool) -> io::Result<Self> {
-        let path = std::path::absolute(path)?;
-        let sort = Sort::default();
-        let (mut entries, hidden) = split_hidden(read_entries(&path)?, show_hidden);
-        sort_entries(&mut entries, sort);
-        Ok(Self {
+    /// A panel on `path` with no listing yet (startup).
+    pub(crate) fn empty(path: PathBuf, show_hidden: bool) -> Self {
+        Self {
             path,
-            entries,
-            hidden,
+            entries: Vec::new(),
+            hidden: Vec::new(),
             show_hidden,
             cursor: 0,
-            sort,
+            sort: Sort::default(),
             selection: HashSet::new(),
+            loading: None,
+            loaded: false,
+            stale: false,
+        }
+    }
+
+    /// Reads `path` right away (tests and [`crate::Commander::new`]).
+    pub(crate) fn open(path: impl AsRef<Path>, show_hidden: bool) -> io::Result<Self> {
+        let path = std::path::absolute(path)?;
+        let entries = read_entries(&path, &AtomicUsize::new(0))?;
+        let mut panel = Self::empty(path.clone(), show_hidden);
+        panel.apply(Listing { path, entries }, None);
+        Ok(panel)
+    }
+
+    pub fn loading(&self) -> Option<&Loading> {
+        self.loading.as_ref()
+    }
+
+    pub(crate) fn loading_mut(&mut self) -> Option<&mut Loading> {
+        self.loading.as_mut()
+    }
+
+    pub(crate) fn set_loading(&mut self, loading: Loading) {
+        self.loading = Some(loading);
+    }
+
+    pub(crate) fn take_loading(&mut self) -> Option<Loading> {
+        self.loading.take()
+    }
+
+    /// Whether a listing has arrived yet (false only at startup).
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+    }
+
+    pub(crate) fn enter_target(&self) -> Enter {
+        let Some(entry) = self.cursor_entry() else {
+            return Enter::None;
+        };
+        match entry.kind {
+            EntryKind::Parent => self.parent_target().map_or(Enter::None, Enter::Dir),
+            EntryKind::Dir => Enter::Dir(Navigation {
+                target: self.path.join(&entry.name),
+                select: None,
+            }),
+            EntryKind::File => Enter::File(self.path.join(&entry.name)),
+        }
+    }
+
+    /// Going up: the parent, with the cursor on the folder we came from.
+    pub(crate) fn parent_target(&self) -> Option<Navigation> {
+        let parent = self.path.parent()?.to_path_buf();
+        Some(Navigation {
+            target: parent,
+            select: self.path.file_name().map(|n| n.to_os_string()),
         })
+    }
+
+    /// Re-reading this folder, with the cursor on `select` or where it is.
+    pub(crate) fn reload_target(&self, select: Option<&OsStr>) -> Navigation {
+        let keep = self.cursor_entry().map(|e| e.name.clone());
+        Navigation {
+            target: self.path.clone(),
+            select: select.map(OsStr::to_os_string).or(keep),
+        }
+    }
+
+    /// Shows a finished read, with the cursor on `select` if it is there.
+    pub(crate) fn apply(&mut self, listing: Listing, select: Option<&OsStr>) {
+        let target = listing.path;
+        let (mut entries, hidden) = split_hidden(listing.entries, self.show_hidden);
+        sort_entries(&mut entries, self.sort);
+        let same_dir = target == self.path && self.loaded;
+        let cursor = select
+            .and_then(|name| entries.iter().position(|e| e.name == name))
+            .unwrap_or(if same_dir {
+                self.cursor.min(entries.len().saturating_sub(1))
+            } else {
+                0
+            });
+        if same_dir {
+            self.selection
+                .retain(|name| entries.iter().any(|e| &e.name == name));
+        } else {
+            self.selection.clear();
+        }
+        self.path = target;
+        self.entries = entries;
+        self.hidden = hidden;
+        self.cursor = cursor;
+        self.loaded = true;
     }
 
     pub fn shows_hidden(&self) -> bool {
@@ -258,19 +392,6 @@ impl Panel {
         }
     }
 
-    /// Re-reads the directory, keeping the cursor on the same entry (or on
-    /// `select` if given) and the selection of entries that still exist.
-    pub(crate) fn reload(&mut self, select: Option<&OsStr>) -> io::Result<()> {
-        let keep = self.cursor_entry().map(|e| e.name.clone());
-        let select = select.or(keep.as_deref());
-        self.navigate(self.path.clone(), select)
-    }
-
-    /// Shows `path`, with the cursor on `select` if present.
-    pub(crate) fn show(&mut self, path: PathBuf, select: Option<&OsStr>) -> io::Result<()> {
-        self.navigate(path, select)
-    }
-
     /// The entry under the cursor.
     pub fn cursor_entry(&self) -> Option<&Entry> {
         self.entries.get(self.cursor)
@@ -284,70 +405,56 @@ impl Panel {
     pub(crate) fn set_cursor(&mut self, index: usize) {
         self.cursor = index.min(self.entries.len().saturating_sub(1));
     }
-
-    /// Enter: descend into a directory, go up on "..", or report a file.
-    pub(crate) fn activate(&mut self) -> io::Result<Activation> {
-        let Some(entry) = self.cursor_entry() else {
-            return Ok(Activation::None);
-        };
-        match entry.kind {
-            EntryKind::Parent => self.go_up().map(|_| Activation::Navigated),
-            EntryKind::Dir => {
-                let target = self.path.join(&entry.name);
-                self.navigate(target, None).map(|_| Activation::Navigated)
-            }
-            EntryKind::File => Ok(Activation::File(self.path.join(&entry.name))),
-        }
-    }
-
-    /// Goes to the parent directory and puts the cursor on the directory we left.
-    /// Does nothing at the filesystem root.
-    pub(crate) fn go_up(&mut self) -> io::Result<()> {
-        let Some(parent) = self.path.parent().map(Path::to_path_buf) else {
-            return Ok(());
-        };
-        let came_from = self.path.file_name().map(|n| n.to_os_string());
-        self.navigate(parent, came_from.as_deref())
-    }
-
-    /// Loads `target` and only commits the change if reading succeeded, so a
-    /// failed navigation leaves the panel untouched. Changing directory clears
-    /// the selection; re-reading the same one keeps names that still exist.
-    ///
-    /// If `select` isn't visible, the cursor goes to the top of a new
-    /// directory, or stays at the same row when re-reading the same one (the
-    /// entry was deleted, or renamed to a hidden name).
-    fn navigate(&mut self, target: PathBuf, select: Option<&OsStr>) -> io::Result<()> {
-        let (mut entries, hidden) = split_hidden(read_entries(&target)?, self.show_hidden);
-        sort_entries(&mut entries, self.sort);
-        let same_dir = target == self.path;
-        let cursor = select
-            .and_then(|name| entries.iter().position(|e| e.name == name))
-            .unwrap_or(if same_dir {
-                self.cursor.min(entries.len().saturating_sub(1))
-            } else {
-                0
-            });
-        if same_dir {
-            self.selection
-                .retain(|name| entries.iter().any(|e| &e.name == name));
-        } else {
-            self.selection.clear();
-        }
-        self.path = target;
-        self.entries = entries;
-        self.hidden = hidden;
-        self.cursor = cursor;
-        Ok(())
-    }
 }
 
-/// Splits `entries` into (visible, hidden). With `show_hidden` everything is visible.
 fn split_hidden(entries: Vec<Entry>, show_hidden: bool) -> (Vec<Entry>, Vec<Entry>) {
     if show_hidden {
         (entries, Vec::new())
     } else {
         entries.into_iter().partition(|e| !e.is_hidden())
+    }
+}
+
+#[cfg(test)]
+impl Panel {
+    /// Reads `nav` now and shows it, like a finished load.
+    fn follow(&mut self, nav: Navigation) -> io::Result<()> {
+        let entries = read_entries(&nav.target, &AtomicUsize::new(0))?;
+        self.apply(
+            Listing {
+                path: nav.target,
+                entries,
+            },
+            nav.select.as_deref(),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn activate(&mut self) -> io::Result<Activation> {
+        match self.enter_target() {
+            Enter::Dir(nav) => self.follow(nav).map(|()| Activation::Navigated),
+            Enter::File(path) => Ok(Activation::File(path)),
+            Enter::None => Ok(Activation::None),
+        }
+    }
+
+    pub(crate) fn go_up(&mut self) -> io::Result<()> {
+        match self.parent_target() {
+            Some(nav) => self.follow(nav),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn reload(&mut self, select: Option<&OsStr>) -> io::Result<()> {
+        let nav = self.reload_target(select);
+        self.follow(nav)
+    }
+
+    pub(crate) fn show(&mut self, path: PathBuf, select: Option<&OsStr>) -> io::Result<()> {
+        self.follow(Navigation {
+            target: path,
+            select: select.map(OsStr::to_os_string),
+        })
     }
 }
 
@@ -487,15 +594,7 @@ mod tests {
 
     #[test]
     fn empty_listing_has_no_selection_and_activates_to_none() {
-        let mut panel = Panel {
-            path: PathBuf::from("/"),
-            entries: Vec::new(),
-            hidden: Vec::new(),
-            show_hidden: true,
-            cursor: 0,
-            sort: Sort::default(),
-            selection: HashSet::new(),
-        };
+        let mut panel = Panel::empty(PathBuf::from("/"), true);
         assert!(panel.cursor_entry().is_none());
         panel.move_cursor(3);
         assert_eq!(panel.cursor(), 0);
@@ -645,7 +744,7 @@ mod tests {
         panel.select_all();
         fs::remove_dir(tmp.path().join("beta")).unwrap();
         let path = panel.path().to_path_buf();
-        panel.navigate(path, None).unwrap();
+        panel.show(path, None).unwrap();
         assert_eq!(selected_labels(&panel), ["alpha", "file.txt"]);
     }
 
@@ -881,5 +980,60 @@ mod tests {
         fs::remove_file(tmp.path().join("file.txt")).unwrap();
         panel.reload(None).unwrap();
         assert_eq!(panel.cursor_entry().unwrap().label, "alpha", "clamped");
+    }
+    #[test]
+    fn targets_describe_navigation_without_reading() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path(), true).unwrap();
+        select(&mut panel, "beta");
+        let Enter::Dir(nav) = panel.enter_target() else {
+            panic!("beta is a directory")
+        };
+        assert_eq!(nav.target, tmp.path().join("beta"));
+        assert_eq!(panel.path(), tmp.path(), "nothing read yet");
+        let up = panel.parent_target().unwrap();
+        assert_eq!(up.target, tmp.path().parent().unwrap());
+        assert_eq!(up.select.as_deref(), tmp.path().file_name());
+        let again = panel.reload_target(None);
+        assert_eq!(
+            (again.target, again.select),
+            (tmp.path().to_path_buf(), Some("beta".into()))
+        );
+    }
+
+    #[test]
+    fn an_empty_panel_is_not_loaded_until_a_listing_arrives() {
+        let tmp = fixture();
+        let mut panel = Panel::empty(tmp.path().to_path_buf(), true);
+        assert!(!panel.is_loaded());
+        assert!(panel.entries().is_empty());
+        let entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
+        panel.apply(
+            Listing {
+                path: tmp.path().to_path_buf(),
+                entries,
+            },
+            Some(OsStr::new("beta")),
+        );
+        assert!(panel.is_loaded());
+        assert_eq!(panel.cursor_entry().unwrap().label, "beta");
+    }
+
+    #[test]
+    fn loading_state_is_set_and_taken() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path(), true).unwrap();
+        let progress = Arc::new(AtomicUsize::new(7));
+        panel.set_loading(Loading {
+            id: 3,
+            path: tmp.path().join("beta"),
+            select: None,
+            progress,
+            visible: false,
+        });
+        assert_eq!(panel.loading().unwrap().entries_read(), 7);
+        panel.loading_mut().unwrap().visible = true;
+        assert!(panel.take_loading().unwrap().visible);
+        assert!(panel.loading().is_none());
     }
 }

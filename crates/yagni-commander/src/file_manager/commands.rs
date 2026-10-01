@@ -36,6 +36,9 @@ type Confirm = dyn Fn(&mut Window, &mut App) -> bool;
 impl FileManager {
     /// F2: rename the entry under the cursor.
     pub(super) fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         let panel = self.active_panel(cx);
         let Some(entry) = panel.cursor_entry().filter(|e| e.kind != EntryKind::Parent) else {
@@ -65,6 +68,9 @@ impl FileManager {
 
     /// F7: create a directory (nested paths like `a/b` allowed).
     pub(super) fn make_directory(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         self.prompt_name(
             Prompt {
@@ -88,6 +94,9 @@ impl FileManager {
     /// F4: open the entry under the cursor (or the directory, on "..") in
     /// the configured editor.
     pub(super) fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         let Some(editor) = configured_editor(window, cx) else {
             return;
@@ -101,6 +110,9 @@ impl FileManager {
     /// Shift-F4: create a file (or pick an existing one) and open it in the
     /// editor. Asks for the name only if an editor is configured.
     pub(super) fn edit_new_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         let Some(editor) = configured_editor(window, cx) else {
             return;
@@ -129,6 +141,9 @@ impl FileManager {
     /// ".." do nothing; files that can't be viewed (FIFOs, devices,
     /// unreadable files) show an error.
     pub(super) fn view_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         let panel = self.active_panel(cx);
         if panel

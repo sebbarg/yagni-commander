@@ -85,6 +85,14 @@ impl FileManager {
     /// F5 and F6: ask for the destination (the other panel's directory by
     /// default), then run the job.
     pub(super) fn copy_or_move(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        // The destination is the other panel's folder: wait for it too.
+        let other = self.commander.read(cx).active().other();
+        if self.commander.read(cx).panel(other).loading().is_some() {
+            return;
+        }
         self.end_search(cx);
         let (sources, dir, other_dir) = {
             let commander = self.commander.read(cx);
@@ -129,6 +137,9 @@ impl FileManager {
     /// F8 and Del: confirm, then move to the trash. Shift-F8 and Shift-Del
     /// (`Kind::Delete`): confirm, then delete permanently.
     pub(super) fn trash(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
         self.end_search(cx);
         let sources = {
             let commander = self.commander.read(cx);

@@ -157,19 +157,9 @@ pub(crate) fn make_directory(dir: &Path, relative: &str) -> io::Result<OsString>
     Ok(first_component(relative))
 }
 
-/// The first readable directory among `path` and its ancestors, else
-/// `home`. Used to reopen a remembered folder that may have been deleted or
-/// locked since.
-pub fn nearest_dir(path: &Path, home: &Path) -> PathBuf {
-    path.ancestors()
-        .find(|p| !p.as_os_str().is_empty() && std::fs::read_dir(p).is_ok())
-        .map_or_else(|| home.to_path_buf(), Path::to_path_buf)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn kind(result: io::Result<impl std::fmt::Debug>) -> io::ErrorKind {
         result.unwrap_err().kind()
@@ -327,47 +317,5 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
         assert!(!tmp.path().parent().unwrap().join("out").exists());
-    }
-
-    #[test]
-    fn nearest_dir_keeps_a_readable_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(nearest_dir(tmp.path(), Path::new("/home")), tmp.path());
-    }
-
-    #[test]
-    fn nearest_dir_walks_up_from_a_missing_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let gone = tmp.path().join("a/b/c");
-        std::fs::create_dir(tmp.path().join("a")).unwrap();
-        assert_eq!(nearest_dir(&gone, Path::new("/home")), tmp.path().join("a"));
-    }
-
-    #[test]
-    fn nearest_dir_skips_files_and_unreadable_directories() {
-        let tmp = tempfile::tempdir().unwrap();
-        let file = tmp.path().join("f");
-        std::fs::write(&file, b"").unwrap();
-        assert_eq!(nearest_dir(&file, Path::new("/home")), tmp.path());
-
-        let locked = tmp.path().join("locked");
-        std::fs::create_dir(&locked).unwrap();
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let readable = std::fs::read_dir(&locked).is_ok(); // root reads anything
-        let found = nearest_dir(&locked, Path::new("/home"));
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
-        if !readable {
-            assert_eq!(found, tmp.path());
-        }
-    }
-
-    #[test]
-    fn nearest_dir_falls_back_to_home() {
-        let home = tempfile::tempdir().unwrap();
-        assert_eq!(
-            nearest_dir(Path::new("relative/missing"), home.path()),
-            home.path()
-        );
-        assert_eq!(nearest_dir(Path::new(""), home.path()), home.path());
     }
 }

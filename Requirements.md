@@ -22,7 +22,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Settings page in the UI:
   - Path to the external editor (used by F4).
   - File name sorting: case sensitive or insensitive.
-- Changes take effect immediately, without restarting: from the settings page, and when the file is edited by hand (watch the file, or at least reload it on Ctrl-R). Today a restart is needed; fix before v1.
+- Changes made in the settings page take effect immediately. Hand edits of the file take effect on restart or Ctrl-R (which also re-reads the config); no file watcher (decided 2026-10-01: with a settings page, hand edits are rare). Both come with the settings page (step 8).
 - Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings page edits this file; editing it by hand also works.
 
 ### Window position and size, panel folders
@@ -42,6 +42,17 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 - Directories show as `[name]` (display only: sorting and quick search use the bare name). ".." has no brackets.
 - File icons in the lists (v2).
+
+### Directory loading
+
+- Directories are read off the UI thread, so a huge directory or a slow or hung network mount never freezes the app (decided 2026-10-01; the owner uses network mounts).
+- While a panel loads, it keeps showing its previous listing. A load that finishes within about 150 ms switches without any indicator. After that the panel header shows "Loading <path>... N entries" (a live count) and the old listing dims.
+- While loading, that panel accepts only Escape (cancel: stay on the old listing; at startup: go to the home folder) and Tab. Dialogs and file operations on the loading panel are ignored. Quit always works, and the other panel works normally.
+- A failed load leaves the panel where it was, with the error in the status line.
+- Startup loads in the background too, including the fallback for a missing remembered folder (nearest readable parent, then home). Folders given on the command line are checked before the window opens; one that is not a directory ends the app with an error.
+- A newer navigation replaces a pending one. A reload requested while a navigation is pending is dropped (the navigation brings a fresh listing anyway).
+- A read the operating system never returns (a dead NFS server) cannot be interrupted: Escape abandons it, and its thread ends when the read returns or the app exits.
+- Showing entries while a slow directory is still being read (a growing listing) is out of scope.
 
 ### Tabs (v2)
 

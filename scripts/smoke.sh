@@ -46,6 +46,8 @@ printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
 seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
 head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
+mkdir -p "$left/many"
+(cd "$left/many" && seq 1 150000 | xargs touch)
 
 pids=()
 cleanup() {
@@ -168,6 +170,14 @@ echo "Ctrl-. hidden files"
 keys ctrl+period
 shot 07-hidden-shown
 keys ctrl+period
+
+echo "a big folder loads in the background"
+typed many
+keys Return
+shot 08a-loading
+check "big folder opened" xdotool search --name "^$left/many - yagni-commander\$"
+keys BackSpace
+check "back in the left folder" xdotool search --name "^$left - yagni-commander\$"
 
 echo "F3 viewer"
 typed big

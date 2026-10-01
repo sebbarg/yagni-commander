@@ -2,10 +2,12 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 use crate::fs_ops;
+use crate::listing::{Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
-use crate::panel::{Activation, Panel};
+use crate::panel::{Enter, Loading, Navigation, Panel};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 
@@ -77,22 +79,211 @@ pub struct Commander {
     search: QuickSearch,
     /// Where file changes are logged, if logging is on.
     log: Option<Arc<OperationLog>>,
+    /// Where startup and Escape-at-startup fall back to.
+    home: PathBuf,
+    /// Id of the last load requested.
+    next_load: u64,
+    /// Loads the UI has not taken yet (see [`Commander::take_requests`]).
+    requests: Vec<LoadRequest>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadKind {
+    Navigate,
+    /// Same folder again; dropped while a navigation is pending.
+    Reload,
+    /// With the parents-then-home fallback.
+    Startup,
 }
 
 impl Commander {
+    /// Reads both folders right away (tests, tools). The app uses
+    /// [`Commander::start`], which reads in the background.
     pub fn new(
         left: impl AsRef<Path>,
         right: impl AsRef<Path>,
         show_hidden: bool,
     ) -> io::Result<Self> {
-        Ok(Self {
-            left: Panel::open(left, show_hidden)?,
-            right: Panel::open(right, show_hidden)?,
+        Ok(Self::with_panels(
+            Panel::open(left, show_hidden)?,
+            Panel::open(right, show_hidden)?,
+            crate::storage::home_dir(),
+        ))
+    }
+
+    /// Nothing is read yet: both panels ask for their folder (falling back
+    /// to its parents, then `home`). See [`Commander::take_requests`].
+    pub fn start(left: PathBuf, right: PathBuf, show_hidden: bool, home: PathBuf) -> Self {
+        let empty = |path: PathBuf| {
+            let path = std::path::absolute(&path).unwrap_or_else(|_| home.clone());
+            Panel::empty(path, show_hidden)
+        };
+        let mut commander = Self::with_panels(empty(left), empty(right), home.clone());
+        for side in [Side::Left, Side::Right] {
+            let target = commander.panel(side).path().to_path_buf();
+            commander.request(
+                side,
+                Navigation {
+                    target,
+                    select: None,
+                },
+                LoadKind::Startup,
+            );
+        }
+        commander
+    }
+
+    fn with_panels(left: Panel, right: Panel, home: PathBuf) -> Self {
+        Self {
+            left,
+            right,
             active: Side::Left,
             error: None,
             search: QuickSearch::default(),
             log: None,
-        })
+            home,
+            next_load: 0,
+            requests: Vec::new(),
+        }
+    }
+
+    fn request(&mut self, side: Side, nav: Navigation, kind: LoadKind) {
+        if kind == LoadKind::Reload && self.panel(side).loading().is_some() {
+            // Re-read once the pending read is done: it may list the folder
+            // before this change, or be cancelled, or fail.
+            self.panel_mut(side).stale = true;
+            return;
+        }
+        self.next_load += 1;
+        let id = self.next_load;
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.requests.push(LoadRequest {
+            id,
+            path: nav.target.clone(),
+            fallback: (kind == LoadKind::Startup).then(|| self.home.clone()),
+            progress: progress.clone(),
+        });
+        self.panel_mut(side).set_loading(Loading {
+            id,
+            path: nav.target,
+            select: nav.select,
+            progress,
+            visible: false,
+        });
+    }
+
+    /// The reads to run, oldest first. Requests replaced before they were
+    /// taken are left out.
+    pub fn take_requests(&mut self) -> Vec<LoadRequest> {
+        let requests = std::mem::take(&mut self.requests);
+        requests
+            .into_iter()
+            .filter(|r| self.is_pending(r.id))
+            .collect()
+    }
+
+    /// Entries read so far by load `id`, while it is pending.
+    pub fn panel_loading_count(&self, id: u64) -> Option<usize> {
+        let side = self.loading_side(id)?;
+        self.panel(side).loading().map(|l| l.entries_read())
+    }
+
+    /// Whether load `id` is still wanted by a panel.
+    pub fn is_pending(&self, id: u64) -> bool {
+        self.loading_side(id).is_some()
+    }
+
+    fn loading_side(&self, id: u64) -> Option<Side> {
+        [Side::Left, Side::Right]
+            .into_iter()
+            .find(|&side| self.panel(side).loading().is_some_and(|l| l.id == id))
+    }
+
+    /// Shows a finished read in the panel that asked for it. Returns false
+    /// for a stale result (cancelled or replaced), which is dropped.
+    pub fn finish_load(&mut self, id: u64, result: io::Result<Listing>) -> bool {
+        let Some(side) = self.loading_side(id) else {
+            return false;
+        };
+        let panel = self.panel_mut(side);
+        let loading = panel.take_loading().expect("loading_side found it");
+        match result {
+            Ok(listing) => panel.apply(listing, loading.select.as_deref()),
+            Err(e) => self.error = Some(format!("{}: {e}", loading.path.display())),
+        }
+        self.reread_if_stale(side);
+        true
+    }
+
+    /// Runs a re-read that was held back while another read was pending.
+    fn reread_if_stale(&mut self, side: Side) {
+        let panel = self.panel_mut(side);
+        if !panel.stale || !panel.is_loaded() || panel.loading().is_some() {
+            return;
+        }
+        panel.stale = false;
+        let nav = panel.reload_target(None);
+        self.request(side, nav, LoadKind::Reload);
+    }
+
+    /// The load took long enough to show the indicator.
+    pub fn show_loading(&mut self, id: u64) -> bool {
+        let Some(side) = self.loading_side(id) else {
+            return false;
+        };
+        if let Some(loading) = self.panel_mut(side).loading_mut() {
+            loading.visible = true;
+        }
+        true
+    }
+
+    /// Escape while loading: stop waiting and stay on the old listing. A
+    /// panel that has none yet (startup) goes to the home folder instead.
+    pub fn cancel_load(&mut self, side: Side) -> bool {
+        if self.panel_mut(side).take_loading().is_none() {
+            return false;
+        }
+        if !self.panel(side).is_loaded() {
+            let target = self.home.clone();
+            self.request(
+                side,
+                Navigation {
+                    target,
+                    select: None,
+                },
+                LoadKind::Startup,
+            );
+        }
+        self.reread_if_stale(side);
+        true
+    }
+
+    /// Runs all pending reads on this thread (tests, and the app's tests).
+    pub fn run_loads_now(&mut self) {
+        loop {
+            let requests = self.take_requests();
+            if requests.is_empty() {
+                break;
+            }
+            for request in requests {
+                let result = read_listing(&request);
+                self.finish_load(request.id, result);
+            }
+        }
+    }
+
+    /// The panel a command acts on, if it acts on one. Commands for a panel
+    /// that is loading are ignored.
+    fn command_side(&self, command: Command) -> Option<Side> {
+        match command {
+            Command::SwitchPanel
+            | Command::SwapPanels
+            | Command::Reload
+            | Command::ToggleHidden
+            | Command::Focus(_) => None,
+            Command::CursorTo(side, _) | Command::SortBy(side, _) => Some(side),
+            _ => Some(self.active),
+        }
     }
 
     pub fn panel(&self, side: Side) -> &Panel {
@@ -136,6 +327,9 @@ impl Commander {
     /// first entry starting with the result. If none does, returns false and
     /// changes nothing (the key is ignored).
     pub fn search_type(&mut self, ch: char) -> bool {
+        if self.panel(self.active).loading().is_some() {
+            return false;
+        }
         let candidate = self.search.candidate(ch);
         let panel = self.panel_mut(self.active);
         let Some(index) = panel.find_prefix(&candidate) else {
@@ -185,7 +379,8 @@ impl Commander {
             format!("renamed {} -> {}", source.display(), dir.join(to).display())
         });
         result?;
-        self.refresh_after_change(OsStr::new(to))
+        self.refresh_after_change(OsStr::new(to));
+        Ok(())
     }
 
     /// Logs `result` of an action on `path`, if logging is on.
@@ -221,7 +416,8 @@ impl Commander {
         self.note("mkdir", &dir.join(name), &result, |path| {
             format!("created directory {}", path.display())
         });
-        self.refresh_after_change(&result?)
+        self.refresh_after_change(&result?);
+        Ok(())
     }
 
     /// Shift-F4: creates an empty file at `name` (a name or a relative path
@@ -238,19 +434,20 @@ impl Commander {
             });
         }
         let new = result?;
-        self.refresh_after_change(&new.first)?;
+        self.refresh_after_change(&new.first);
         Ok(new.path)
     }
 
     /// Re-reads the active panel with the cursor on `select`, and the other
     /// panel too if it shows the same directory.
-    fn refresh_after_change(&mut self, select: &OsStr) -> io::Result<()> {
+    fn refresh_after_change(&mut self, select: &OsStr) {
         let active = self.active;
-        self.panel_mut(active).reload(Some(select))?;
+        let nav = self.panel(active).reload_target(Some(select));
+        self.request(active, nav, LoadKind::Reload);
         if self.left.path() == self.right.path() {
-            self.panel_mut(active.other()).reload(None)?;
+            let nav = self.panel(active.other()).reload_target(None);
+            self.request(active.other(), nav, LoadKind::Reload);
         }
-        Ok(())
     }
 
     /// Deselects everything in one panel, e.g. after its selection was copied.
@@ -271,11 +468,21 @@ impl Commander {
     /// Runs a command. I/O errors are stored in [`Commander::error`] rather than
     /// returned, since the UI's only sensible reaction is to display them.
     pub fn execute(&mut self, command: Command) -> Outcome {
+        if let Some(side) = self.command_side(command)
+            && self.panel(side).loading().is_some()
+        {
+            // A click still focuses the loading panel, like Tab; nothing
+            // else happens there (so a double-click's Enter is ignored too).
+            if let Command::CursorTo(side, _) = command {
+                self.active = side;
+            }
+            return Outcome::Done;
+        }
         self.error = None;
         self.search.clear();
         let active = self.active;
         let panel = self.panel_mut(active);
-        let result = match command {
+        let result: io::Result<()> = match command {
             Command::CursorUp => {
                 panel.move_cursor(-1);
                 Ok(())
@@ -309,7 +516,6 @@ impl Commander {
                 self.active = side;
                 Ok(())
             }
-            Command::GoUp => panel.go_up(),
             Command::ToggleSelection => {
                 panel.toggle_selection();
                 Ok(())
@@ -322,12 +528,6 @@ impl Commander {
                 std::mem::swap(&mut self.left, &mut self.right);
                 Ok(())
             }
-            Command::SyncOtherPanel => {
-                let path = panel.path().to_path_buf();
-                let select = panel.cursor_entry().map(|e| e.name.clone());
-                self.panel_mut(active.other()).show(path, select.as_deref())
-            }
-            Command::Reload => self.left.reload(None).and(self.right.reload(None)),
             Command::ToggleHidden => {
                 let show = !self.shows_hidden();
                 self.left.set_show_hidden(show);
@@ -339,10 +539,34 @@ impl Commander {
                 self.panel_mut(side).sort_by(key);
                 Ok(())
             }
-            Command::Activate => match panel.activate() {
-                Ok(Activation::File(path)) => return Outcome::OpenFile(path),
-                Ok(_) => Ok(()),
-                Err(e) => Err(e),
+            Command::GoUp => {
+                if let Some(nav) = panel.parent_target() {
+                    self.request(active, nav, LoadKind::Navigate);
+                }
+                Ok(())
+            }
+            Command::SyncOtherPanel => {
+                let nav = Navigation {
+                    target: panel.path().to_path_buf(),
+                    select: panel.cursor_entry().map(|e| e.name.clone()),
+                };
+                self.request(active.other(), nav, LoadKind::Navigate);
+                Ok(())
+            }
+            Command::Reload => {
+                for side in [Side::Left, Side::Right] {
+                    let nav = self.panel(side).reload_target(None);
+                    self.request(side, nav, LoadKind::Reload);
+                }
+                Ok(())
+            }
+            Command::Activate => match panel.enter_target() {
+                Enter::Dir(nav) => {
+                    self.request(active, nav, LoadKind::Navigate);
+                    Ok(())
+                }
+                Enter::File(path) => return Outcome::OpenFile(path),
+                Enter::None => Ok(()),
             },
         };
         if let Err(e) = result {
@@ -355,6 +579,7 @@ impl Commander {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::listing::read_listing;
     use std::fs;
 
     #[test]
@@ -371,7 +596,7 @@ mod tests {
         c.execute(Command::SwitchPanel);
         assert_eq!(c.active(), Side::Right);
         c.execute(Command::CursorEnd);
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         assert_eq!(c.panel(Side::Right).path(), tmp.path().join("b"));
         assert_eq!(c.panel(Side::Left).path(), tmp.path());
     }
@@ -384,7 +609,7 @@ mod tests {
         c.execute(Command::CursorDown);
         fs::remove_dir(tmp.path().join("gone")).unwrap();
 
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         assert!(c.error().is_some());
         c.execute(Command::CursorUp);
         assert!(c.error().is_none());
@@ -397,7 +622,7 @@ mod tests {
         let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
         c.execute(Command::CursorEnd);
         assert_eq!(
-            c.execute(Command::Activate),
+            run(&mut c, Command::Activate),
             Outcome::OpenFile(tmp.path().join("f"))
         );
     }
@@ -486,10 +711,10 @@ mod tests {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 2));
         assert_eq!(under_cursor(&c, Side::Left), "b");
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         assert_eq!(c.panel(Side::Left).path(), tmp.path().join("b"));
 
-        c.execute(Command::GoUp);
+        run(&mut c, Command::GoUp);
         assert_eq!(c.panel(Side::Left).path(), tmp.path());
         assert_eq!(under_cursor(&c, Side::Left), "b");
     }
@@ -515,10 +740,10 @@ mod tests {
     fn activate_on_parent_navigates_up() {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
         c.execute(Command::CursorHome);
-        assert_eq!(c.execute(Command::Activate), Outcome::Done);
+        assert_eq!(run(&mut c, Command::Activate), Outcome::Done);
         assert_eq!(c.panel(Side::Left).path(), tmp.path());
     }
 
@@ -531,12 +756,12 @@ mod tests {
         }
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         let inside = tmp.path().join("a");
         assert_eq!(c.panel(Side::Left).path(), inside);
 
         fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o000)).unwrap();
-        c.execute(Command::GoUp);
+        run(&mut c, Command::GoUp);
         fs::set_permissions(tmp.path(), fs::Permissions::from_mode(0o755)).unwrap();
 
         assert!(c.error().is_some());
@@ -583,7 +808,7 @@ mod tests {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 3));
         c.execute(Command::CursorTo(Side::Right, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         c.execute(Command::SwapPanels);
         assert_eq!(c.active(), Side::Right);
         assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
@@ -597,10 +822,10 @@ mod tests {
     fn sync_other_panel_shows_same_directory_and_entry() {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Right, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         c.execute(Command::Focus(Side::Left));
         c.execute(Command::CursorTo(Side::Left, 3));
-        c.execute(Command::SyncOtherPanel);
+        run(&mut c, Command::SyncOtherPanel);
         assert_eq!(c.panel(Side::Right).path(), tmp.path());
         assert_eq!(under_cursor(&c, Side::Right), "c");
         assert_eq!(c.active(), Side::Left);
@@ -611,7 +836,7 @@ mod tests {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 2));
         fs::create_dir(tmp.path().join("new")).unwrap();
-        c.execute(Command::Reload);
+        run(&mut c, Command::Reload);
         let has_new = |side| c.panel(side).entries().iter().any(|e| e.label == "new");
         assert!(has_new(Side::Left) && has_new(Side::Right));
         assert_eq!(under_cursor(&c, Side::Left), "b");
@@ -622,9 +847,9 @@ mod tests {
     fn reload_of_vanished_directory_is_reported() {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         fs::remove_dir(tmp.path().join("a")).unwrap();
-        c.execute(Command::Reload);
+        run(&mut c, Command::Reload);
         assert!(c.error().is_some());
     }
 
@@ -648,7 +873,7 @@ mod tests {
     fn search_steps_through_matches_until_a_command_ends_it() {
         let (tmp, mut c) = commander();
         fs::create_dir(tmp.path().join("bb")).unwrap();
-        c.execute(Command::Reload);
+        run(&mut c, Command::Reload);
         assert!(!c.search_step(true), "no search open");
         c.search_type('b');
         assert_eq!(under_cursor(&c, Side::Left), "b");
@@ -670,6 +895,7 @@ mod tests {
     fn rename_moves_cursor_to_new_name_and_refreshes_other_panel() {
         let (tmp, mut c) = commander();
         c.rename(OsStr::new("f"), "g").unwrap();
+        c.run_loads_now();
         assert_eq!(under_cursor(&c, Side::Left), "g");
         assert!(tmp.path().join("g").exists());
         let right: Vec<_> = c
@@ -686,6 +912,7 @@ mod tests {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Left, 1));
         let err = c.rename(OsStr::new("a"), "b").unwrap_err();
+        c.run_loads_now();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert!(tmp.path().join("a").is_dir());
         assert_eq!(under_cursor(&c, Side::Left), "a");
@@ -695,6 +922,7 @@ mod tests {
     fn create_file_selects_it_in_both_panels_showing_the_directory() {
         let (tmp, mut c) = commander();
         let path = c.create_file("new.txt").unwrap();
+        c.run_loads_now();
         assert_eq!(path, tmp.path().join("new.txt"));
         assert_eq!(under_cursor(&c, Side::Left), "new.txt");
         assert!(
@@ -710,8 +938,9 @@ mod tests {
     fn make_directory_selects_new_entry_in_active_panel() {
         let (tmp, mut c) = commander();
         c.execute(Command::CursorTo(Side::Right, 1));
-        c.execute(Command::Activate);
+        run(&mut c, Command::Activate);
         c.make_directory("x/y").unwrap();
+        c.run_loads_now();
         assert!(tmp.path().join("a/x/y").is_dir());
         assert_eq!(under_cursor(&c, Side::Right), "x");
         assert!(c.make_directory("x").is_err());
@@ -753,11 +982,17 @@ mod tests {
         assert!(c.log().is_some());
         let d = tmp.path().display();
         c.rename(OsStr::new("f"), "g").unwrap();
+        c.run_loads_now();
         c.rename(OsStr::new("a"), "b").unwrap_err();
+        c.run_loads_now();
         c.make_directory("x/y").unwrap();
+        c.run_loads_now();
         c.create_file("new.txt").unwrap();
-        c.create_file("new.txt").unwrap(); // existed: not logged
+        c.run_loads_now();
+        c.create_file("new.txt").unwrap();
+        c.run_loads_now(); // existed: not logged
         c.create_file("x").unwrap_err();
+        c.run_loads_now();
         let file = fs::read_dir(logs.path()).unwrap().next().unwrap().unwrap();
         let lines: Vec<String> = fs::read_to_string(file.path())
             .unwrap()
@@ -784,5 +1019,267 @@ mod tests {
         assert_eq!(commander.active(), Side::Right);
         commander.set_active(Side::Left);
         assert_eq!(commander.active(), Side::Left);
+    }
+
+    /// Runs a command and finishes the loads it started, like the app does.
+    fn run(c: &mut Commander, command: Command) -> Outcome {
+        let outcome = c.execute(command);
+        c.run_loads_now();
+        outcome
+    }
+
+    fn tree() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("a")).unwrap();
+        std::fs::create_dir(tmp.path().join("b")).unwrap();
+        tmp
+    }
+
+    /// Cursor on "a" (after "..").
+    fn on_a(tmp: &tempfile::TempDir) -> Commander {
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::CursorTo(Side::Left, 1));
+        c
+    }
+
+    #[test]
+    fn navigation_keeps_the_old_listing_until_the_load_finishes() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        let requests = c.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, tmp.path().join("a"));
+        assert!(requests[0].fallback.is_none());
+        assert!(c.is_pending(requests[0].id));
+        assert!(c.finish_load(requests[0].id, read_listing(&requests[0])));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert!(c.panel(Side::Left).loading().is_none());
+    }
+
+    #[test]
+    fn a_cancelled_load_is_ignored_when_it_finishes() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        let request = c.take_requests().remove(0);
+        assert!(c.cancel_load(Side::Left));
+        assert!(!c.cancel_load(Side::Left), "nothing left to cancel");
+        assert!(!c.finish_load(request.id, read_listing(&request)));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+    }
+
+    #[test]
+    fn a_newer_navigation_replaces_a_pending_one() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate); // left: pending "a"
+        // Alt-Z twice from the right panel while the left one loads.
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::CursorTo(Side::Right, 1));
+        c.execute(Command::SyncOtherPanel);
+        c.execute(Command::CursorTo(Side::Right, 2));
+        c.execute(Command::SyncOtherPanel);
+        let requests = c.take_requests();
+        assert_eq!(
+            requests.len(),
+            1,
+            "only the newest request for the left panel runs"
+        );
+        assert_eq!(requests[0].id, c.panel(Side::Left).loading().unwrap().id);
+        let result = read_listing(&requests[0]);
+        c.finish_load(requests[0].id, result);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "b");
+    }
+
+    #[test]
+    fn a_reload_does_not_replace_a_pending_navigation() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        let id = c.panel(Side::Left).loading().unwrap().id;
+        c.execute(Command::Reload);
+        assert_eq!(c.panel(Side::Left).loading().unwrap().id, id);
+        assert!(
+            c.panel(Side::Right).loading().is_some(),
+            "the other panel reloads"
+        );
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn commands_for_a_loading_panel_are_ignored() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        c.execute(Command::CursorDown);
+        c.execute(Command::CursorTo(Side::Left, 2));
+        assert_eq!(c.panel(Side::Left).cursor(), 1);
+        assert!(!c.search_type('b'), "quick search waits too");
+        c.execute(Command::SwitchPanel);
+        assert_eq!(c.active(), Side::Right);
+        c.execute(Command::CursorDown);
+        assert_eq!(c.panel(Side::Right).cursor(), 1, "the other panel works");
+    }
+
+    #[test]
+    fn swapping_panels_keeps_each_load_with_its_panel() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        c.execute(Command::SwapPanels);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Right).path(), tmp.path().join("a"));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+    }
+
+    #[test]
+    fn a_failed_load_keeps_the_listing_and_reports_the_folder() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        std::fs::remove_dir(tmp.path().join("a")).unwrap();
+        run(&mut c, Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(
+            c.error()
+                .unwrap()
+                .contains(&*tmp.path().join("a").to_string_lossy())
+        );
+    }
+
+    #[test]
+    fn show_loading_marks_the_indicator_visible() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::Activate);
+        let id = c.panel(Side::Left).loading().unwrap().id;
+        assert!(!c.panel(Side::Left).loading().unwrap().visible);
+        assert!(c.show_loading(id));
+        assert!(c.panel(Side::Left).loading().unwrap().visible);
+        assert!(!c.show_loading(id + 100));
+    }
+
+    #[test]
+    fn start_reads_nothing_until_the_requests_run() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let mut c = Commander::start(
+            tmp.path().join("a"),
+            tmp.path().join("gone/deeper"),
+            false,
+            home.path().to_path_buf(),
+        );
+        assert!(!c.panel(Side::Left).is_loaded());
+        assert_eq!(c.panel(Side::Right).path(), tmp.path().join("gone/deeper"));
+        let requests = c.take_requests();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.fallback.as_deref() == Some(home.path()))
+        );
+        for r in requests {
+            let result = read_listing(&r);
+            c.finish_load(r.id, result);
+        }
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(
+            c.panel(Side::Right).path(),
+            tmp.path(),
+            "fell back to the parent"
+        );
+    }
+
+    #[test]
+    fn cancelling_the_startup_load_goes_home() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let mut c = Commander::start(
+            tmp.path().join("a"),
+            tmp.path().join("b"),
+            false,
+            home.path().to_path_buf(),
+        );
+        let _hung = c.take_requests();
+        assert!(c.cancel_load(Side::Left));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), home.path());
+        assert!(c.panel(Side::Left).is_loaded());
+    }
+
+    #[test]
+    fn a_second_reload_waits_for_the_first() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::Reload);
+        let first = c.panel(Side::Left).loading().unwrap().id;
+        c.execute(Command::Reload);
+        assert_eq!(c.panel(Side::Left).loading().unwrap().id, first);
+        assert_eq!(c.take_requests().len(), 2, "one per panel");
+    }
+
+    #[test]
+    fn clicking_a_loading_panel_focuses_it_but_double_click_does_nothing() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::SyncOtherPanel); // right panel loading
+        c.execute(Command::CursorTo(Side::Right, 2));
+        assert_eq!(c.active(), Side::Right, "the click focuses it");
+        assert_eq!(c.panel(Side::Right).cursor(), 0, "but moves no cursor");
+        c.execute(Command::Activate);
+        assert!(
+            c.panel(Side::Left).loading().is_none(),
+            "the left panel is untouched"
+        );
+        c.execute(Command::Focus(Side::Left));
+        assert_eq!(c.active(), Side::Left);
+    }
+
+    #[test]
+    fn a_reload_dropped_for_a_cancelled_navigation_runs_afterwards() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::CursorTo(Side::Right, 1));
+        c.execute(Command::Activate); // right: navigating into "a"
+        c.execute(Command::Focus(Side::Left));
+        c.make_directory("new").unwrap(); // right shows the same folder: reload
+        let _slow = c.take_requests();
+        assert!(c.cancel_load(Side::Right));
+        c.run_loads_now();
+        let names: Vec<_> = c
+            .panel(Side::Right)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect();
+        assert!(names.contains(&"new".to_owned()), "{names:?}");
+    }
+
+    #[test]
+    fn a_reload_requested_during_a_reload_runs_again() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::Reload);
+        let requests = c.take_requests();
+        // Both reads list the folder now, before the change below.
+        let results: Vec<_> = requests.iter().map(|r| (r.id, read_listing(r))).collect();
+        let mut results = results.into_iter();
+        let (left_id, left) = results.next().unwrap();
+        c.finish_load(left_id, left);
+        c.make_directory("new").unwrap(); // right's reload is still running
+        let (right_id, right) = results.next().unwrap();
+        c.finish_load(right_id, right); // the old listing
+        c.run_loads_now();
+        let names: Vec<_> = c
+            .panel(Side::Right)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect();
+        assert!(names.contains(&"new".to_owned()), "{names:?}");
     }
 }
