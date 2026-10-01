@@ -264,7 +264,7 @@ impl FileManager {
             dialog
                 .title(title.clone())
                 .w(gpui_kit::px(420.0))
-                .child(Input::new(&input))
+                .child(text_field(&input))
                 .footer(buttons.clone())
                 // Enter in the text field.
                 .on_ok(move |_, window, cx| {
@@ -326,7 +326,7 @@ impl FileManager {
                 .w(gpui_kit::px(560.0))
                 .close_button(false)
                 .child("Left/Right, Tab/Shift-Tab, Enter/Space, Escape. \"Three\" starts selected.")
-                .child(Input::new(&input))
+                .child(text_field(&input))
                 .footer(buttons.clone())
                 .on_cancel(move |_, window, cx| {
                     focus.focus(window, cx);
@@ -403,6 +403,15 @@ pub(super) fn show_message(
                 true
             })
     });
+}
+
+/// A one-line text field. gpui-component's default input is 32 px tall
+/// with 8 px vertical padding and a 1 px border, which leaves 14 px for a
+/// 20 px text line and cuts off descenders (g, j, p, q, y). 5 px padding
+/// leaves exactly one line.
+pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
+    use gpui_kit::Styled;
+    Input::new(state).py(gpui_kit::px(5.0))
 }
 
 /// The About box's text.
