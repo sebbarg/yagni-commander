@@ -1597,6 +1597,23 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         "alt-f4"
     };
     assert_eq!(key(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    // The native macOS menu shows an action's first binding instead
+    // (gpui-pre-macos `platform.rs`, zed issue 23621).
+    let first = |action: &dyn gpui_kit::Action, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            cx.key_bindings()
+                .borrow()
+                .bindings_for_action(action)
+                .next()
+                .map(|b| b.keystrokes()[0].inner().unparse())
+        })
+    };
+    assert_eq!(first(&crate::actions::Trash, cx).as_deref(), Some("f8"));
+    assert_eq!(
+        first(&crate::actions::Delete, cx).as_deref(),
+        Some("shift-f8")
+    );
+    assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
 }
 
 fn native_check(cx: &mut VisualTestContext, label: &str) -> bool {

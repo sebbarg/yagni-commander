@@ -83,8 +83,9 @@ actions!(
 
 pub fn bind_default_keys(cx: &mut App) {
     let context = Some(FILE_MANAGER_CONTEXT);
-    // Menus show an action's last-registered binding, so each action's
-    // primary key comes last.
+    // gpui-component's menus (Linux) show an action's last-registered
+    // binding, the native macOS menu its first. So an action with a second
+    // key has its primary key registered both before and after it.
     let quit = if cfg!(target_os = "macos") {
         "cmd-q"
     } else {
@@ -110,8 +111,10 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("f5", Copy, context),
         KeyBinding::new("f6", Move, context),
         KeyBinding::new("f7", MakeDirectory, context),
+        KeyBinding::new("f8", Trash, context),
         KeyBinding::new("delete", Trash, context),
         KeyBinding::new("f8", Trash, context),
+        KeyBinding::new("shift-f8", Delete, context),
         KeyBinding::new("shift-delete", Delete, context),
         KeyBinding::new("shift-f8", Delete, context),
         KeyBinding::new("alt-z", SyncOtherPanel, context),
