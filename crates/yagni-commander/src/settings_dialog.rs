@@ -2,15 +2,16 @@
 //! key by key (`FileManager::change_setting`). The text fields apply when
 //! they lose focus and when the dialog closes (Close, Enter or Escape).
 
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, Styled, Subscription, WeakEntity, Window, div, prelude::FluentBuilder,
-    px,
+    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription,
+    WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
 use yagni_commander_core::Setting;
 use yagni_commander_core::config::parse_keep_days;
@@ -26,6 +27,10 @@ pub struct SettingsView {
     editor: Entity<InputState>,
     days: Entity<InputState>,
     days_error: Option<&'static str>,
+    /// Where the operation log is written, if there is a state folder.
+    log_dir: Option<PathBuf>,
+    /// The log folder's path was copied by clicking it.
+    log_dir_copied: bool,
     /// Typed into since the last commit. Only an edited field is saved, so
     /// the text it opened with can't undo a hand edit of the file.
     editor_edited: bool,
@@ -36,6 +41,7 @@ pub struct SettingsView {
 impl SettingsView {
     fn new(
         file_manager: WeakEntity<FileManager>,
+        log_dir: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -80,9 +86,34 @@ impl SettingsView {
             editor,
             days,
             days_error: None,
+            log_dir,
+            log_dir_copied: false,
             editor_edited: false,
             days_edited: false,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// The line under the log settings that says where the logs are.
+    /// Clicking it copies the path.
+    pub fn log_dir_text(&self) -> Option<String> {
+        let dir = self.log_dir.as_ref()?;
+        let hint = if self.log_dir_copied {
+            "copied"
+        } else {
+            "click to copy"
+        };
+        Some(format!(
+            "Log files are stored in {} ({hint})",
+            dir.display()
+        ))
+    }
+
+    fn copy_log_dir(&mut self, cx: &mut Context<Self>) {
+        if let Some(dir) = &self.log_dir {
+            cx.write_to_clipboard(ClipboardItem::new_string(dir.display().to_string()));
+            self.log_dir_copied = true;
+            cx.notify();
         }
     }
 
@@ -209,6 +240,19 @@ impl Render for SettingsView {
                             .text_size(px(12.0))
                             .child("Older log files are deleted at startup."),
                     )
+                    .when_some(self.log_dir_text(), |d, text| {
+                        d.child(
+                            div()
+                                .id("settings-log-dir")
+                                .debug_selector(|| "settings-log-dir".into())
+                                .text_color(colors.text_dim)
+                                .text_size(px(12.0))
+                                .cursor_pointer()
+                                .hover(|style| style.text_color(colors.text))
+                                .on_click(cx.listener(|this, _, _, cx| this.copy_log_dir(cx)))
+                                .child(text),
+                        )
+                    })
                     .when_some(self.days_error, |d, message| {
                         d.child(
                             div()
@@ -257,7 +301,8 @@ impl FileManager {
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         let me = cx.entity().downgrade();
-        let view = cx.new(|cx| SettingsView::new(me.clone(), window, cx));
+        let log_dir = self.log_dir.clone();
+        let view = cx.new(|cx| SettingsView::new(me.clone(), log_dir, window, cx));
         self.settings = Some(view.clone());
         let focus = self.focus.clone();
         // Every way out saves the edited fields first, then gives focus

@@ -1842,6 +1842,40 @@ fn settings_open(cx: &mut VisualTestContext) -> bool {
 }
 
 #[gpui_kit::test]
+fn settings_show_where_the_logs_are(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let logs = tempfile::tempdir().unwrap();
+    use_log_dir(logs.path(), cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    assert!(settings_open(cx));
+    assert!(cx.debug_bounds("settings-log-dir").is_some());
+    let view = file_manager(cx);
+    let shown = view.read_with(cx, |this, cx| {
+        this.settings.as_ref().unwrap().read(cx).log_dir_text()
+    });
+    let path = logs.path().display().to_string();
+    assert_eq!(
+        shown.as_deref(),
+        Some(format!("Log files are stored in {path} (click to copy)").as_str())
+    );
+    // A click copies the path alone and says so.
+    click(cx, "settings-log-dir", 1);
+    cx.run_until_parked();
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
+    assert_eq!(copied, Some(path.clone()));
+    let shown = view.read_with(cx, |this, cx| {
+        this.settings.as_ref().unwrap().read(cx).log_dir_text()
+    });
+    assert_eq!(
+        shown.as_deref(),
+        Some(format!("Log files are stored in {path} (copied)").as_str())
+    );
+    // The dialog stays open.
+    assert!(settings_open(cx));
+}
+
+#[gpui_kit::test]
 fn ctrl_comma_opens_settings_with_the_current_values(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
