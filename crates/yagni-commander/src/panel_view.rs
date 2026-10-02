@@ -85,7 +85,7 @@ impl PanelView {
                     cursor: (ix == panel.cursor()).then_some(is_active),
                     selected: panel.is_selected(entry),
                 };
-                let icon = icons.then(|| icon_slot(entry, side, ix));
+                let icon = icons.then(|| icon_slot(commander.icon(side, entry), side, ix));
                 entry_row(entry, row, colors, &columns, icon)
                     .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
                     .on_mouse_down(
@@ -260,14 +260,14 @@ struct RowState {
 /// Width of the icon slot before a name: about 1.3 em of the list text.
 const ICON_WIDTH: f32 = 18.0;
 
-/// The entry's icon in the bundled Nerd Font, in the row's text color.
-fn icon_slot(entry: &Entry, side: Side, ix: usize) -> Div {
+/// An entry's icon in the bundled Nerd Font, in the row's text color.
+fn icon_slot(icon: char, side: Side, ix: usize) -> Div {
     div()
         .debug_selector(move || format!("icon-{}-{ix}", side_name(side)))
         .w(px(ICON_WIDTH))
         .flex_none()
         .font_family(icons::FONT_FAMILY)
-        .child(icons::icon(entry).to_string())
+        .child(icon.to_string())
 }
 
 /// One list row. With `icon`, the Name cell starts with it and folders lose

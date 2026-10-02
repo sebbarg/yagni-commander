@@ -15,6 +15,8 @@ const PARENT: char = '\u{f062}';
 const FILE: char = '\u{f15b}';
 /// nf-oct-terminal: executables the table doesn't know.
 const EXECUTABLE: char = '\u{f489}';
+/// nf-md-folder_home: the user's home folder (see `Commander::icon`).
+pub(crate) const HOME: char = '\u{f10b5}';
 
 /// Folders with their own icon, matched by exact name. Sorted by name.
 const SPECIAL_FOLDERS: &[(&str, char)] = &[
@@ -120,6 +122,7 @@ mod tests {
             ("PARENT", PARENT),
             ("FILE", FILE),
             ("EXECUTABLE", EXECUTABLE),
+            ("HOME", HOME),
         ];
         let all = table::FILE_NAMES
             .iter()

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
+use crate::entry::{Entry, EntryKind};
 use crate::fs_ops;
 use crate::listing::{Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
@@ -580,6 +581,18 @@ impl Commander {
         self.icons
     }
 
+    /// The icon for `entry` in the `side` panel: the home glyph for the
+    /// home folder itself, else [`crate::icons::icon`]. Compares paths only.
+    pub fn icon(&self, side: Side, entry: &Entry) -> char {
+        let is_home =
+            entry.kind == EntryKind::Dir && self.panel(side).path().join(&entry.name) == self.home;
+        if is_home {
+            crate::icons::HOME
+        } else {
+            crate::icons::icon(entry)
+        }
+    }
+
     pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
         self.left.set_case_sensitive(case_sensitive);
         self.right.set_case_sensitive(case_sensitive);
@@ -710,6 +723,38 @@ mod tests {
     use super::*;
     use crate::listing::read_listing;
     use std::fs;
+
+    #[test]
+    fn the_home_folder_gets_the_home_icon_and_nothing_else_does() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        for dir in ["me/sub", "other/me", "files"] {
+            fs::create_dir_all(base.join(dir)).unwrap();
+        }
+        fs::write(base.join("files/me"), b"").unwrap();
+        let home = base.join("me");
+        let find = |c: &Commander, side: Side, label: &str| {
+            let panel = c.panel(side);
+            let entry = panel.entries().iter().find(|e| e.label == label).unwrap();
+            c.icon(side, entry)
+        };
+
+        let mut c = Commander::start(base.to_path_buf(), base.join("other"), false, home.clone());
+        c.run_loads_now();
+        assert_eq!(find(&c, Side::Left, "me"), crate::icons::HOME);
+        let other_me = find(&c, Side::Right, "me");
+        assert_ne!(other_me, crate::icons::HOME, "same name, not home");
+
+        let mut c = Commander::start(base.join("files"), home.clone(), false, home);
+        c.run_loads_now();
+        assert_ne!(find(&c, Side::Left, "me"), crate::icons::HOME, "a file");
+        // Inside home, ".." stays an arrow and its folders are ordinary.
+        assert_eq!(
+            find(&c, Side::Right, ".."),
+            crate::icons::icon(&crate::Entry::parent())
+        );
+        assert_ne!(find(&c, Side::Right, "sub"), crate::icons::HOME);
+    }
 
     #[test]
     fn icons_are_on_until_turned_off() {
