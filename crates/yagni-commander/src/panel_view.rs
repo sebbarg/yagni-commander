@@ -1,5 +1,5 @@
-//! One side of the file manager: path header, column headers, the entry list
-//! and a summary footer. Reads its panel from the shared [`Commander`].
+//! One side of the file manager: the tab header, then the tab in front:
+//! path header, column headers, the entry list and a summary footer. Reads its panel from the shared [`Commander`].
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -12,15 +12,18 @@ use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
 };
 
-use yagni_commander_core::icons;
+use yagni_commander_core::{icons, label};
 
 use crate::columns::{Column, visible_columns};
 use crate::file_manager::execute;
 use crate::theme::{Colors, Theme};
 
 const ROW_HEIGHT: f32 = 22.0;
-const HEADER_HEIGHT: f32 = 28.0;
-const COLUMN_HEADER_HEIGHT: f32 = 22.0;
+const HEADER_HEIGHT: f32 = 32.0;
+const TAB_HEIGHT: f32 = 26.0;
+/// A tab's width while they all fit; then they shrink evenly.
+const TAB_WIDTH: f32 = 160.0;
+const COLUMN_HEADER_HEIGHT: f32 = 26.0;
 const FOOTER_HEIGHT: f32 = 24.0;
 const CELL_SPACING: f32 = 10.0;
 
@@ -28,10 +31,11 @@ pub struct PanelView {
     commander: Entity<Commander>,
     side: Side,
     scroll: UniformListScrollHandle,
-    /// Directory and cursor last scrolled into view. Scrolling only follows
-    /// actual cursor moves, so mouse-wheel scrolling isn't undone by unrelated
-    /// updates such as activity in the other panel.
-    revealed: Option<(PathBuf, usize)>,
+    /// Tab, directory and cursor last scrolled into view. Scrolling only
+    /// follows actual cursor moves (or a tab switch), so mouse-wheel
+    /// scrolling isn't undone by unrelated updates such as activity in the
+    /// other panel.
+    revealed: Option<(usize, PathBuf, usize)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -57,17 +61,17 @@ impl PanelView {
     }
 
     fn reveal_cursor(&mut self, cx: &mut Context<Self>) {
-        let panel = self.commander.read(cx).panel(self.side);
-        if self
-            .revealed
-            .as_ref()
-            .is_some_and(|(path, cursor)| path == panel.path() && *cursor == panel.cursor())
-        {
+        let commander = self.commander.read(cx);
+        let tab = commander.tabs(self.side).index();
+        let panel = commander.panel(self.side);
+        if self.revealed.as_ref().is_some_and(|(t, path, cursor)| {
+            *t == tab && path == panel.path() && *cursor == panel.cursor()
+        }) {
             return;
         }
         self.scroll
             .scroll_to_item(panel.cursor(), ScrollStrategy::Nearest);
-        self.revealed = Some((panel.path().to_path_buf(), panel.cursor()));
+        self.revealed = Some((tab, panel.path().to_path_buf(), panel.cursor()));
     }
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Div> {
@@ -99,6 +103,70 @@ impl PanelView {
                     )
             })
             .collect()
+    }
+
+    /// One tab per panel of this side, the one in front joined to the body
+    /// below it. A click brings a tab (and this side) to the front.
+    fn render_tabs(&self, cx: &mut Context<Self>) -> Div {
+        let side = self.side;
+        let colors = &Theme::get(cx).colors;
+        let commander = self.commander.read(cx);
+        let tabs = commander.tabs(side);
+        let front = tabs.index();
+        // The tab in front takes the path header's color, so it reads as
+        // the top of the panel below it.
+        // Its text matches the path header's too: bright on the active
+        // side, dim on the other.
+        let (front_bg, front_text) = if commander.active() == side {
+            (colors.header_active_bg, colors.text)
+        } else {
+            (colors.header_bg, colors.text_dim)
+        };
+        div()
+            .h(px(TAB_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_end()
+            .gap(px(2.0))
+            .text_size(px(12.0))
+            .children(tabs.iter().enumerate().map(|(ix, panel)| {
+                let is_front = ix == front;
+                div()
+                    .debug_selector(move || format!("tab-{}-{ix}", side_name(side)))
+                    .flex_basis(px(TAB_WIDTH))
+                    .flex_shrink(1.0)
+                    .min_w_0()
+                    .h(px(TAB_HEIGHT - 4.0))
+                    .px(px(10.0))
+                    .flex()
+                    .items_center()
+                    .rounded_t(px(6.0))
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(colors.border)
+                    .bg(if is_front { front_bg } else { colors.panel_bg })
+                    .text_color(if is_front {
+                        front_text
+                    } else {
+                        colors.text_dim
+                    })
+                    .cursor_pointer()
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(label(panel.path())),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _: &MouseDownEvent, _, cx| {
+                            execute(&this.commander, Command::SelectTab(side, ix), cx);
+                        }),
+                    )
+            }))
     }
 
     /// Clickable column titles; clicking sorts the panel by that column.
@@ -142,6 +210,7 @@ impl PanelView {
 
 impl Render for PanelView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tabs = self.render_tabs(cx);
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let panel = commander.panel(self.side);
@@ -167,6 +236,22 @@ impl Render for PanelView {
                 colors.text
             } else {
                 colors.text_dim
+            })
+            .gap(px(8.0))
+            // "You are here": an accent glyph on the active side.
+            .when(commander.shows_icons(), |header| {
+                header.child(
+                    div()
+                        .debug_selector(|| format!("pwd-{}", side_name(self.side)))
+                        .flex_none()
+                        .font_family(icons::FONT_FAMILY)
+                        .text_color(if is_active {
+                            colors.accent
+                        } else {
+                            colors.text_dim
+                        })
+                        .child(icons::CURRENT_FOLDER.to_string()),
+                )
             })
             .child(match &loading {
                 Some(text) => div()
@@ -217,11 +302,9 @@ impl Render for PanelView {
                     .child(footer_text(&panel.summary())),
             );
 
-        let border = if is_active {
-            colors.accent
-        } else {
-            colors.border
-        };
+        // The same quiet border on both sides: the active one shows by its
+        // path header, its front tab and its cursor bar.
+        let border = colors.border;
         let panel_bg = colors.panel_bg;
         let entry_count = panel.entries().len();
 
@@ -234,19 +317,24 @@ impl Render for PanelView {
         .flex_1()
         .when(loading.is_some(), |list| list.opacity(0.5));
 
-        div()
-            .size_full()
+        let body = div()
+            .flex_1()
+            .min_h_0()
             .flex()
             .flex_col()
             .overflow_hidden()
             .rounded(px(6.0))
+            // Square where the first tab sits on top of it.
+            .rounded_tl(px(0.0))
             .border_1()
             .border_color(border)
             .bg(panel_bg)
             .child(header)
             .child(self.render_column_headers(cx))
             .child(list)
-            .child(footer)
+            .child(footer);
+
+        div().size_full().flex().flex_col().child(tabs).child(body)
     }
 }
 

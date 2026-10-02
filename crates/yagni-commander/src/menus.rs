@@ -8,9 +8,10 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, Copy, Delete, Edit, EditNewFile, MakeDirectory, Move, OpenSettings, Quit, Reload,
-    Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
-    SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View,
+    About, CloseTab, Copy, Delete, Edit, EditNewFile, MakeDirectory, Move, NewTab, NextTab,
+    OpenSettings, PrevTab, Quit, Reload, Rename, SelectAll, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
+    View,
 };
 
 pub enum MenuEntry {
@@ -160,6 +161,11 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Same folder in other panel", SyncOtherPanel),
                 item("Swap panels", SwapPanels),
                 item("Reload", Reload),
+                MenuEntry::Separator,
+                item("New tab", NewTab),
+                item("Close tab", CloseTab),
+                item("Next tab", NextTab),
+                item("Previous tab", PrevTab),
             ],
         },
         MenuDef {
@@ -296,7 +302,16 @@ mod tests {
         );
         assert_eq!(
             labels(&defs[1]),
-            ["Same folder in other panel", "Swap panels", "Reload"]
+            [
+                "Same folder in other panel",
+                "Swap panels",
+                "Reload",
+                "-",
+                "New tab",
+                "Close tab",
+                "Next tab",
+                "Previous tab"
+            ]
         );
         assert_eq!(
             labels(&defs[2]),

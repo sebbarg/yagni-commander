@@ -36,8 +36,8 @@ fn main() {
         }
     }
     let home = storage::home_dir();
-    let (left, right) = app_state.state.startup_dirs(&args, &home);
-    let mut commander = Commander::start(left, right, app_state.state.show_hidden, home);
+    let (left, right) = app_state.state.startup_tabs(&args, &home);
+    let mut commander = Commander::start_tabs(left, right, app_state.state.show_hidden, home);
     if let Some(active) = app_state.state.active {
         commander.set_active(active);
     }

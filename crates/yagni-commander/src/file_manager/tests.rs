@@ -71,6 +71,92 @@ fn tab_switches_the_panel_that_keys_act_on(cx: &mut TestAppContext) {
     commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
 }
 
+fn tab_state(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> (usize, usize) {
+    commander.read_with(cx, |c, _| (c.tabs(side).count(), c.tabs(side).index()))
+}
+
+#[gpui_kit::test]
+fn ctrl_t_opens_a_tab_on_the_same_folder_and_ctrl_w_closes_it(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-w");
+    assert_eq!(
+        tab_state(&commander, Side::Left, cx),
+        (1, 0),
+        "the last tab stays"
+    );
+    cx.simulate_keystrokes("down ctrl-t");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (2, 1));
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    cx.simulate_keystrokes("ctrl-w");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (1, 0));
+}
+
+#[gpui_kit::test]
+fn ctrl_tab_and_ctrl_shift_tab_cycle_the_active_sides_tabs(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t down enter"); // the second tab enters "a"
+    cx.simulate_keystrokes("ctrl-tab");
+    assert_eq!(
+        path(&commander, Side::Left, cx),
+        tmp.path(),
+        "wrapped to the first"
+    );
+    cx.simulate_keystrokes("ctrl-shift-tab");
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    assert_eq!(tab_state(&commander, Side::Right, cx), (1, 0));
+}
+
+#[gpui_kit::test]
+fn a_background_tab_shows_changes_when_it_comes_to_the_front(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t ctrl-tab");
+    std::fs::write(tmp.path().join("new"), b"").unwrap();
+    cx.simulate_keystrokes("ctrl-tab");
+    cx.run_until_parked();
+    assert!(labels(&commander, Side::Left, cx).contains(&"new".to_string()));
+}
+
+#[gpui_kit::test]
+fn the_watcher_follows_the_tab_in_front(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t down enter");
+    let watched = |cx: &mut VisualTestContext| {
+        file_manager(cx).read_with(cx, |this, _| this.watched[0].clone())
+    };
+    assert_eq!(watched(cx), Some(tmp.path().join("a")));
+    cx.simulate_keystrokes("ctrl-tab");
+    assert_eq!(watched(cx), Some(tmp.path().to_path_buf()));
+}
+
+#[gpui_kit::test]
+fn a_tab_stuck_loading_can_be_left_and_closed(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t");
+    enter_held_a(&tmp, cx);
+    assert!(loading(&commander, cx));
+    cx.simulate_keystrokes("ctrl-t");
+    assert_eq!(
+        tab_state(&commander, Side::Left, cx),
+        (2, 1),
+        "no copy of a loading tab"
+    );
+    cx.simulate_keystrokes("ctrl-tab");
+    assert!(!loading(&commander, cx));
+    cx.simulate_keystrokes("ctrl-tab ctrl-w");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (1, 0));
+    assert!(!loading(&commander, cx));
+    release(&tmp);
+    wait_until(cx, |cx| {
+        file_manager(cx).read_with(cx, |this, _| this.loads.is_empty())
+    });
+    assert_eq!(
+        path(&commander, Side::Left, cx),
+        tmp.path(),
+        "the late result is dropped"
+    );
+}
+
 #[gpui_kit::test]
 fn enter_and_backspace_navigate(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
@@ -787,6 +873,86 @@ fn clicking_a_row_moves_the_cursor_and_activates_that_panel(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn both_sides_draw_a_tab_header_even_with_one_tab(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    assert!(bounds(cx, "tab-left-0".into()).is_some());
+    assert!(bounds(cx, "tab-right-0".into()).is_some());
+    assert!(bounds(cx, "tab-left-1".into()).is_none());
+    cx.simulate_keystrokes("ctrl-t");
+    assert!(bounds(cx, "tab-left-1".into()).is_some());
+}
+
+#[gpui_kit::test]
+fn the_tab_header_sits_above_the_path_header(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let tab = bounds(cx, "tab-left-0".into()).unwrap();
+    let header = bounds(cx, "header-left-Name".into()).unwrap();
+    assert!(tab.bottom() <= header.top());
+}
+
+#[gpui_kit::test]
+fn the_first_tab_lines_up_with_the_panels_left_edge(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    for side in ["left", "right"] {
+        let tab = bounds(cx, format!("tab-{side}-0")).unwrap();
+        // Rows sit inside the panel's 1 px border.
+        let row = bounds(cx, format!("row-{side}-0")).unwrap();
+        let gap = f32::from(row.left()) - f32::from(tab.left());
+        assert!((0.0..=1.0).contains(&gap), "{side}: {gap}");
+    }
+}
+
+#[gpui_kit::test]
+fn the_path_header_starts_with_a_folder_glyph_while_icons_are_on(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    assert!(bounds(cx, "pwd-left".into()).is_some());
+    assert!(bounds(cx, "pwd-right".into()).is_some());
+    let pwd = bounds(cx, "pwd-left".into()).unwrap();
+    let tab = bounds(cx, "tab-left-0".into()).unwrap();
+    let names = bounds(cx, "header-left-Name".into()).unwrap();
+    assert!(
+        pwd.top() >= tab.bottom() && pwd.bottom() <= names.top(),
+        "in the path header"
+    );
+    commander.update(cx, |c, cx| {
+        c.set_icons(false);
+        cx.notify();
+    });
+    assert!(bounds(cx, "pwd-left".into()).is_none());
+}
+
+#[gpui_kit::test]
+fn clicking_a_tab_brings_it_and_its_side_to_the_front(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t down enter tab"); // left: [root, a]; right active
+    click(cx, "tab-left-0", 1);
+    commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+    assert_eq!(tab_state(&commander, Side::Left, cx), (2, 0));
+    assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+}
+
+#[gpui_kit::test]
+fn tabs_shrink_evenly_to_fit(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let one = bounds(cx, "tab-left-0".into()).unwrap();
+    // Twelve tabs: more than fit at full width in a test window, few enough
+    // that each still has room for its padding.
+    for _ in 0..11 {
+        cx.simulate_keystrokes("ctrl-t");
+    }
+    let first = bounds(cx, "tab-left-0".into()).unwrap();
+    let last = bounds(cx, "tab-left-11".into()).unwrap();
+    let rows = bounds(cx, "row-left-0".into()).unwrap();
+    assert!(
+        last.right() <= rows.right() + gpui_kit::px(1.0),
+        "nothing overflows"
+    );
+    assert!(first.size.width < one.size.width, "they shrank");
+    let (a, b) = (f32::from(first.size.width), f32::from(last.size.width));
+    assert!((a - b).abs() < 1.0, "evenly");
+}
+
+#[gpui_kit::test]
 fn double_click_opens_a_directory_and_goes_up_on_parent(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
     click(cx, "row-left-1", 2);
@@ -1165,21 +1331,34 @@ fn f3_on_a_fifo_shows_an_error(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn panel_paths_and_active_side_are_remembered(cx: &mut TestAppContext) {
+fn panel_tabs_and_active_side_are_remembered(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     let state = |cx: &mut VisualTestContext| {
         cx.update(|_, cx| {
             let s = &cx.global::<AppState>().state;
-            (s.left.clone(), s.right.clone(), s.active)
+            (
+                s.left_tabs.clone(),
+                s.left_tab,
+                s.right_tabs.clone(),
+                s.active,
+            )
         })
     };
-    let root = Some(tmp.path().to_path_buf());
-    assert_eq!(state(cx), (root.clone(), root.clone(), Some(Side::Left)));
-    cx.simulate_keystrokes("tab down enter");
+    let root = tmp.path().to_path_buf();
+    assert_eq!(
+        state(cx),
+        (vec![root.clone()], 0, vec![root.clone()], Some(Side::Left))
+    );
+    cx.simulate_keystrokes("ctrl-t down enter tab");
     cx.run_until_parked();
     assert_eq!(
         state(cx),
-        (root, Some(tmp.path().join("a")), Some(Side::Right))
+        (
+            vec![root.clone(), root.join("a")],
+            1,
+            vec![root],
+            Some(Side::Right)
+        )
     );
 }
 
@@ -1599,6 +1778,15 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         Some("shift-f8")
     );
     assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    for (action, keys) in [
+        (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
+        (&crate::actions::CloseTab, "ctrl-w"),
+        (&crate::actions::NextTab, "ctrl-tab"),
+        (&crate::actions::PrevTab, "ctrl-shift-tab"),
+    ] {
+        assert_eq!(key(action, cx).as_deref(), Some(keys));
+        assert_eq!(first(action, cx).as_deref(), Some(keys));
+    }
 }
 
 fn native_check(cx: &mut VisualTestContext, label: &str) -> bool {

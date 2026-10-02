@@ -17,6 +17,8 @@ const FILE: char = '\u{f15b}';
 const EXECUTABLE: char = '\u{f489}';
 /// nf-md-folder_home: the user's home folder (see `Commander::icon`).
 pub(crate) const HOME: char = '\u{f10b5}';
+/// nf-fa-folder_open: before the path in a panel's path header.
+pub const CURRENT_FOLDER: char = '\u{f07c}';
 
 /// Folders with their own icon, matched by exact name. Sorted by name.
 const SPECIAL_FOLDERS: &[(&str, char)] = &[
@@ -123,6 +125,7 @@ mod tests {
             ("FILE", FILE),
             ("EXECUTABLE", EXECUTABLE),
             ("HOME", HOME),
+            ("CURRENT_FOLDER", CURRENT_FOLDER),
         ];
         let all = table::FILE_NAMES
             .iter()

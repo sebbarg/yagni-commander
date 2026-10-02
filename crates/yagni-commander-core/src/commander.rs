@@ -11,6 +11,7 @@ use crate::oplog::OperationLog;
 use crate::panel::{Enter, Loading, Navigation, Panel, Refresh};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
+use crate::tabs::Tabs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -58,6 +59,15 @@ pub enum Command {
     Reload,
     /// Ctrl-.: show or hide hidden entries in both panels.
     ToggleHidden,
+    /// Ctrl-T: a copy of the active side's front tab, after it.
+    NewTab,
+    /// Ctrl-W: close the active side's front tab (never the last one).
+    CloseTab,
+    /// Ctrl-Tab / Ctrl-Shift-Tab on the active side, wrapping around.
+    NextTab,
+    PrevTab,
+    /// A click on a tab: brings that side and tab to the front.
+    SelectTab(Side, usize),
 }
 
 /// Result of a command that the UI may need to act on.
@@ -68,11 +78,30 @@ pub enum Outcome {
     OpenFile(PathBuf),
 }
 
+/// One side's folders at startup and which one is in front.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartTabs {
+    pub dirs: Vec<PathBuf>,
+    pub active: usize,
+}
+
+impl StartTabs {
+    pub fn one(dir: PathBuf) -> Self {
+        Self {
+            dirs: vec![dir],
+            active: 0,
+        }
+    }
+}
+
+/// A tab: its side and its index there.
+type TabRef = (Side, usize);
+
 /// Dual-panel state.
 #[derive(Debug)]
 pub struct Commander {
-    left: Panel,
-    right: Panel,
+    /// Each side's tabs, indexed by `Side as usize`.
+    tabs: [Tabs; 2],
     active: Side,
     /// Last error, shown by the UI until the next successful command.
     error: Option<String>,
@@ -119,11 +148,33 @@ impl Commander {
     /// Nothing is read yet: both panels ask for their folder (falling back
     /// to its parents, then `home`). See [`Commander::take_requests`].
     pub fn start(left: PathBuf, right: PathBuf, show_hidden: bool, home: PathBuf) -> Self {
-        let empty = |path: PathBuf| {
-            let path = std::path::absolute(&path).unwrap_or_else(|_| home.clone());
-            Panel::empty(path, show_hidden)
+        Self::start_tabs(
+            StartTabs::one(left),
+            StartTabs::one(right),
+            show_hidden,
+            home,
+        )
+    }
+
+    /// Like [`Commander::start`] with several tabs per side. Only the tab
+    /// in front of each side is read; the others on their first visit.
+    pub fn start_tabs(left: StartTabs, right: StartTabs, show_hidden: bool, home: PathBuf) -> Self {
+        let side = |start: StartTabs| {
+            let dirs = if start.dirs.is_empty() {
+                vec![home.clone()]
+            } else {
+                start.dirs
+            };
+            let panels = dirs
+                .into_iter()
+                .map(|dir| {
+                    let path = std::path::absolute(&dir).unwrap_or_else(|_| home.clone());
+                    Panel::empty(path, show_hidden)
+                })
+                .collect();
+            Tabs::from_panels(panels, start.active)
         };
-        let mut commander = Self::with_panels(empty(left), empty(right), home.clone());
+        let mut commander = Self::with_tabs([side(left), side(right)], home.clone());
         for side in [Side::Left, Side::Right] {
             let target = commander.panel(side).path().to_path_buf();
             commander.request(
@@ -139,9 +190,12 @@ impl Commander {
     }
 
     fn with_panels(left: Panel, right: Panel, home: PathBuf) -> Self {
+        Self::with_tabs([Tabs::new(left), Tabs::new(right)], home)
+    }
+
+    fn with_tabs(tabs: [Tabs; 2], home: PathBuf) -> Self {
         Self {
-            left,
-            right,
+            tabs,
             active: Side::Left,
             error: None,
             search: QuickSearch::default(),
@@ -196,14 +250,14 @@ impl Commander {
     /// The directory watcher saw a change in `side`'s folder: re-read it
     /// quietly. Not a [`Command`]: the quick search and the error stay.
     pub fn watch_reload(&mut self, side: Side) {
-        self.refresh(side, None);
+        self.refresh(self.visible(side), None);
     }
 
     /// Starts a quiet re-read, or marks the panel stale if a read is
     /// pending. `gone`: the panel's folder vanished, so the read walks up
     /// to its nearest readable parent (then home).
-    fn refresh(&mut self, side: Side, gone: Option<PathBuf>) {
-        let panel = self.panel_mut(side);
+    fn refresh(&mut self, at: TabRef, gone: Option<PathBuf>) {
+        let panel = self.panel_at_mut(at);
         if !panel.is_loaded() {
             return; // the startup read is still to come
         }
@@ -214,20 +268,39 @@ impl Commander {
         let path = gone.clone().unwrap_or_else(|| panel.path().to_path_buf());
         let fallback = gone.is_some().then(|| self.home.clone());
         let (id, _) = self.push_request(path, fallback);
-        self.panel_mut(side).set_refresh(Refresh { id, gone });
+        self.panel_at_mut(at).set_refresh(Refresh { id, gone });
     }
 
-    fn refresh_side(&self, id: u64) -> Option<Side> {
-        [Side::Left, Side::Right]
-            .into_iter()
-            .find(|&side| self.panel(side).refresh_id() == Some(id))
+    /// A tab came to the front: re-read it quietly, or read it for the
+    /// first time (a tab restored at startup) with the startup fallback.
+    fn bring_to_front(&mut self, side: Side) {
+        let panel = self.panel(side);
+        if panel.loading().is_some() {
+            return;
+        }
+        if panel.is_loaded() {
+            self.refresh(self.visible(side), None);
+        } else {
+            let target = panel.path().to_path_buf();
+            let nav = Navigation {
+                target,
+                select: None,
+            };
+            self.request(side, nav, LoadKind::Startup);
+        }
+    }
+
+    fn refresh_tab(&self, id: u64) -> Option<TabRef> {
+        self.all_tabs()
+            .find(|(_, panel)| panel.refresh_id() == Some(id))
+            .map(|(at, _)| at)
     }
 
     /// Shows a quiet re-read's result. The cursor stays on the entry it is
     /// on now, which may differ from when the read started.
-    fn finish_refresh(&mut self, side: Side, result: io::Result<Listing>) {
-        let panel = self.panel_mut(side);
-        let refresh = panel.take_refresh().expect("refresh_side found it");
+    fn finish_refresh(&mut self, at: TabRef, result: io::Result<Listing>) {
+        let panel = self.panel_at_mut(at);
+        let refresh = panel.take_refresh().expect("refresh_tab found it");
         match result {
             Ok(listing) => {
                 let select = match refresh.gone {
@@ -244,14 +317,14 @@ impl Commander {
                     ) =>
             {
                 let gone = panel.path().to_path_buf();
-                self.refresh(side, Some(gone));
+                self.refresh(at, Some(gone));
                 return;
             }
             // A flaky network read or lost permission: keep the listing and
             // say nothing; the user didn't ask for this read.
             Err(_) => {}
         }
-        self.reread_if_stale(side);
+        self.reread_if_stale(at);
     }
 
     /// The reads to run, oldest first. Requests replaced before they were
@@ -266,59 +339,59 @@ impl Commander {
 
     /// Entries read so far by load `id`, while it is pending.
     pub fn panel_loading_count(&self, id: u64) -> Option<usize> {
-        let side = self.loading_side(id)?;
-        self.panel(side).loading().map(|l| l.entries_read())
+        let at = self.loading_tab(id)?;
+        self.panel_at(at).loading().map(|l| l.entries_read())
     }
 
     /// Whether load `id` is still wanted by a panel.
     pub fn is_pending(&self, id: u64) -> bool {
-        self.loading_side(id).is_some() || self.refresh_side(id).is_some()
+        self.loading_tab(id).is_some() || self.refresh_tab(id).is_some()
     }
 
-    fn loading_side(&self, id: u64) -> Option<Side> {
-        [Side::Left, Side::Right]
-            .into_iter()
-            .find(|&side| self.panel(side).loading().is_some_and(|l| l.id == id))
+    fn loading_tab(&self, id: u64) -> Option<TabRef> {
+        self.all_tabs()
+            .find(|(_, panel)| panel.loading().is_some_and(|l| l.id == id))
+            .map(|(at, _)| at)
     }
 
     /// Shows a finished read in the panel that asked for it. Returns false
     /// for a stale result (cancelled or replaced), which is dropped.
     pub fn finish_load(&mut self, id: u64, result: io::Result<Listing>) -> bool {
-        if let Some(side) = self.refresh_side(id) {
-            self.finish_refresh(side, result);
+        if let Some(at) = self.refresh_tab(id) {
+            self.finish_refresh(at, result);
             return true;
         }
-        let Some(side) = self.loading_side(id) else {
+        let Some(at) = self.loading_tab(id) else {
             return false;
         };
-        let panel = self.panel_mut(side);
-        let loading = panel.take_loading().expect("loading_side found it");
+        let panel = self.panel_at_mut(at);
+        let loading = panel.take_loading().expect("loading_tab found it");
         match result {
             Ok(listing) => panel.apply(listing, loading.select.as_deref()),
             Err(e) => self.error = Some(format!("{}: {e}", loading.path.display())),
         }
-        self.reread_if_stale(side);
+        self.reread_if_stale(at);
         true
     }
 
     /// Runs a re-read that was held back while another read was pending.
     /// It is quiet: the user already sees this folder.
-    fn reread_if_stale(&mut self, side: Side) {
-        let panel = self.panel_mut(side);
+    fn reread_if_stale(&mut self, at: TabRef) {
+        let panel = self.panel_at_mut(at);
         if !panel.stale || !panel.is_loaded() || panel.loading().is_some() || panel.is_refreshing()
         {
             return;
         }
         panel.stale = false;
-        self.refresh(side, None);
+        self.refresh(at, None);
     }
 
     /// The load took long enough to show the indicator.
     pub fn show_loading(&mut self, id: u64) -> bool {
-        let Some(side) = self.loading_side(id) else {
+        let Some(at) = self.loading_tab(id) else {
             return false;
         };
-        if let Some(loading) = self.panel_mut(side).loading_mut() {
+        if let Some(loading) = self.panel_at_mut(at).loading_mut() {
             loading.visible = true;
         }
         true
@@ -341,7 +414,7 @@ impl Commander {
                 LoadKind::Startup,
             );
         }
-        self.reread_if_stale(side);
+        self.reread_if_stale(self.visible(side));
         true
     }
 
@@ -367,24 +440,56 @@ impl Commander {
             | Command::SwapPanels
             | Command::Reload
             | Command::ToggleHidden
-            | Command::Focus(_) => None,
+            | Command::Focus(_)
+            | Command::CloseTab
+            | Command::NextTab
+            | Command::PrevTab
+            | Command::SelectTab(..) => None,
             Command::CursorTo(side, _) | Command::SortBy(side, _) => Some(side),
             _ => Some(self.active),
         }
     }
 
+    /// `side`'s tab in front.
     pub fn panel(&self, side: Side) -> &Panel {
-        match side {
-            Side::Left => &self.left,
-            Side::Right => &self.right,
-        }
+        self.tabs[side as usize].active()
     }
 
     fn panel_mut(&mut self, side: Side) -> &mut Panel {
-        match side {
-            Side::Left => &mut self.left,
-            Side::Right => &mut self.right,
-        }
+        self.tabs[side as usize].active_mut()
+    }
+
+    /// `side`'s tabs: labels, the one in front, every tab's folder.
+    pub fn tabs(&self, side: Side) -> &Tabs {
+        &self.tabs[side as usize]
+    }
+
+    fn visible(&self, side: Side) -> TabRef {
+        (side, self.tabs[side as usize].index())
+    }
+
+    fn panel_at(&self, (side, ix): TabRef) -> &Panel {
+        self.tabs[side as usize].get(ix).expect("a tab found by id")
+    }
+
+    fn panel_at_mut(&mut self, (side, ix): TabRef) -> &mut Panel {
+        self.tabs[side as usize]
+            .get_mut(ix)
+            .expect("a tab found by id")
+    }
+
+    /// Every tab of both sides.
+    fn all_tabs(&self) -> impl Iterator<Item = (TabRef, &Panel)> {
+        [Side::Left, Side::Right].into_iter().flat_map(move |side| {
+            self.tabs[side as usize]
+                .iter()
+                .enumerate()
+                .map(move |(ix, panel)| ((side, ix), panel))
+        })
+    }
+
+    fn all_panels_mut(&mut self) -> impl Iterator<Item = &mut Panel> {
+        self.tabs.iter_mut().flat_map(Tabs::iter_mut)
     }
 
     pub fn active(&self) -> Side {
@@ -397,7 +502,7 @@ impl Commander {
 
     /// Whether hidden entries are shown. Always the same for both panels.
     pub fn shows_hidden(&self) -> bool {
-        self.left.shows_hidden()
+        self.panel(Side::Left).shows_hidden()
     }
 
     /// Whether typing `ch` starts or extends a quick search.
@@ -544,23 +649,25 @@ impl Commander {
         let active = self.active;
         let nav = self.panel(active).reload_target(Some(select));
         self.request(active, nav, LoadKind::Reload);
-        if self.left.path() == self.right.path() {
+        if self.panel(Side::Left).path() == self.panel(Side::Right).path() {
             let nav = self.panel(active.other()).reload_target(None);
             self.request(active.other(), nav, LoadKind::Reload);
         }
     }
 
-    /// Deselects everything in one panel, e.g. after its selection was copied.
-    pub fn clear_selection(&mut self, side: Side) {
-        self.panel_mut(side).clear_selection();
+    /// Deselects everything in `side`'s front tab, if it still shows `dir`
+    /// (a copy's sources; tabs may have changed while it ran).
+    pub fn clear_selection(&mut self, side: Side, dir: &Path) {
+        let panel = self.panel_mut(side);
+        if panel.path() == dir {
+            panel.clear_selection();
+        }
     }
 
-    /// Applies the case-sensitive sorting setting to both panels.
-    /// The config's hidden columns. A panel sorted by one goes back to Name.
+    /// The config's hidden columns. A tab sorted by one goes back to Name.
     pub fn hide_columns(&mut self, hidden: &[SortKey]) {
         self.hidden_columns = hidden.to_vec();
-        for side in [Side::Left, Side::Right] {
-            let panel = self.panel_mut(side);
+        for panel in self.all_panels_mut() {
             if hidden.contains(&panel.sort().key) {
                 panel.sort_by_name();
             }
@@ -593,9 +700,11 @@ impl Commander {
         }
     }
 
+    /// Applies the case-sensitive sorting setting to every tab.
     pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
-        self.left.set_case_sensitive(case_sensitive);
-        self.right.set_case_sensitive(case_sensitive);
+        for panel in self.all_panels_mut() {
+            panel.set_case_sensitive(case_sensitive);
+        }
     }
 
     pub fn error(&self) -> Option<&str> {
@@ -667,13 +776,45 @@ impl Commander {
                 Ok(())
             }
             Command::SwapPanels => {
-                std::mem::swap(&mut self.left, &mut self.right);
+                self.tabs.swap(0, 1);
                 Ok(())
             }
             Command::ToggleHidden => {
                 let show = !self.shows_hidden();
-                self.left.set_show_hidden(show);
-                self.right.set_show_hidden(show);
+                for panel in self.all_panels_mut() {
+                    panel.set_show_hidden(show);
+                }
+                Ok(())
+            }
+            Command::NewTab => {
+                let copy = panel.duplicate();
+                self.tabs[active as usize].open(copy);
+                self.bring_to_front(active);
+                Ok(())
+            }
+            Command::CloseTab => {
+                if self.tabs[active as usize].close() {
+                    self.bring_to_front(active);
+                }
+                Ok(())
+            }
+            Command::NextTab => {
+                if self.tabs[active as usize].next() {
+                    self.bring_to_front(active);
+                }
+                Ok(())
+            }
+            Command::PrevTab => {
+                if self.tabs[active as usize].prev() {
+                    self.bring_to_front(active);
+                }
+                Ok(())
+            }
+            Command::SelectTab(side, ix) => {
+                self.active = side;
+                if self.tabs[side as usize].select(ix) {
+                    self.bring_to_front(side);
+                }
                 Ok(())
             }
             Command::SortBy(side, key) => {
@@ -981,7 +1122,8 @@ mod tests {
         c.execute(Command::SelectAll);
         c.execute(Command::SwitchPanel);
         c.execute(Command::SelectAll);
-        c.clear_selection(Side::Left);
+        let left = c.panel(Side::Left).path().to_path_buf();
+        c.clear_selection(Side::Left, &left);
         assert_eq!(c.panel(Side::Left).summary().selected(), 0);
         assert_eq!(c.panel(Side::Right).summary().selected(), 4);
     }
@@ -1715,5 +1857,297 @@ mod tests {
             SortKey::Modified,
             "shown again"
         );
+    }
+    #[test]
+    fn start_tabs_reads_only_the_active_tab_of_each_side() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let left = StartTabs {
+            dirs: vec![tmp.path().join("a"), tmp.path().join("b")],
+            active: 1,
+        };
+        let mut c = Commander::start_tabs(
+            left,
+            StartTabs::one(tmp.path().to_path_buf()),
+            false,
+            home.path().to_path_buf(),
+        );
+        let requests = c.take_requests();
+        let paths: Vec<_> = requests.iter().map(|r| r.path.clone()).collect();
+        assert_eq!(paths, [tmp.path().join("b"), tmp.path().to_path_buf()]);
+        for r in requests {
+            let result = read_listing(&r);
+            c.finish_load(r.id, result);
+        }
+        let tabs = c.tabs(Side::Left);
+        assert_eq!((tabs.count(), tabs.index()), (2, 1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("b"));
+        let first = tabs.get(0).unwrap();
+        assert_eq!(first.path(), tmp.path().join("a"));
+        assert!(
+            !first.is_loaded(),
+            "a background tab is read on its first visit"
+        );
+    }
+
+    #[test]
+    fn start_tabs_clamps_the_active_index_and_never_starts_empty() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let c = Commander::start_tabs(
+            StartTabs {
+                dirs: vec![],
+                active: 3,
+            },
+            StartTabs {
+                dirs: vec![tmp.path().join("a")],
+                active: 5,
+            },
+            false,
+            home.path().to_path_buf(),
+        );
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        assert_eq!(c.panel(Side::Left).path(), home.path());
+        assert_eq!(c.tabs(Side::Right).index(), 0);
+    }
+    #[test]
+    fn new_tab_copies_the_front_tab_without_its_selection() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::ToggleSelection); // selects "a", cursor on "b"
+        c.execute(Command::NewTab);
+        let tabs = c.tabs(Side::Left);
+        assert_eq!((tabs.count(), tabs.index()), (2, 1));
+        assert_eq!(
+            tabs.get(0).unwrap().selection().count(),
+            1,
+            "the original keeps it"
+        );
+        let panel = c.panel(Side::Left);
+        assert_eq!(panel.path(), tmp.path());
+        assert_eq!(panel.cursor(), 2);
+        assert_eq!(panel.selection().count(), 0);
+        assert!(panel.is_refreshing(), "re-read quietly");
+        assert!(panel.loading().is_none());
+    }
+
+    #[test]
+    fn close_tab_keeps_the_last_one_and_shows_a_neighbor() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::CloseTab);
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        run(&mut c, Command::NewTab);
+        run(&mut c, Command::Activate); // the second tab enters "a"
+        c.execute(Command::PrevTab);
+        c.execute(Command::CloseTab);
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn next_and_prev_tab_wrap_on_the_active_side_only() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::NextTab);
+        assert_eq!(c.tabs(Side::Left).index(), 0, "one tab: nothing to do");
+        c.execute(Command::NewTab);
+        c.execute(Command::NewTab);
+        assert_eq!(c.tabs(Side::Left).index(), 2);
+        c.execute(Command::NextTab);
+        assert_eq!(c.tabs(Side::Left).index(), 0);
+        c.execute(Command::PrevTab);
+        assert_eq!(c.tabs(Side::Left).index(), 2);
+        assert_eq!(c.tabs(Side::Right).count(), 1);
+    }
+
+    #[test]
+    fn switching_tabs_ends_the_quick_search() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::NewTab);
+        assert!(c.search_type('b'));
+        c.execute(Command::PrevTab);
+        assert_eq!(c.search(), None);
+    }
+
+    #[test]
+    fn a_tab_coming_to_the_front_rereads_quietly() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        run(&mut c, Command::PrevTab);
+        fs::create_dir(tmp.path().join("new")).unwrap();
+        c.execute(Command::NextTab);
+        assert!(c.panel(Side::Left).is_refreshing());
+        assert!(c.panel(Side::Left).loading().is_none(), "no loading state");
+        c.run_loads_now();
+        assert!(
+            c.panel(Side::Left)
+                .entries()
+                .iter()
+                .any(|e| e.label == "new")
+        );
+    }
+
+    #[test]
+    fn a_load_finishing_in_a_background_tab_lands_there() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::Activate); // the second tab: pending "a"
+        let request = c.take_requests().remove(0);
+        c.execute(Command::PrevTab);
+        assert!(c.is_pending(request.id));
+        assert_eq!(
+            c.panel_loading_count(request.id),
+            Some(0),
+            "nothing read yet"
+        );
+        assert!(c.finish_load(request.id, read_listing(&request)));
+        assert_eq!(
+            c.panel(Side::Left).path(),
+            tmp.path(),
+            "the front tab stays"
+        );
+        let second = c.tabs(Side::Left).get(1).unwrap();
+        assert_eq!(second.path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn a_load_for_a_closed_tab_is_dropped() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::Activate);
+        let request = c.take_requests().remove(0);
+        c.execute(Command::CloseTab);
+        assert!(!c.is_pending(request.id));
+        assert_eq!(c.panel_loading_count(request.id), None);
+        assert!(!c.show_loading(request.id));
+        assert!(!c.finish_load(request.id, read_listing(&request)));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+    }
+
+    #[test]
+    fn a_loading_tab_can_be_left_or_closed_but_not_copied() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::Activate); // pending
+        c.execute(Command::NewTab);
+        assert_eq!(
+            c.tabs(Side::Left).count(),
+            2,
+            "Ctrl-T is ignored while loading"
+        );
+        c.execute(Command::PrevTab);
+        assert_eq!(c.tabs(Side::Left).index(), 0);
+        c.execute(Command::NextTab);
+        assert!(c.panel(Side::Left).loading().is_some(), "still loading");
+        c.execute(Command::CloseTab);
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        assert!(c.panel(Side::Left).loading().is_none());
+    }
+
+    #[test]
+    fn select_tab_brings_that_side_and_tab_to_the_front() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::SelectTab(Side::Left, 0));
+        assert_eq!(c.active(), Side::Left);
+        assert_eq!(c.tabs(Side::Left).index(), 0);
+        c.execute(Command::SelectTab(Side::Left, 9));
+        assert_eq!(c.tabs(Side::Left).index(), 0, "out of range: nothing");
+    }
+
+    #[test]
+    fn a_restored_tab_is_read_on_its_first_visit_with_the_fallback() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let left = StartTabs {
+            dirs: vec![tmp.path().to_path_buf(), tmp.path().join("gone/deeper")],
+            active: 0,
+        };
+        let right = StartTabs::one(tmp.path().join("b"));
+        let mut c = Commander::start_tabs(left, right, false, home.path().to_path_buf());
+        c.run_loads_now();
+        c.execute(Command::NextTab);
+        assert!(c.panel(Side::Left).loading().is_some(), "a normal load");
+        let requests = c.take_requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].fallback.as_deref(), Some(home.path()));
+        for r in requests {
+            let result = read_listing(&r);
+            c.finish_load(r.id, result);
+        }
+        assert_eq!(c.panel(Side::Left).path(), tmp.path(), "the nearest parent");
+    }
+
+    #[test]
+    fn a_background_tab_whose_folder_vanished_walks_up() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        run(&mut c, Command::Activate); // the second tab shows "a"
+        c.watch_reload(Side::Left); // a quiet re-read of "a" is pending
+        c.execute(Command::PrevTab);
+        fs::remove_dir(tmp.path().join("a")).unwrap();
+        c.run_loads_now();
+        assert_eq!(c.tabs(Side::Left).get(1).unwrap().path(), tmp.path());
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(c.error().is_none(), "quiet");
+    }
+
+    #[test]
+    fn swap_panels_swaps_whole_sides_with_their_tabs() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        run(&mut c, Command::Activate); // left: [root, a], "a" in front
+        c.execute(Command::SwapPanels);
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        assert_eq!(c.tabs(Side::Right).count(), 2);
+        assert_eq!(c.tabs(Side::Right).index(), 1);
+        assert_eq!(c.panel(Side::Right).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn settings_reach_background_tabs() {
+        let tmp = tree();
+        fs::write(tmp.path().join(".dot"), b"").unwrap();
+        let mut c = on_a(&tmp);
+        c.execute(Command::SortBy(Side::Left, SortKey::Size));
+        run(&mut c, Command::NewTab);
+        run(&mut c, Command::PrevTab);
+        c.hide_columns(&[SortKey::Size]);
+        c.set_case_sensitive_sort(true);
+        c.execute(Command::ToggleHidden);
+        for panel in c.tabs(Side::Left).iter() {
+            assert_eq!(panel.sort().key, SortKey::Name);
+            assert!(panel.sort().case_sensitive);
+            assert!(panel.entries().iter().any(|e| e.label == ".dot"));
+        }
+    }
+    #[test]
+    fn clear_selection_needs_the_same_folder_in_front() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::ToggleSelection);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::PrevTab); // the selection's tab is in front again
+        c.execute(Command::SwitchPanel);
+        c.clear_selection(Side::Left, &tmp.path().join("a"));
+        assert_eq!(c.panel(Side::Left).selection().count(), 1, "another folder");
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::NextTab);
+        c.execute(Command::ToggleSelection); // the copy selects too
+        c.execute(Command::PrevTab);
+        c.clear_selection(Side::Left, tmp.path());
+        assert_eq!(c.panel(Side::Left).selection().count(), 0);
+        let copy = c.tabs(Side::Left).get(1).unwrap();
+        assert_eq!(copy.selection().count(), 1, "other tabs keep theirs");
     }
 }

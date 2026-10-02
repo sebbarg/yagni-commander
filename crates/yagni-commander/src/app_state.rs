@@ -1,12 +1,12 @@
 //! What the app remembers across runs (the state file): the main window's
-//! position and size, the panels' folders and which one is active, whether
+//! position and size, each side's tab folders and the active side, whether
 //! hidden files are shown, and where the last viewer was.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, Bounds, Entity, Global, Pixels, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
-use yagni_commander_core::{Commander, Side, storage};
+use yagni_commander_core::{Commander, Side, StartTabs, storage};
 
 const DEFAULT_WIDTH: f32 = 1200.0;
 const DEFAULT_HEIGHT: f32 = 800.0;
@@ -30,25 +30,45 @@ pub struct State {
     pub show_hidden: bool,
     /// Where the last viewer window was.
     pub viewer: Option<SavedWindow>,
-    /// The panels' folders and the active side at the last quit.
-    pub left: Option<PathBuf>,
-    pub right: Option<PathBuf>,
+    /// Each side's tab folders and the index of the tab in front, at the
+    /// last quit.
+    pub left_tabs: Vec<PathBuf>,
+    pub right_tabs: Vec<PathBuf>,
+    pub left_tab: usize,
+    pub right_tab: usize,
+    /// The active side at the last quit.
     pub active: Option<Side>,
+    /// One folder per side, from state files written before tabs; read
+    /// when the tab lists are missing, never written.
+    #[serde(skip_serializing)]
+    pub left: Option<PathBuf>,
+    #[serde(skip_serializing)]
+    pub right: Option<PathBuf>,
 }
 
 impl State {
-    /// The folders to open: command-line arguments first (left, then
-    /// right), else the remembered folders, else `home`. Nothing is read
+    /// The tabs to open: the saved ones (or an old file's single folder,
+    /// else `home`), with a command-line folder in place of the folder of
+    /// that side's active tab (left first, then right). Nothing is read
     /// here; the background read falls back to a parent or home if needed.
-    pub fn startup_dirs(&self, args: &[String], home: &Path) -> (PathBuf, PathBuf) {
-        let saved = |dir: &Option<PathBuf>| dir.clone().unwrap_or_else(|| home.to_path_buf());
-        let left = args
-            .first()
-            .map_or_else(|| saved(&self.left), PathBuf::from);
-        let right = args
-            .get(1)
-            .map_or_else(|| saved(&self.right), PathBuf::from);
-        (left, right)
+    pub fn startup_tabs(&self, args: &[String], home: &Path) -> (StartTabs, StartTabs) {
+        let side =
+            |tabs: &[PathBuf], old: &Option<PathBuf>, active: usize, arg: Option<&String>| {
+                let mut dirs = if tabs.is_empty() {
+                    vec![old.clone().unwrap_or_else(|| home.to_path_buf())]
+                } else {
+                    tabs.to_vec()
+                };
+                let active = active.min(dirs.len() - 1);
+                if let Some(arg) = arg {
+                    dirs[active] = PathBuf::from(arg);
+                }
+                StartTabs { dirs, active }
+            };
+        (
+            side(&self.left_tabs, &self.left, self.left_tab, args.first()),
+            side(&self.right_tabs, &self.right, self.right_tab, args.get(1)),
+        )
     }
 }
 
@@ -153,13 +173,22 @@ impl AppState {
 
     pub fn remember_panels(commander: &Entity<Commander>, cx: &mut App) {
         let commander = commander.read(cx);
-        let left = commander.panel(Side::Left).path().to_path_buf();
-        let right = commander.panel(Side::Right).path().to_path_buf();
+        let side = |side: Side| {
+            let tabs = commander.tabs(side);
+            let dirs: Vec<PathBuf> = tabs.iter().map(|p| p.path().to_path_buf()).collect();
+            (dirs, tabs.index())
+        };
+        let (left_tabs, left_tab) = side(Side::Left);
+        let (right_tabs, right_tab) = side(Side::Right);
         let active = commander.active();
         let state = &mut cx.global_mut::<Self>().state;
-        state.left = Some(left);
-        state.right = Some(right);
+        state.left_tabs = left_tabs;
+        state.left_tab = left_tab;
+        state.right_tabs = right_tabs;
+        state.right_tab = right_tab;
         state.active = Some(active);
+        state.left = None;
+        state.right = None;
     }
 
     pub fn remember_show_hidden(show_hidden: bool, cx: &mut App) {
@@ -241,9 +270,13 @@ mod tests {
             window: Some(saved(10.0, 20.0)),
             show_hidden: true,
             viewer: Some(saved(30.0, 40.0)),
-            left: Some("/a/b".into()),
-            right: Some("/c".into()),
+            left_tabs: vec!["/a/b".into(), "/d".into()],
+            right_tabs: vec!["/c".into()],
+            left_tab: 1,
+            right_tab: 0,
             active: Some(Side::Right),
+            left: None,
+            right: None,
         };
         AppState {
             path: Some(path.clone()),
@@ -266,41 +299,77 @@ mod tests {
     }
 
     #[test]
-    fn startup_uses_saved_paths_without_reading_them() {
+    fn startup_uses_saved_tabs_without_reading_them() {
         let state = State {
-            left: Some("/net/nas/gone".into()),
-            right: Some("/b".into()),
+            left_tabs: vec!["/net/nas/gone".into(), "/a".into()],
+            left_tab: 1,
+            right_tabs: vec!["/b".into()],
             ..State::default()
         };
-        // Not checked here: the background read falls back if needed.
-        let (left, right) = state.startup_dirs(&[], Path::new("/home/u"));
-        assert_eq!((left, right), ("/net/nas/gone".into(), "/b".into()));
+        let (left, right) = state.startup_tabs(&[], Path::new("/home/u"));
+        assert_eq!(
+            left,
+            StartTabs {
+                dirs: vec!["/net/nas/gone".into(), "/a".into()],
+                active: 1
+            }
+        );
+        assert_eq!(right, StartTabs::one("/b".into()));
     }
 
     #[test]
-    fn startup_without_saved_paths_opens_home() {
-        let home = tempfile::tempdir().unwrap();
-        let (left, right) = State::default().startup_dirs(&[], home.path());
+    fn an_old_state_file_gives_one_tab_per_side() {
+        let state: State = toml::from_str("left = \"/a\"\nright = \"/b\"\n").unwrap();
+        let (left, right) = state.startup_tabs(&[], Path::new("/home/u"));
         assert_eq!(
-            (left.as_path(), right.as_path()),
-            (home.path(), home.path())
+            (left, right),
+            (StartTabs::one("/a".into()), StartTabs::one("/b".into()))
         );
     }
 
     #[test]
-    fn arguments_override_saved_paths() {
-        let home = tempfile::tempdir().unwrap();
-        let saved = home.path().join("saved");
-        std::fs::create_dir(&saved).unwrap();
+    fn startup_without_saved_paths_opens_home() {
+        let (left, right) = State::default().startup_tabs(&[], Path::new("/home/u"));
+        assert_eq!(left, StartTabs::one("/home/u".into()));
+        assert_eq!(right, left);
+    }
+
+    #[test]
+    fn a_saved_tab_index_out_of_range_is_clamped() {
         let state = State {
-            left: Some(saved.clone()),
-            right: Some(saved.clone()),
+            left_tabs: vec!["/a".into(), "/b".into()],
+            left_tab: 9,
             ..State::default()
         };
-        let (left, right) = state.startup_dirs(&args(&["x", "y"]), home.path());
-        assert_eq!((left, right), ("x".into(), "y".into()));
-        // One argument: the right panel keeps its saved path.
-        let (left, right) = state.startup_dirs(&args(&["x"]), home.path());
-        assert_eq!((left, right), ("x".into(), saved));
+        let (left, _) = state.startup_tabs(&args(&["x"]), Path::new("/home/u"));
+        assert_eq!(
+            left,
+            StartTabs {
+                dirs: vec!["/a".into(), "x".into()],
+                active: 1
+            }
+        );
+    }
+
+    #[test]
+    fn arguments_replace_the_active_tabs_folder() {
+        let state = State {
+            left_tabs: vec!["/a".into(), "/b".into()],
+            left_tab: 0,
+            right_tabs: vec!["/c".into()],
+            ..State::default()
+        };
+        let (left, right) = state.startup_tabs(&args(&["x", "y"]), Path::new("/home/u"));
+        assert_eq!(
+            left,
+            StartTabs {
+                dirs: vec!["x".into(), "/b".into()],
+                active: 0
+            }
+        );
+        assert_eq!(right, StartTabs::one("y".into()));
+        // One argument: the right side keeps its saved tabs.
+        let (_, right) = state.startup_tabs(&args(&["x"]), Path::new("/home/u"));
+        assert_eq!(right, StartTabs::one("/c".into()));
     }
 }

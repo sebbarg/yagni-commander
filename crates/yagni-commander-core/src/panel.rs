@@ -136,6 +136,24 @@ impl Panel {
         }
     }
 
+    /// Ctrl-T: a copy of this panel's folder, listing, cursor and sort,
+    /// without its selection or any read in progress.
+    pub(crate) fn duplicate(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            entries: self.entries.clone(),
+            hidden: self.hidden.clone(),
+            show_hidden: self.show_hidden,
+            cursor: self.cursor,
+            sort: self.sort,
+            selection: HashSet::new(),
+            loading: None,
+            refresh: None,
+            loaded: self.loaded,
+            stale: false,
+        }
+    }
+
     /// Reads `path` right away (tests and [`crate::Commander::new`]).
     pub(crate) fn open(path: impl AsRef<Path>, show_hidden: bool) -> io::Result<Self> {
         let path = std::path::absolute(path)?;
@@ -1075,5 +1093,22 @@ mod tests {
         panel.loading_mut().unwrap().visible = true;
         assert!(panel.take_loading().unwrap().visible);
         assert!(panel.loading().is_none());
+    }
+
+    #[test]
+    fn duplicate_copies_the_listing_but_not_the_selection_or_reads() {
+        let tmp = fixture();
+        let mut panel = Panel::open(tmp.path(), false).unwrap();
+        panel.set_cursor(1);
+        panel.toggle_selection();
+        panel.sort_by(SortKey::Size);
+        let copy = panel.duplicate();
+        assert_eq!(copy.path(), panel.path());
+        assert_eq!(copy.cursor(), panel.cursor());
+        assert_eq!(copy.sort(), panel.sort());
+        assert_eq!(copy.entries().len(), panel.entries().len());
+        assert!(copy.is_loaded());
+        assert_eq!(copy.selection().count(), 0);
+        assert!(copy.loading().is_none() && !copy.is_refreshing());
     }
 }

@@ -258,6 +258,28 @@ rm -rf "$left/vanish"
 check "back in the parent" xdotool search --name "^$left - yagni-commander\$"
 shot 08c-vanished
 
+echo "tabs: Ctrl-T, Ctrl-Tab, Ctrl-Shift-Tab, Ctrl-W"
+keys ctrl+t
+typed docs
+keys Return
+check "second tab in docs" xdotool search --name "^$left/docs - yagni-commander\$"
+keys ctrl+shift+Tab
+check "first tab on the left folder" xdotool search --name "^$left - yagni-commander\$"
+printf bg >"$left/docs/background.txt"
+keys ctrl+Tab
+check "back in docs" xdotool search --name "^$left/docs - yagni-commander\$"
+typed background
+keys F2
+typed seen-in-tab
+keys Return
+check "a background tab caught up when shown" test -f "$left/docs/seen-in-tab.txt"
+keys ctrl+t
+shot 08d-tabs
+keys ctrl+w
+check "closed the third tab, docs in front" xdotool search --name "^$left/docs - yagni-commander\$"
+keys ctrl+shift+Tab
+check "first tab again" xdotool search --name "^$left - yagni-commander\$"
+
 echo "F3 viewer"
 typed big
 keys F3
@@ -297,7 +319,8 @@ check "state file written" test -f "$work/state/yagni-commander/state.toml"
 check "hidden files hidden again in the state" grep -q "show_hidden = false" \
     "$work/state/yagni-commander/state.toml"
 check "viewer geometry in the state" grep -q "^\[viewer\]" "$work/state/yagni-commander/state.toml"
-check "panel folders in the state" grep -qF "right = \"$right\"" "$work/state/yagni-commander/state.toml"
+check "tabs in the state" grep -qF "left_tabs = [\"$left\", \"$left/docs\"]" "$work/state/yagni-commander/state.toml"
+check "right tab in the state" grep -qF "right_tabs = [\"$right\"]" "$work/state/yagni-commander/state.toml"
 
 echo "restart without arguments: same folders, right panel active"
 "$app" >"$work/app2.log" 2>&1 &
@@ -306,6 +329,9 @@ check "reopened on the right folder" xdotool search --name "^$right - yagni-comm
 shot 12-restart
 xdotool windowfocus "$(xdotool search --name "^$right - yagni-commander\$" | head -1)"
 sleep 0.5
+keys Tab ctrl+Tab
+check "the restored second tab reads docs" xdotool search --name "^$left/docs - yagni-commander\$"
+shot 12b-restart-tabs
 keys alt+F4
 check "restarted app quit" bash -c '! xdotool search --name "yagni-commander"'
 

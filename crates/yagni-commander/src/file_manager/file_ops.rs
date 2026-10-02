@@ -65,6 +65,8 @@ pub(super) struct RunningJob {
     kind: Kind,
     /// The panel the sources came from.
     source: Side,
+    /// The folder the sources came from.
+    source_dir: PathBuf,
     view: Entity<ProgressView>,
     polls: u32,
     progress_open: bool,
@@ -245,11 +247,14 @@ impl FileManager {
             log: self.commander.read(cx).log().cloned(),
         };
         let job = Job::spawn(operation, settings)?;
-        let source = self.commander.read(cx).active();
+        let commander = self.commander.read(cx);
+        let source = commander.active();
+        let source_dir = commander.panel(source).path().to_path_buf();
         self.job = Some(RunningJob {
             job,
             kind,
             source,
+            source_dir,
             view: cx.new(|_| ProgressView::new()),
             polls: 0,
             progress_open: false,
@@ -404,8 +409,9 @@ impl FileManager {
         }
         let complete = report.failures.is_empty() && !report.cancelled;
         if running.kind == Kind::Copy && complete {
-            self.commander
-                .update(cx, |commander, _| commander.clear_selection(running.source));
+            self.commander.update(cx, |commander, _| {
+                commander.clear_selection(running.source, &running.source_dir)
+            });
         }
         self.execute(Command::Reload, cx);
         if !report.failures.is_empty() {

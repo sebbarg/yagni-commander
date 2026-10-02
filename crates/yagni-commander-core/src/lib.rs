@@ -17,13 +17,15 @@ mod panel;
 mod quick_search;
 mod sort;
 pub mod storage;
+mod tabs;
 pub mod viewer;
 pub mod watch;
 
-pub use commander::{Command, Commander, Outcome, Side};
+pub use commander::{Command, Commander, Outcome, Side, StartTabs};
 pub use config::{Config, Setting};
 pub use entry::{Entry, EntryKind};
 pub use format::{format_modified, format_permissions, format_size};
 pub use listing::{Listing, LoadRequest, read_listing};
 pub use panel::{Loading, Panel, Summary};
 pub use sort::{Sort, SortKey};
+pub use tabs::{Tabs, label};
