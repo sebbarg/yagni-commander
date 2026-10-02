@@ -310,7 +310,6 @@ fn enter_submits_a_prompt_exactly_once(cx: &mut TestAppContext) {
                 error_title: "Test failed",
                 initial: "value",
                 selection: 0..0,
-                detail: None,
                 width: super::commands::PROMPT_WIDTH,
             },
             std::rc::Rc::new(move |_, _, _, _| {
@@ -615,14 +614,13 @@ fn f5_on_one_folder_copies_it_under_a_new_name(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn f5_on_many_shows_the_list_and_keeps_names(cx: &mut TestAppContext) {
+fn f5_on_many_keeps_names(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open_with_target(cx);
     std::fs::write(tmp.path().join("g"), b"g").unwrap();
     cx.simulate_keystrokes("ctrl-r");
     // Select f and g (the last two entries).
     cx.simulate_keystrokes("end space up space f5");
     cx.run_until_parked();
-    assert!(cx.debug_bounds("copy-list").is_some());
     cx.simulate_keystrokes("enter");
     wait_until(cx, |cx| !job_running(cx));
     assert!(tmp.path().join("a/f").exists());

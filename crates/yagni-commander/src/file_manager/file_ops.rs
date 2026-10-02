@@ -113,16 +113,13 @@ impl FileManager {
             _ => "Cannot move",
         };
         // One entry: its full target path, so it can be renamed on the way.
-        // More: the target folder, with the names listed below.
-        let (initial, selection, detail) = match sources.as_slice() {
-            [one] => {
-                let (text, selection) = single_target(&other_dir, one);
-                (text, selection, None)
-            }
-            many => {
+        // More: the target folder.
+        let (initial, selection) = match sources.as_slice() {
+            [one] => single_target(&other_dir, one),
+            _ => {
                 let text = other_dir.display().to_string();
                 let end = text.len();
-                (text, end..end, Some(listing(many)))
+                (text, end..end)
             }
         };
         self.prompt_name(
@@ -131,7 +128,6 @@ impl FileManager {
                 error_title,
                 initial: &initial,
                 selection,
-                detail,
                 width: COPY_PROMPT_WIDTH,
             },
             Rc::new(move |this, typed, window, cx| {
@@ -478,8 +474,6 @@ fn describe_file(path: &Path) -> String {
 
 /// Width of the F5/F6 prompt: room for long paths.
 const COPY_PROMPT_WIDTH: f32 = 720.0;
-/// Names listed under the F5/F6 field before "...".
-const LISTED_NAMES: usize = 5;
 
 /// Where the text typed into the F5/F6 prompt sends `sources`, relative to
 /// the active panel's directory `dir`. One source: an existing folder (or
@@ -536,42 +530,6 @@ fn single_target(other_dir: &Path, source: &Path) -> (String, std::ops::Range<us
     let stem = stem_range(&name, is_dir);
     let start = text.len() - name.len();
     (text, start + stem.start..start + stem.end)
-}
-
-/// "2 files, 1 folder: a, b, c" for the F5/F6 prompt, shortened after
-/// [`LISTED_NAMES`] names.
-fn listing(sources: &[PathBuf]) -> String {
-    let folders = sources
-        .iter()
-        .filter(|p| p.symlink_metadata().is_ok_and(|m| m.is_dir()))
-        .count();
-    let files = sources.len() - folders;
-    let count = |n: usize, one: &str, many: &str| match n {
-        0 => None,
-        1 => Some(format!("1 {one}")),
-        n => Some(format!("{n} {many}")),
-    };
-    let counts: Vec<String> = [
-        count(files, "file", "files"),
-        count(folders, "folder", "folders"),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-    let mut names: Vec<String> = sources
-        .iter()
-        .take(LISTED_NAMES)
-        .map(|p| {
-            p.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    if sources.len() > LISTED_NAMES {
-        names.push("...".into());
-    }
-    format!("{}: {}", counts.join(", "), names.join(", "))
 }
 
 /// One line per failure, at most [`MAX_LISTED_FAILURES`].
@@ -774,26 +732,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    #[test]
-    fn listing_names_counts_and_shortens() {
-        let paths = |names: &[&str]| {
-            names
-                .iter()
-                .map(|n| PathBuf::from("/d").join(n))
-                .collect::<Vec<_>>()
-        };
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("dir")).unwrap();
-        let mixed = vec![
-            tmp.path().join("dir"),
-            tmp.path().join("a.txt"),
-            tmp.path().join("b.txt"),
-        ];
-        assert_eq!(listing(&mixed), "2 files, 1 folder: dir, a.txt, b.txt");
-        let many = paths(&["a", "b", "c", "d", "e", "f", "g"]);
-        assert_eq!(listing(&many), "7 files: a, b, c, d, e, ...");
     }
 
     #[test]
