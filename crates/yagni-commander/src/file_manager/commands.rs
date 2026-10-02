@@ -282,7 +282,7 @@ impl FileManager {
             dialog
                 .title(title.clone())
                 .w(gpui_kit::px(width))
-                .child(text_field(&input))
+                .child(dialog_field(&input))
                 .footer(buttons.clone())
                 // Enter in the text field.
                 .on_ok(move |_, window, cx| {
@@ -344,7 +344,7 @@ impl FileManager {
                 .w(gpui_kit::px(560.0))
                 .close_button(false)
                 .child("Left/Right, Tab/Shift-Tab, Enter/Space, Escape. \"Three\" starts selected.")
-                .child(text_field(&input))
+                .child(dialog_field(&input))
                 .footer(buttons.clone())
                 .on_cancel(move |_, window, cx| {
                     focus.focus(window, cx);
@@ -430,6 +430,17 @@ pub(super) fn show_message(
 pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
     use gpui_kit::Styled;
     Input::new(state).py(gpui_kit::px(5.0))
+}
+
+/// A [`text_field`] at the top or bottom of a dialog body. The body clips
+/// its children and has no vertical padding, and gpui-component draws the
+/// focus ring 3 px outside the field, so the field needs room above and
+/// below or the ring is cut off.
+pub(super) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
+    use gpui_kit::{ParentElement, Styled};
+    gpui_kit::div()
+        .py(gpui_kit::px(4.0))
+        .child(text_field(state))
 }
 
 /// The About box's text.
