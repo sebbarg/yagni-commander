@@ -27,15 +27,39 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
-    /// Copies each source into the directory `to`, keeping its name.
-    Copy { sources: Vec<PathBuf>, to: PathBuf },
-    /// Moves each source into the directory `to`: a rename where possible,
-    /// otherwise (another filesystem) copy, then delete.
-    Move { sources: Vec<PathBuf>, to: PathBuf },
+    /// Copies the sources to `to`.
+    Copy {
+        sources: Vec<PathBuf>,
+        to: Destination,
+    },
+    /// Moves the sources to `to`: a rename where possible, otherwise
+    /// (another filesystem) copy, then delete.
+    Move {
+        sources: Vec<PathBuf>,
+        to: Destination,
+    },
     /// Moves each source to the system trash.
     Trash { sources: Vec<PathBuf> },
     /// Deletes each source permanently, directories with their contents.
     Delete { sources: Vec<PathBuf> },
+}
+
+/// Where copied or moved entries go. Missing folders on the way are created.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Destination {
+    /// Into this directory, each source keeping its name.
+    Into(PathBuf),
+    /// To exactly this path (one source only): copy or move under a new
+    /// name, or rename in place.
+    As(PathBuf),
+}
+
+impl Destination {
+    fn path(&self) -> &Path {
+        match self {
+            Destination::Into(path) | Destination::As(path) => path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -139,7 +163,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Some(to) => engine.note(format_args!(
             "start: {} entries to {}",
             sources.len(),
-            to.display()
+            to.path().display()
         )),
         None => engine.note(format_args!("start: {} entries", sources.len())),
     }
@@ -164,6 +188,25 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         report.skipped
     ));
     engine.report
+}
+
+/// `path` with symlinks resolved as far as it exists; the missing rest is
+/// appended as is.
+fn resolve(path: &Path) -> PathBuf {
+    let mut existing = path;
+    let mut rest = Vec::new();
+    loop {
+        if let Ok(real) = existing.canonicalize() {
+            return rest.iter().rev().fold(real, |acc, part| acc.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_owned());
+                existing = parent;
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 /// Outcome of one entry.
@@ -194,12 +237,8 @@ struct Engine<'a> {
 }
 
 impl Engine<'_> {
-    fn transfer(&mut self, sources: &[PathBuf], to: &Path, is_move: bool) {
+    fn transfer(&mut self, sources: &[PathBuf], to: &Destination, is_move: bool) {
         self.progress.items_total = sources.len();
-        if !to.is_dir() {
-            self.fail(to, "the destination is not a directory");
-            return;
-        }
         // Rejected sources are finished right away, so a bad one (like "/")
         // is never scanned.
         let mut work = Vec::new();
@@ -211,6 +250,16 @@ impl Engine<'_> {
                     self.progress.items_done += 1;
                 }
             }
+        }
+        if work.is_empty() {
+            return;
+        }
+        let folder = match to {
+            Destination::Into(dir) => dir.as_path(),
+            Destination::As(path) => path.parent().unwrap_or(Path::new("/")),
+        };
+        if !self.make_folders(folder) {
+            return;
         }
         if !is_move {
             for (source, _) in &work {
@@ -235,22 +284,49 @@ impl Engine<'_> {
         }
     }
 
-    /// Where `source` goes in `to`, unless that makes no sense.
-    fn target_for(&self, source: &Path, to: &Path) -> Result<PathBuf, &'static str> {
+    /// Where `source` goes, unless that makes no sense.
+    fn target_for(&self, source: &Path, to: &Destination) -> Result<PathBuf, &'static str> {
         let Some(name) = source.file_name() else {
             return Err("a filesystem root cannot be copied or moved");
         };
-        let target = to.join(name);
+        let target = match to {
+            Destination::Into(dir) => dir.join(name),
+            Destination::As(path) => path.clone(),
+        };
         if same_file(source, &target) {
             return Err("source and target are the same");
         }
         if source.symlink_metadata().is_ok_and(|m| m.is_dir())
-            && let (Ok(source), Ok(to)) = (source.canonicalize(), to.canonicalize())
-            && to.starts_with(&source)
+            && let Ok(source) = source.canonicalize()
+            && resolve(&target).starts_with(&source)
         {
             return Err("a directory cannot be put inside itself");
         }
         Ok(target)
+    }
+
+    /// Creates `dir` and any missing folders above it, logging each. False
+    /// (with a failure recorded) if that is not possible.
+    fn make_folders(&mut self, dir: &Path) -> bool {
+        if dir.is_dir() {
+            return true;
+        }
+        let missing: Vec<&Path> = dir
+            .ancestors()
+            .take_while(|path| path.symlink_metadata().is_err())
+            .collect();
+        if missing.is_empty() {
+            self.fail(dir, "the destination is not a directory");
+            return false;
+        }
+        for path in missing.into_iter().rev() {
+            if let Err(e) = fs::create_dir(path) {
+                self.fail(path, e);
+                return false;
+            }
+            self.note(format_args!("created directory {}", path.display()));
+        }
+        true
     }
 
     /// Adds the files and bytes under `path` to the progress totals.

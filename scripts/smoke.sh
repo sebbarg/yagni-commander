@@ -44,6 +44,7 @@ mkdir -p "$left/docs" "$right"
 printf hello >"$left/notes.txt"
 printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
+printf move >"$left/movable.txt"
 seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
 head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
 mkdir -p "$left/many"
@@ -142,6 +143,22 @@ typed made
 keys F6 Return
 check "made/ moved to the right" test -d "$right/made"
 check "made/ gone from the left" test ! -e "$left/made"
+
+echo "F5 one file under a new name (the name is preselected)"
+typed notes
+keys F5
+typed notes2
+shot 03b-copy-rename
+keys Return
+check "copied as right/notes2.txt" has "$right/notes2.txt" hello
+
+echo "F6 one file to a full path with new folders"
+typed movable
+keys F6 ctrl+a
+typed "$right/new/sub/moved.txt"
+keys Return
+check "moved into new folders" has "$right/new/sub/moved.txt" move
+check "movable.txt gone from the left" test ! -e "$left/movable.txt"
 
 echo "F8 trash (into the temporary trash)"
 typed renamed
@@ -265,7 +282,8 @@ today_log=$logs/operations-$(date +%F).log
 for line in "mkdir created directory $left/made" "new file created $left/new.txt" \
     "rename renamed $left/new.txt -> $left/renamed.txt" \
     "copy replacing $right/notes.txt" "move moved $left/made -> $right/made" \
-    "trash trashed $left/renamed.txt" "delete deleted $left/doomed.txt"; do
+    "trash trashed $left/renamed.txt" "delete deleted $left/doomed.txt" \
+    "move created directory $right/new/sub"; do
     check "logged: $line" grep -qF "$line" "$today_log"
 done
 

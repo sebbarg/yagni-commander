@@ -162,7 +162,9 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 - Copying or moving something onto itself, or a directory into itself, is an error for that entry.
 - Times and permissions are preserved best effort: filesystems that can't store them (FAT, some network mounts) are not an error. A symlink's own time is not preserved.
 - Pipes, sockets and device files are not copied (error for that entry).
-- F5/F6 ask for the destination directory, prefilled with the other panel's path. A relative path is taken from the active panel's directory. It must be an existing directory other than the source directory (the prompt says so and stays open).
+- F5/F6 ask for the destination (decided 2026-10-01). The prompt is wide (720 px) for long paths. A relative path is taken from the active panel's directory. Missing folders on the way are created (and logged, like F7). Problems are reported by the prompt, which stays open.
+  - **One entry (file or folder):** the field holds its full target path, the other panel's folder plus its name, with the name preselected up to the extension (like F2). Typing a new name or path copies or moves it there: a duplicate or a rename within one folder is fine. An existing folder, or text ending in `/`, means into that folder with the name kept. Refused: the entry itself as target, a folder into itself.
+  - **Two or more:** the field holds the target folder (the other panel's), editable; below it a read-only line such as "3 files, 1 folder: a.txt, b.txt, c.txt, ..." (first 5 names). Every entry keeps its name. Refused: the source folder itself, a file as target.
 - F8 and Del ask for confirmation first.
 - The progress dialog appears only if the job takes longer than about 300 ms, so quick copies don't flash a dialog. It counts files and bytes. Escape or Cancel stops the job at the next file (or 4 MiB chunk).
 - In the conflict prompt, Enter means Overwrite (preselected, like TC) and Escape means Cancel. It shows both files' size and modification time.

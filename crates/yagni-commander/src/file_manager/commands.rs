@@ -4,8 +4,10 @@
 use std::ops::Range;
 use std::rc::Rc;
 
+use gpui_kit::InteractiveElement as _;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, AppContext, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement, SharedString,
     Window,
@@ -28,7 +30,14 @@ pub(super) struct Prompt<'a> {
     pub initial: &'a str,
     /// Byte range of `initial` to preselect.
     pub selection: Range<usize>,
+    /// A read-only line under the field.
+    pub detail: Option<String>,
+    /// Dialog width in pixels.
+    pub width: f32,
 }
+
+/// Width of a prompt for a name.
+pub(super) const PROMPT_WIDTH: f32 = 420.0;
 
 /// Submits the prompt; returns whether the dialog should close.
 type Confirm = dyn Fn(&mut Window, &mut App) -> bool;
@@ -53,6 +62,8 @@ impl FileManager {
                 error_title: "Rename failed",
                 initial: &label,
                 selection: stem,
+                detail: None,
+                width: PROMPT_WIDTH,
             },
             Rc::new(move |this, to, _, cx| {
                 this.commander.update(cx, |commander, cx| {
@@ -78,6 +89,8 @@ impl FileManager {
                 error_title: "Cannot create directory",
                 initial: "",
                 selection: 0..0,
+                detail: None,
+                width: PROMPT_WIDTH,
             },
             Rc::new(|this, name, _, cx| {
                 this.commander.update(cx, |commander, cx| {
@@ -123,6 +136,8 @@ impl FileManager {
                 error_title: "Cannot edit file",
                 initial: "",
                 selection: 0..0,
+                detail: None,
+                width: PROMPT_WIDTH,
             },
             Rc::new(move |this, name, _, cx| {
                 let path = this.commander.update(cx, |commander, cx| {
@@ -257,14 +272,22 @@ impl FileManager {
         let buttons = ButtonRow::build([("Cancel", cancel), ("OK", ok)], 1, cx);
 
         let title = SharedString::from(prompt.title.to_owned());
+        let (detail, width) = (prompt.detail.map(SharedString::from), prompt.width);
         window.open_dialog(cx, move |dialog, _, _| {
             let confirm = confirm.clone();
             let focus_ok = focus.clone();
             let focus_cancel = focus.clone();
             dialog
                 .title(title.clone())
-                .w(gpui_kit::px(420.0))
+                .w(gpui_kit::px(width))
                 .child(text_field(&input))
+                .when_some(detail.clone(), |dialog, detail| {
+                    dialog.child(
+                        gpui_kit::div()
+                            .debug_selector(|| "copy-list".into())
+                            .child(detail),
+                    )
+                })
                 .footer(buttons.clone())
                 // Enter in the text field.
                 .on_ok(move |_, window, cx| {
@@ -447,7 +470,7 @@ pub(crate) fn focus_when_open(handle: FocusHandle, window: &mut Window, cx: &mut
 /// The part of a name to preselect for renaming: everything before the last
 /// extension for files (like TC), the whole name for directories and for
 /// names like `.bashrc` that are all extension.
-fn stem_range(name: &str, is_dir: bool) -> Range<usize> {
+pub(super) fn stem_range(name: &str, is_dir: bool) -> Range<usize> {
     match name.rfind('.') {
         Some(dot) if !is_dir && dot > 0 => 0..dot,
         _ => 0..name.len(),

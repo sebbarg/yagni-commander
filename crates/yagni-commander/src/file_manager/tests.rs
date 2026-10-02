@@ -308,6 +308,8 @@ fn enter_submits_a_prompt_exactly_once(cx: &mut TestAppContext) {
                 error_title: "Test failed",
                 initial: "value",
                 selection: 0..0,
+                detail: None,
+                width: super::commands::PROMPT_WIDTH,
             },
             std::rc::Rc::new(move |_, _, _, _| {
                 submits.set(submits.get() + 1);
@@ -567,6 +569,62 @@ fn f5_to_the_same_directory_is_refused_in_the_prompt(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert!(!dialog_open(cx));
     assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 4);
+}
+
+#[gpui_kit::test]
+fn f5_on_one_file_can_rename_the_copy(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open_with_target(cx);
+    cx.simulate_keystrokes("f5");
+    cx.run_until_parked();
+    // The name is preselected: typing replaces it.
+    cx.simulate_input("g");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, |cx| !job_running(cx));
+    assert_eq!(std::fs::read(tmp.path().join("a/g")).unwrap(), b"new");
+    assert!(!tmp.path().join("a/f").exists());
+}
+
+#[gpui_kit::test]
+fn f6_on_one_file_into_new_folders(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open_with_target(cx);
+    cx.simulate_keystrokes("f6");
+    cx.run_until_parked();
+    cx.simulate_input("x/y/g");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, |cx| !job_running(cx));
+    assert_eq!(std::fs::read(tmp.path().join("a/x/y/g")).unwrap(), b"new");
+    assert!(!tmp.path().join("f").exists());
+}
+
+#[gpui_kit::test]
+fn f5_on_one_folder_copies_it_under_a_new_name(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    std::fs::write(tmp.path().join("b/inner"), b"i").unwrap();
+    // Left on b, right panel in a.
+    cx.simulate_keystrokes("tab down enter tab down down f5");
+    cx.run_until_parked();
+    cx.simulate_input("copied");
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, |cx| !job_running(cx));
+    assert_eq!(
+        std::fs::read(tmp.path().join("a/copied/inner")).unwrap(),
+        b"i"
+    );
+}
+
+#[gpui_kit::test]
+fn f5_on_many_shows_the_list_and_keeps_names(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open_with_target(cx);
+    std::fs::write(tmp.path().join("g"), b"g").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    // Select f and g (the last two entries).
+    cx.simulate_keystrokes("end space up space f5");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("copy-list").is_some());
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, |cx| !job_running(cx));
+    assert!(tmp.path().join("a/f").exists());
+    assert!(tmp.path().join("a/g").exists());
 }
 
 #[gpui_kit::test]

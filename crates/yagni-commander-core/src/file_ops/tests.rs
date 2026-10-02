@@ -85,14 +85,28 @@ fn fixture() -> (tempfile::TempDir, PathBuf, PathBuf) {
 fn copy(sources: &[PathBuf], to: &Path) -> Operation {
     Operation::Copy {
         sources: sources.to_vec(),
-        to: to.to_path_buf(),
+        to: Destination::Into(to.to_path_buf()),
     }
 }
 
 fn mv(sources: &[PathBuf], to: &Path) -> Operation {
     Operation::Move {
         sources: sources.to_vec(),
-        to: to.to_path_buf(),
+        to: Destination::Into(to.to_path_buf()),
+    }
+}
+
+fn copy_as(source: &Path, target: &Path) -> Operation {
+    Operation::Copy {
+        sources: vec![source.to_path_buf()],
+        to: Destination::As(target.to_path_buf()),
+    }
+}
+
+fn mv_as(source: &Path, target: &Path) -> Operation {
+    Operation::Move {
+        sources: vec![source.to_path_buf()],
+        to: Destination::As(target.to_path_buf()),
     }
 }
 
@@ -335,14 +349,14 @@ fn refuses_copies_onto_or_into_themselves_and_roots() {
 }
 
 #[test]
-fn destination_must_be_a_directory() {
+fn a_missing_destination_folder_is_created() {
     let (_tmp, src, dst) = fixture();
     let report = run_script(
         &copy(&[src.join("a.txt")], &dst.join("missing")),
         &mut Script::default(),
     );
-    assert_eq!(report.failures.len(), 1);
-    assert_eq!(report.failures[0].path, dst.join("missing"));
+    assert_eq!(report, Report::default());
+    assert_eq!(read(dst.join("missing/a.txt")), "hello");
 }
 
 #[test]
@@ -980,4 +994,131 @@ fn overwrites_trash_and_moves_by_copy_are_logged() {
     let text = fs::read_to_string(file.path()).unwrap();
     assert!(text.contains(&format!("test removed {s}/dir/b.txt")));
     assert!(text.contains(&format!("test removed {s}/dir\n")));
+}
+
+// One item to an exact path (F5/F6 on a single entry).
+
+#[test]
+fn copy_as_gives_the_copy_a_new_name() {
+    let (_tmp, src, dst) = fixture();
+    let report = run_script(
+        &copy_as(&src.join("a.txt"), &dst.join("b.txt")),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(read(dst.join("b.txt")), "hello");
+    assert_eq!(names(&dst), ["b.txt"]);
+}
+
+#[test]
+fn copy_as_works_for_a_folder() {
+    let (_tmp, src, dst) = fixture();
+    let report = run_script(
+        &copy_as(&src.join("dir"), &dst.join("renamed")),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(read(dst.join("renamed/deep/c.txt")), "c");
+}
+
+#[test]
+fn move_as_in_the_same_folder_renames() {
+    let (_tmp, src, _dst) = fixture();
+    let report = run_script(
+        &mv_as(&src.join("a.txt"), &src.join("b.txt")),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(read(src.join("b.txt")), "hello");
+    assert!(!src.join("a.txt").exists());
+}
+
+#[test]
+fn copy_as_in_the_same_folder_duplicates() {
+    let (_tmp, src, _dst) = fixture();
+    let report = run_script(
+        &copy_as(&src.join("a.txt"), &src.join("a copy.txt")),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(read(src.join("a copy.txt")), "hello");
+    assert_eq!(read(src.join("a.txt")), "hello");
+}
+
+#[test]
+fn missing_folders_are_created_and_logged() {
+    let (_tmp, src, dst) = fixture();
+    let d = dst.display();
+    let lines = logged(&[
+        (copy_as(&src.join("a.txt"), &dst.join("new/sub/x.txt")), &[]),
+        (mv(&[src.join("dir")], &dst.join("other")), &[]),
+    ]);
+    assert_eq!(read(dst.join("new/sub/x.txt")), "hello");
+    assert_eq!(read(dst.join("other/dir/b.txt")), "bee");
+    for line in [
+        format!("copy created directory {d}/new"),
+        format!("copy created directory {d}/new/sub"),
+        format!("move created directory {d}/other"),
+    ] {
+        assert!(lines.contains(&line), "{line} in {lines:#?}");
+    }
+}
+
+#[test]
+fn a_file_in_the_way_of_a_new_folder_fails() {
+    let (_tmp, src, dst) = fixture();
+    fs::write(dst.join("file"), b"x").unwrap();
+    let report = run_script(
+        &copy_as(&src.join("a.txt"), &dst.join("file/x.txt")),
+        &mut Script::default(),
+    );
+    assert_eq!(report.failures.len(), 1);
+    assert!(src.join("a.txt").exists());
+    let report = run_script(
+        &copy(&[src.join("a.txt")], &dst.join("file")),
+        &mut Script::default(),
+    );
+    assert_eq!(
+        report.failures[0].message,
+        "the destination is not a directory"
+    );
+}
+
+#[test]
+fn copy_as_onto_itself_is_refused() {
+    let (_tmp, src, _dst) = fixture();
+    let report = run_script(
+        &copy_as(&src.join("a.txt"), &src.join("a.txt")),
+        &mut Script::default(),
+    );
+    assert_eq!(report.failures[0].message, "source and target are the same");
+    assert_eq!(read(src.join("a.txt")), "hello");
+}
+
+#[test]
+fn a_folder_cannot_be_copied_as_something_inside_itself() {
+    let (_tmp, src, _dst) = fixture();
+    let report = run_script(
+        &copy_as(&src.join("dir"), &src.join("dir/new/x")),
+        &mut Script::default(),
+    );
+    assert_eq!(
+        report.failures[0].message,
+        "a directory cannot be put inside itself"
+    );
+    assert!(!src.join("dir/new").exists(), "no folder created");
+}
+
+#[test]
+fn a_conflict_at_the_new_name_is_asked() {
+    let (_tmp, src, dst) = fixture();
+    fs::write(dst.join("b.txt"), b"old").unwrap();
+    let mut script = Script::answering(&[Answer::Overwrite]);
+    let report = run_script(
+        &copy_as(&src.join("a.txt"), &dst.join("b.txt")),
+        &mut script,
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(script.conflicts[0].target, dst.join("b.txt"));
+    assert_eq!(read(dst.join("b.txt")), "hello");
 }

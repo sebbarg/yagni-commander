@@ -15,12 +15,12 @@ use gpui_kit::{
     Styled, WeakEntity, Window, div, px,
 };
 use yagni_commander_core::file_ops::{
-    Answer, Conflict, Event, Job, Operation, Progress, Report, Settings,
+    Answer, Conflict, Destination, Event, Job, Operation, Progress, Report, Settings,
 };
 use yagni_commander_core::{Command, Side, format_modified, format_size};
 
 use super::FileManager;
-use super::commands::{Prompt, focus_when_open, show_error};
+use super::commands::{Prompt, focus_when_open, show_error, stem_range};
 use crate::button_row::{ButtonRow, OnPress};
 use crate::theme::Theme;
 
@@ -101,7 +101,7 @@ impl FileManager {
             (
                 source_paths(panel),
                 panel.path().to_path_buf(),
-                other.path().display().to_string(),
+                other.path().to_path_buf(),
             )
         };
         if sources.is_empty() || self.refuse_second_job(window, cx) {
@@ -112,16 +112,30 @@ impl FileManager {
             Kind::Copy => "Cannot copy",
             _ => "Cannot move",
         };
-        let end = other_dir.len();
+        // One entry: its full target path, so it can be renamed on the way.
+        // More: the target folder, with the names listed below.
+        let (initial, selection, detail) = match sources.as_slice() {
+            [one] => {
+                let (text, selection) = single_target(&other_dir, one);
+                (text, selection, None)
+            }
+            many => {
+                let text = other_dir.display().to_string();
+                let end = text.len();
+                (text, end..end, Some(listing(many)))
+            }
+        };
         self.prompt_name(
             Prompt {
                 title: &title,
                 error_title,
-                initial: &other_dir,
-                selection: end..end,
+                initial: &initial,
+                selection,
+                detail,
+                width: COPY_PROMPT_WIDTH,
             },
             Rc::new(move |this, typed, window, cx| {
-                let to = destination(&dir, typed)?;
+                let to = destination(&dir, typed, &sources)?;
                 let sources = sources.clone();
                 let operation = match kind {
                     Kind::Copy => Operation::Copy { sources, to },
@@ -462,30 +476,102 @@ fn describe_file(path: &Path) -> String {
     }
 }
 
-/// The directory typed into the F5/F6 prompt, relative to the active panel's
-/// directory `dir`. It must exist and differ from `dir`.
-fn destination(dir: &Path, typed: &str) -> io::Result<PathBuf> {
+/// Width of the F5/F6 prompt: room for long paths.
+const COPY_PROMPT_WIDTH: f32 = 720.0;
+/// Names listed under the F5/F6 field before "...".
+const LISTED_NAMES: usize = 5;
+
+/// Where the text typed into the F5/F6 prompt sends `sources`, relative to
+/// the active panel's directory `dir`. One source: an existing folder (or
+/// text ending in "/") means into it, anything else is its new full path.
+/// More: into the typed folder. Missing folders are created by the job.
+fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Destination> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     let typed = typed.trim();
     if typed.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "give a destination directory",
-        ));
+        return Err(invalid("give a destination".into()));
     }
     let to = dir.join(typed);
-    if !to.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("“{typed}” is not a directory"),
+    let same = |a: &Path, b: &Path| {
+        a.canonicalize()
+            .ok()
+            .is_some_and(|a| Some(a) == b.canonicalize().ok())
+    };
+    if let [one] = sources {
+        let into = typed.ends_with('/') || to.is_dir();
+        let target = match (into, one.file_name()) {
+            (true, Some(name)) => to.join(name),
+            _ => to.clone(),
+        };
+        if same(one, &target) {
+            return Err(invalid("source and target are the same".into()));
+        }
+        return Ok(if into {
+            Destination::Into(to)
+        } else {
+            Destination::As(to)
+        });
+    }
+    if to.exists() && !to.is_dir() {
+        return Err(invalid(format!("“{typed}” is not a directory")));
+    }
+    if same(&to, dir) {
+        return Err(invalid(
+            "source and destination are the same directory".into(),
         ));
     }
-    if to.canonicalize().ok() == dir.canonicalize().ok() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "source and destination are the same directory",
-        ));
+    Ok(Destination::Into(to))
+}
+
+/// The F5/F6 field for one source: its path in `other_dir`, with the name
+/// (up to the extension, like F2) preselected.
+fn single_target(other_dir: &Path, source: &Path) -> (String, std::ops::Range<usize>) {
+    let name = source
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let text = other_dir.join(&name).display().to_string();
+    let is_dir = source.symlink_metadata().is_ok_and(|m| m.is_dir());
+    let stem = stem_range(&name, is_dir);
+    let start = text.len() - name.len();
+    (text, start + stem.start..start + stem.end)
+}
+
+/// "2 files, 1 folder: a, b, c" for the F5/F6 prompt, shortened after
+/// [`LISTED_NAMES`] names.
+fn listing(sources: &[PathBuf]) -> String {
+    let folders = sources
+        .iter()
+        .filter(|p| p.symlink_metadata().is_ok_and(|m| m.is_dir()))
+        .count();
+    let files = sources.len() - folders;
+    let count = |n: usize, one: &str, many: &str| match n {
+        0 => None,
+        1 => Some(format!("1 {one}")),
+        n => Some(format!("{n} {many}")),
+    };
+    let counts: Vec<String> = [
+        count(files, "file", "files"),
+        count(folders, "folder", "folders"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let mut names: Vec<String> = sources
+        .iter()
+        .take(LISTED_NAMES)
+        .map(|p| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    if sources.len() > LISTED_NAMES {
+        names.push("...".into());
     }
-    Ok(to)
+    format!("{}: {}", counts.join(", "), names.join(", "))
 }
 
 /// One line per failure, at most [`MAX_LISTED_FAILURES`].
@@ -643,19 +729,78 @@ mod tests {
     }
 
     #[test]
-    fn destination_must_be_another_existing_directory() {
+    fn one_source_goes_to_the_typed_path() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir(tmp.path().join("sub")).unwrap();
-        std::fs::write(tmp.path().join("file"), b"").unwrap();
         let dir = tmp.path();
-        assert_eq!(destination(dir, " sub ").unwrap(), dir.join("sub"));
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("f.txt"), b"").unwrap();
+        let one = [dir.join("f.txt")];
+        let to = |typed: &str| destination(dir, typed, &one);
+        // A new name, here or anywhere (missing folders are made later).
+        assert_eq!(to(" g.txt ").unwrap(), Destination::As(dir.join("g.txt")));
+        assert_eq!(
+            to("new/sub/g.txt").unwrap(),
+            Destination::As(dir.join("new/sub/g.txt"))
+        );
+        // An existing folder, or a trailing slash: into it, keeping the name.
+        assert_eq!(to("sub").unwrap(), Destination::Into(dir.join("sub")));
+        assert_eq!(to("new/").unwrap(), Destination::Into(dir.join("new/")));
         let absolute = dir.join("sub").display().to_string();
-        assert_eq!(destination(dir, &absolute).unwrap(), dir.join("sub"));
-        assert!(destination(dir, "").is_err());
-        assert!(destination(dir, "file").is_err());
-        assert!(destination(dir, "missing").is_err());
-        assert!(destination(dir, ".").is_err());
-        assert!(destination(&dir.join("sub"), "..").is_ok());
+        assert_eq!(to(&absolute).unwrap(), Destination::Into(dir.join("sub")));
+        // Not onto itself, not empty.
+        assert!(to("f.txt").is_err());
+        assert!(to(".").is_err(), "into its own folder is onto itself");
+        assert!(to("").is_err());
+    }
+
+    #[test]
+    fn many_sources_go_into_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("file"), b"").unwrap();
+        let two = [dir.join("x"), dir.join("y")];
+        let to = |typed: &str| destination(dir, typed, &two);
+        assert_eq!(to(" sub ").unwrap(), Destination::Into(dir.join("sub")));
+        assert_eq!(to("new").unwrap(), Destination::Into(dir.join("new")));
+        assert!(to("file").is_err(), "not a directory");
+        assert!(to(".").is_err(), "the same directory");
+        assert!(to("").is_err());
+        assert!(
+            destination(
+                &dir.join("sub"),
+                "..",
+                &[dir.join("sub/x"), dir.join("sub/y")]
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn listing_names_counts_and_shortens() {
+        let paths = |names: &[&str]| {
+            names
+                .iter()
+                .map(|n| PathBuf::from("/d").join(n))
+                .collect::<Vec<_>>()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("dir")).unwrap();
+        let mixed = vec![
+            tmp.path().join("dir"),
+            tmp.path().join("a.txt"),
+            tmp.path().join("b.txt"),
+        ];
+        assert_eq!(listing(&mixed), "2 files, 1 folder: dir, a.txt, b.txt");
+        let many = paths(&["a", "b", "c", "d", "e", "f", "g"]);
+        assert_eq!(listing(&many), "7 files: a, b, c, d, e, ...");
+    }
+
+    #[test]
+    fn a_single_source_starts_with_its_full_target_path() {
+        let (text, selection) = single_target(Path::new("/other"), Path::new("/here/notes.txt"));
+        assert_eq!(text, "/other/notes.txt");
+        assert_eq!(&text[selection], "notes");
     }
 
     #[test]
