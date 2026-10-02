@@ -66,6 +66,7 @@ fn main() {
 
             let options = WindowOptions {
                 window_bounds: Some(app_state.initial_bounds(cx)),
+                app_id: Some(windows::APP_ID.into()),
                 ..Default::default()
             };
             cx.set_global(app_state);

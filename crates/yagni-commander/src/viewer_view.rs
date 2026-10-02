@@ -46,6 +46,7 @@ pub fn open(path: PathBuf, main: WindowBounds, cx: &mut App) -> io::Result<()> {
     let source = FileSource::open(&path)?;
     let options = WindowOptions {
         window_bounds: Some(cx.global::<AppState>().viewer_bounds(main, cx)),
+        app_id: Some(crate::windows::APP_ID.into()),
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {

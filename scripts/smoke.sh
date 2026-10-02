@@ -20,7 +20,7 @@ delay=${SMOKE_DELAY:-0.4}
 display=${SMOKE_DISPLAY:-:99}
 cargo=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
 
-for tool in Xvfb xdotool import; do
+for tool in Xvfb xdotool xprop import; do
     command -v "$tool" >/dev/null || { echo "smoke: $tool is not installed" >&2; exit 2; }
 done
 
@@ -94,6 +94,8 @@ typed() {
 }
 shot() { import -window root "$shots/$1.png"; }
 has() { [[ $(cat "$1") == "$2" ]]; }
+# The app id: WM_CLASS on X11 (the Wayland app_id is the same string).
+app_id() { xprop -id "$1" WM_CLASS | grep -q '= "yagni-commander", "yagni-commander"$'; }
 
 for _ in $(seq 50); do
     window=$(xdotool search --name yagni-commander 2>/dev/null | head -1) && break
@@ -105,6 +107,7 @@ sleep 1
 
 echo "smoke: $work"
 shot 01-start
+check "main window app id" app_id "$window"
 
 echo "quick search"
 typed no
@@ -257,6 +260,7 @@ echo "F3 viewer"
 typed big
 keys F3
 check "viewer window open" xdotool search --name "big.txt - yagni-commander"
+check "viewer window app id" app_id "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
 # No window manager here to focus the new window.
 xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
 sleep 0.5

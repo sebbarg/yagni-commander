@@ -59,7 +59,7 @@ As of 2026-10-02, end of session (everything committed; last commit "Add column 
   - `file_manager/loads.rs`: runs the commander's directory reads, one `std::thread` per read (never gpui's background pool: a dead NFS read would hold a pool thread forever), polled every 10 ms while any runs; after 15 polls the panel header shows "Loading <path>... N entries" and the old listing dims; it redraws only when the count changed (checked every 100 ms), so a hung read stays quiet. The `FileManager` observer of the `Commander` starts new reads; dialogs and file operations check `active_loading` first (F5/F6 also wait for the other panel, their destination).
   - `file_manager/watch.rs`: spawns the two `PanelWatcher`s, points them at the panels' folders from the `Commander` observer (`watched`, `watch_panels`), and turns their callbacks (a `futures` unbounded channel awaited by one `spawn_in` task, no polling) into `Commander::watch_reload`.
   - `viewer_view.rs`: the F3 viewer window (`ViewerView`, its own `Viewer` key context and `actions::viewer` actions, byte-based scrollbar). Rows are laid out around the top byte position on every render; nothing depends on the file size. Giant lines get forced row breaks at 64 KiB-aligned offsets (when the 64 KiB before has no `\n`), so scrolling up never scans far back.
-  - `windows.rs`: closing the main window closes every viewer and quits.
+  - `windows.rs`: closing the main window closes every viewer and quits. `APP_ID` ("yagni-commander") is set on every window: Wayland `app_id`, X11 `WM_CLASS` (checked by the smoke script with `xprop`). gpui sets no window icon on Wayland or macOS; icons come with packaging (`.desktop` file plus icon theme, `.app` bundle).
   - `config_state.rs`: the `CurrentConfig` global: the settings in use, the file's path, and `problem` (why the file is not in use: parse error or no config directory; while set, the settings dialog is disabled and nothing is saved). `FileManager::change_setting` (dialog) saves one key with core `config::save_setting` (`toml_edit`: comments, layout and hand edits survive; a broken file is never written) and then `apply_config` (sort, log, the global). Ctrl-R calls `reload_config`, which applies a good file or keeps the settings and shows "Config ignored: ...".
   - `settings_dialog.rs`: the Settings dialog (`SettingsView`: two `text_field`s and two gpui-component `Switch`es, plus a `ButtonRow` with Close). A text field is saved only if typed into (so its opening text can't undo a hand edit of the file), on blur and on every way out; Enter and Close stay in the dialog while the days value is invalid, Escape drops it. Save errors show after the dialog has closed (`window.defer`), since closing pops the top dialog.
   - `file_manager/commands.rs`: F2/F7/Shift-F4 name prompt (`prompt_name`, a gpui-component `Dialog` with an `Input`), F4 and Shift-F4 editor launch, quick search key handling, `show_error` / `show_message`, About.
@@ -135,7 +135,7 @@ As of 2026-10-02, end of session (everything committed; last commit "Add column 
 - macOS: Xcode. gpui-kit enables gpui's `runtime_shaders` and `font-kit` features, so Metal shaders compile at runtime and the full Xcode app may no longer be required (unverified; if the build asks for `metal`, install Xcode and `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`).
 - Kubuntu: `sudo apt install build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev`
 - Arch/Omarchy: `sudo pacman -S --needed base-devel clang cmake libxkbcommon libxkbcommon-x11 wayland fontconfig freetype2 libx11 libxcb vulkan-icd-loader` plus the Vulkan driver for your GPU.
-- For `scripts/smoke.sh` (Linux only; package names not yet verified on the owner's machines): Kubuntu `sudo apt install xvfb xdotool imagemagick mesa-vulkan-drivers`; Arch `sudo pacman -S xorg-server-xvfb xdotool imagemagick vulkan-swrast`.
+- For `scripts/smoke.sh` (Linux only; package names not yet verified on the owner's machines): Kubuntu `sudo apt install xvfb xdotool x11-utils imagemagick mesa-vulkan-drivers`; Arch `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick vulkan-swrast`.
 
 ### Fresh dev container (Ubuntu 24.04, no display)
 
@@ -145,7 +145,7 @@ Containers are ephemeral; redo this at the start of a session if `~/.cargo/bin/c
 curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy,rustfmt
 sudo apt-get install -y build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev \
   libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev \
-  mesa-vulkan-drivers xvfb xdotool imagemagick
+  mesa-vulkan-drivers xvfb xdotool x11-utils imagemagick
 ~/.cargo/bin/rustup component add llvm-tools-preview && ~/.cargo/bin/cargo install cargo-llvm-cov --locked
 ```
 
