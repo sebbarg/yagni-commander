@@ -20,7 +20,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
-  - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit. The temporary F12 Button test is not in the menu.
+  - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit.
 - Check marks follow the state: the menus are rebuilt when hidden files or the active panel's sort change.
 - Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
 - Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10 and lone Alt do nothing.

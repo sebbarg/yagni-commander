@@ -300,61 +300,6 @@ impl FileManager {
     }
 }
 
-impl FileManager {
-    /// F12 (temporary): a dialog with a text field and six buttons, to try
-    /// the button row's keyboard handling. The status line shows what closed it.
-    pub(super) fn button_test(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.end_search(cx);
-        let input = cx.new(|cx| InputState::new(window, cx).default_value("Tab to the buttons"));
-        let this = cx.entity().downgrade();
-        let report = move |what: String, cx: &mut App| {
-            let _ = this.update(cx, |this, cx| {
-                this.notice = Some(what.into());
-                cx.notify();
-            });
-        };
-        let focus = self.focus.clone();
-        let button = |label: &'static str| -> (&'static str, OnPress) {
-            let (report, focus, input) = (report.clone(), focus.clone(), input.clone());
-            let on_press: OnPress = Rc::new(move |window, cx| {
-                let text = input.read(cx).value().to_string();
-                window.close_dialog(cx);
-                focus.focus(window, cx);
-                report(format!("Button test: pressed “{label}”, text “{text}”"), cx);
-            });
-            (label, on_press)
-        };
-        let buttons = ButtonRow::build(
-            [
-                button("One"),
-                button("Two"),
-                button("Three"),
-                button("Four"),
-                button("Five"),
-                button("Six"),
-            ],
-            2,
-            cx,
-        );
-        focus_when_open(buttons.focus_handle(cx), window, cx);
-        window.open_dialog(cx, move |dialog, _, _| {
-            let (report, focus) = (report.clone(), focus.clone());
-            dialog
-                .title("Button test")
-                .w(gpui_kit::px(560.0))
-                .close_button(false)
-                .child("Left/Right, Tab/Shift-Tab, Enter/Space, Escape. \"Three\" starts selected.")
-                .child(dialog_field(&input))
-                .footer(buttons.clone())
-                .on_cancel(move |_, window, cx| {
-                    focus.focus(window, cx);
-                    report("Button test: Escape".into(), cx);
-                    true
-                })
-        });
-    }
-}
-
 /// The `editor` setting, or an error box saying it is missing.
 fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
     let editor = cx.global::<CurrentConfig>().config.editor.clone();

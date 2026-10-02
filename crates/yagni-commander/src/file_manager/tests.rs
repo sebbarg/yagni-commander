@@ -1025,18 +1025,6 @@ fn reload_of_a_vanished_directory_shows_the_error(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn f12_button_test_reports_the_pressed_button(cx: &mut TestAppContext) {
-    let (_tmp, _commander, cx) = open(cx);
-    cx.simulate_keystrokes("f12");
-    cx.run_until_parked();
-    cx.simulate_keystrokes("right enter");
-    cx.run_until_parked();
-    assert!(!dialog_open(cx));
-    let notice = file_manager(cx).read_with(cx, |this, _| this.notice.clone());
-    assert!(notice.unwrap().contains("“Four”"));
-}
-
-#[gpui_kit::test]
 fn the_search_box_is_drawn_only_in_the_active_panel_while_searching(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     assert!(bounds(cx, "search-left".into()).is_none());
@@ -1051,9 +1039,7 @@ fn the_search_box_is_drawn_only_in_the_active_panel_while_searching(cx: &mut Tes
 fn commands_that_open_a_dialog_close_the_search_box(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
     set_editor("true", cx);
-    for key in [
-        "f2", "f4", "f5", "f6", "f7", "f8", "shift-f8", "shift-f4", "f12",
-    ] {
+    for key in ["f2", "f4", "f5", "f6", "f7", "f8", "shift-f8", "shift-f4"] {
         cx.simulate_keystrokes("f");
         assert_eq!(search(&commander, cx).as_deref(), Some("f"), "{key}");
         cx.simulate_keystrokes(key);

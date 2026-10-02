@@ -17,11 +17,11 @@ mod loads;
 mod watch;
 
 use crate::actions::{
-    About, Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp,
-    Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move,
-    OpenSettings, PageDown, PageUp, Reload, Rename, SelectAll, SortByModified, SortByName,
-    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel,
-    ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
+    About, Activate, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp, Delete, Edit,
+    EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move, OpenSettings, PageDown,
+    PageUp, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
+    Trash, View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -508,7 +508,6 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &Delete, window, cx| {
                 this.trash(file_ops::Kind::Delete, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &ButtonTest, window, cx| this.button_test(window, cx)))
             .on_action(
                 cx.listener(|this, _: &EditNewFile, window, cx| this.edit_new_file(window, cx)),
             )

@@ -181,11 +181,6 @@ keys Return
 check "doomed.txt deleted" test ! -e "$left/doomed.txt"
 check "doomed.txt not in the trash" test ! -e "$work/data/Trash/files/doomed.txt"
 
-echo "F12 button test dialog"
-keys F12
-shot 06-buttons
-keys Escape
-
 echo "Ctrl-. hidden files"
 keys ctrl+period
 shot 07-hidden-shown

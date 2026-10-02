@@ -37,7 +37,6 @@ actions!(
         SwapPanels,
         Reload,
         ToggleHidden,
-        ButtonTest,
         CancelSearch,
         View,
         Quit,
@@ -123,8 +122,6 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-.", ToggleHidden, context),
         KeyBinding::new("ctrl-,", OpenSettings, context),
         KeyBinding::new("escape", CancelSearch, context),
-        // Temporary, for trying the dialog button row. Remove before v1.
-        KeyBinding::new("f12", ButtonTest, context),
     ]);
     // The in-window menu bar (Linux; macOS has the native one). "alt" alone
     // is gpui's modifier-only binding: Alt pressed and released with no
