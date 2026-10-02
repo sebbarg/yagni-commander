@@ -59,6 +59,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Directories show as `[name]` when icons are off (display only: sorting and quick search use the bare name). ".." has no brackets.
 - File icons (decided 2026-10-02, spec `docs/superpowers/specs/2026-10-02-file-icons-design.md`): a Nerd Font glyph before every name, chosen by exact file name, then the name in lowercase, then extension (longest compound first), like `eza --icons`. Folders: the home folder itself gets a home glyph (decided 2026-10-02: by path, so a symlink to home does not; ".." stays an arrow), then a small special list (`.git`, `src`, `Documents`, ...), else a plain folder; ".." an up arrow; executables without a match a terminal; symlinks follow their target, broken ones a generic file. The icon takes the row's text color. With icons on, folders lose their `[ ]` brackets. On by default; `icons = false` or the Settings switch turns them off. The font (Symbols Nerd Font Mono) is bundled; the table is generated from nvim-web-devicons.
 - New and updated files pulse briefly (v3; discussed 2026-10-02, parked). Leanings so far: every reload of the folder a panel already shows pulses (watcher, Ctrl-R, the reload after F5/F6), never a navigation or a first listing; "updated" means same name, different size or modified time (compared in `Panel::apply`); a file that keeps changing pulses about once a second. Look not decided: a background tint in a new theme role `changed`, fading out over about 1.5 s, was proposed; no pulse with reduce motion on. Drive it from a per-name timestamp, not gpui's per-element animation state, since list rows are recreated on scroll.
+- Resizable columns (v2, moved from v1 on 2026-10-02). Until then, hiding columns in Settings gives Name more room.
 
 ### Directory loading
 
@@ -71,9 +72,9 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - A read the operating system never returns (a dead NFS server) cannot be interrupted: Escape abandons it, and its thread ends when the read returns or the app exits.
 - Showing entries while a slow directory is still being read (a growing listing) is out of scope.
 
-### Tabs (v2)
+### Tabs
 
-Tabs per panel, like Double Commander.
+Tabs per side (v1; pulled forward from v2 on 2026-10-02; design: `docs/superpowers/specs/2026-10-02-tabs-design.md`). Ctrl-T clones the visible tab into a new one after it, Ctrl-W closes the active tab (never the last one), Ctrl-Tab/Ctrl-Shift-Tab cycle with wrap-around; all on the active side. The tab header is always shown above the path header; a tab's label is its folder's last component, tabs shrink evenly and truncate. A click activates a tab; only Ctrl-W closes one. Background tabs keep their listing; only the visible tab per side is watched, and a tab re-reads quietly when it comes to the front. Ctrl-U swaps whole sides. Tabs and each side's active tab are restored on restart; a command-line folder replaces the active tab's folder.
 
 ### Toolbar (v2)
 
@@ -101,8 +102,11 @@ Toolbar with e.g. drive icons.
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
 | Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. |
 | Alt-Z | Set the other panel's path to this panel's path. |
-| Ctrl-U | Swap the two panels. |
-| Ctrl-R | Reload both panels and re-read the config (see Config). |
+| Ctrl-U | Swap the two sides, with all their tabs. |
+| Ctrl-R | Reload the visible tab of each side and re-read the config (see Config). |
+| Ctrl-T | New tab on the active side, a copy of the visible one (see Tabs). |
+| Ctrl-W | Close the active tab; the last tab of a side stays. |
+| Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |
 | In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
