@@ -731,7 +731,10 @@ fn cancel_between_entries_stops_copy_and_move() {
     assert!(run_script(&copy(&[src.join("dir")], &dst), &mut script).cancelled);
     assert!(!dst.join("dir/deep/c.txt").exists());
 
-    // A move merging into an existing directory, and a move by copy.
+    // A move merging into an existing directory, and a move by copy. The
+    // copy above may have finished b.txt before cancelling (read_dir order
+    // depends on the file system), so start the merge from an empty target.
+    fs::remove_dir_all(dst.join("dir")).unwrap();
     fs::create_dir_all(dst.join("dir/deep")).unwrap();
     let mut script = Script {
         cancel_at_path: Some(deep.clone()),
