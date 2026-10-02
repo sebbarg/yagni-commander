@@ -1930,6 +1930,78 @@ fn clicking_a_switch_toggles_it(cx: &mut TestAppContext) {
     assert!(config(cx).case_sensitive_sort);
 }
 
+fn name_width(cx: &mut VisualTestContext) -> f32 {
+    f32::from(cx.debug_bounds("header-left-Name").unwrap().size.width)
+}
+
+#[gpui_kit::test]
+fn switches_hide_and_show_the_optional_columns(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    for (switch, column, key) in [
+        ("settings-modified", "Modified", "show_modified"),
+        ("settings-owner", "Owner", "show_owner"),
+        ("settings-permissions", "Permissions", "show_permissions"),
+    ] {
+        let before = name_width(cx);
+        click(cx, switch, 1);
+        cx.run_until_parked();
+        for side in ["left", "right"] {
+            let header: &'static str = format!("header-{side}-{column}").leak();
+            assert!(cx.debug_bounds(header).is_none(), "{header} hidden");
+        }
+        assert!(name_width(cx) > before, "Name takes the {column} width");
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&format!("{key} = false")), "{text}");
+    }
+    assert!(cx.debug_bounds("header-left-Size").is_some(), "Size stays");
+    click(cx, "settings-owner", 1);
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("header-left-Owner").is_some(),
+        "shown again"
+    );
+}
+
+#[gpui_kit::test]
+fn hiding_the_sort_column_sorts_by_name(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    click(cx, "header-left-Owner", 1);
+    let key =
+        |cx: &VisualTestContext| commander.read_with(cx, |c, _| c.panel(Side::Left).sort().key);
+    assert_eq!(key(cx), yagni_commander_core::SortKey::Owner);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    click(cx, "settings-owner", 1);
+    cx.run_until_parked();
+    assert_eq!(key(cx), yagni_commander_core::SortKey::Name);
+    cx.dispatch_action(crate::actions::SortByOwner);
+    assert_eq!(
+        key(cx),
+        yagni_commander_core::SortKey::Name,
+        "its action does nothing"
+    );
+}
+
+#[gpui_kit::test]
+fn ctrl_r_applies_hand_edited_columns(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    std::fs::write(&path, "show_permissions = false\n").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("header-left-Permissions").is_none());
+    assert!(cx.debug_bounds("header-left-Owner").is_some());
+}
+
 #[gpui_kit::test]
 fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
@@ -1966,7 +2038,8 @@ fn the_close_button_closes(cx: &mut TestAppContext) {
     activate(cx);
     cx.simulate_keystrokes("ctrl-,");
     cx.run_until_parked();
-    cx.simulate_keystrokes("tab tab tab tab"); // editor -> ... -> Close
+    // editor -> sort -> log -> days -> modified -> owner -> permissions -> Close
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab");
     press(cx, "space");
     assert!(!settings_open(cx));
 }

@@ -12,7 +12,7 @@ use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
 };
 
-use crate::columns::COLUMNS;
+use crate::columns::{Column, visible_columns};
 use crate::file_manager::execute;
 use crate::theme::{Colors, Theme};
 
@@ -74,6 +74,7 @@ impl PanelView {
         let commander = self.commander.read(cx);
         let panel = commander.panel(side);
         let is_active = commander.active() == side;
+        let columns: Vec<_> = visible_columns(commander).collect();
         range
             .map(|ix| {
                 let entry = &panel.entries()[ix];
@@ -81,7 +82,7 @@ impl PanelView {
                     cursor: (ix == panel.cursor()).then_some(is_active),
                     selected: panel.is_selected(entry),
                 };
-                entry_row(entry, row, colors)
+                entry_row(entry, row, colors, &columns)
                     .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -100,7 +101,9 @@ impl PanelView {
     fn render_column_headers(&self, cx: &mut Context<Self>) -> Div {
         let side = self.side;
         let colors = &Theme::get(cx).colors;
-        let sort = self.commander.read(cx).panel(side).sort();
+        let commander = self.commander.read(cx);
+        let sort = commander.panel(side).sort();
+        let columns: Vec<_> = visible_columns(commander).collect();
         div()
             .h(px(COLUMN_HEADER_HEIGHT))
             .flex_none()
@@ -111,7 +114,7 @@ impl PanelView {
             .border_b_1()
             .border_color(colors.border)
             .text_size(px(12.0))
-            .children(COLUMNS.iter().map(|column| {
+            .children(columns.into_iter().map(|column| {
                 let key = column.key;
                 column
                     .cell()
@@ -250,7 +253,7 @@ struct RowState {
     selected: bool,
 }
 
-fn entry_row(entry: &Entry, row: RowState, colors: &Colors) -> Div {
+fn entry_row(entry: &Entry, row: RowState, colors: &Colors, columns: &[&Column]) -> Div {
     // Selected rows are orange throughout; under the active cursor the bar
     // itself turns orange so selection stays visible.
     let (name, detail) = if row.selected {
@@ -278,7 +281,7 @@ fn entry_row(entry: &Entry, row: RowState, colors: &Colors) -> Div {
         .items_center()
         .gap(px(CELL_SPACING))
         .when_some(bg, |d, bg| d.bg(bg))
-        .children(COLUMNS.iter().map(|column| {
+        .children(columns.iter().map(|column| {
             let is_name = column.key == SortKey::Name;
             column
                 .cell()

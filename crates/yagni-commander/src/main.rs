@@ -46,6 +46,7 @@ fn main() {
     let current = CurrentConfig::load(storage::config_file());
     let config = &current.config;
     commander.set_case_sensitive_sort(config.case_sensitive_sort);
+    commander.hide_columns(&config.hidden_columns());
     let log_dir = storage::log_dir();
     let (log, log_problem) = oplog::start(log_dir.as_deref(), config.log, config.log_keep_days);
     commander.set_log(log.map(std::sync::Arc::new));

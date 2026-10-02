@@ -2,7 +2,7 @@
 
 use gpui_kit::{Div, div, prelude::*, px};
 use yagni_commander_core::{
-    Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
+    Commander, Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
 };
 
 pub struct Column {
@@ -46,6 +46,12 @@ pub const COLUMNS: [Column; 5] = [
     },
 ];
 
+/// The columns the panels show: Name and Size, then the optional ones the
+/// config turns on (see `Commander::hide_columns`).
+pub fn visible_columns(commander: &Commander) -> impl Iterator<Item = &'static Column> + '_ {
+    COLUMNS.iter().filter(|c| commander.shows_column(c.key))
+}
+
 impl Column {
     /// Header text, with an arrow on the column the panel is sorted by.
     pub fn header(&self, sort: Sort) -> String {
@@ -88,7 +94,6 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagni_commander_core::Commander;
 
     fn column(key: SortKey) -> &'static Column {
         COLUMNS.iter().find(|c| c.key == key).unwrap()

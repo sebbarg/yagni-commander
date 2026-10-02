@@ -52,6 +52,8 @@ pub struct MenuState {
     pub show_hidden: bool,
     /// The active panel's sort column.
     pub sort: SortKey,
+    /// Whether the optional columns are shown: Modified, Owner, Permissions.
+    pub columns: [bool; 3],
 }
 
 impl MenuState {
@@ -59,9 +61,19 @@ impl MenuState {
         Self {
             show_hidden: commander.shows_hidden(),
             sort: commander.panel(commander.active()).sort().key,
+            columns: OPTIONAL.map(|key| commander.shows_column(key)),
         }
     }
+
+    fn shows(&self, key: SortKey) -> bool {
+        OPTIONAL
+            .iter()
+            .position(|&k| k == key)
+            .is_none_or(|i| self.columns[i])
+    }
 }
+
+const OPTIONAL: [SortKey; 3] = [SortKey::Modified, SortKey::Owner, SortKey::Permissions];
 
 fn item(label: &'static str, action: impl Action) -> MenuEntry {
     MenuEntry::Item {
@@ -107,6 +119,36 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         ]);
     }
     let sorted = |key| state.sort == key;
+    let mut show = vec![
+        check("Hidden files", ToggleHidden, state.show_hidden),
+        MenuEntry::Separator,
+        check("Sort by name", SortByName, sorted(SortKey::Name)),
+        check("Sort by size", SortBySize, sorted(SortKey::Size)),
+    ];
+    // Sort items only for the optional columns shown.
+    show.extend(
+        [
+            state.shows(SortKey::Modified).then(|| {
+                check(
+                    "Sort by modified",
+                    SortByModified,
+                    sorted(SortKey::Modified),
+                )
+            }),
+            state
+                .shows(SortKey::Owner)
+                .then(|| check("Sort by owner", SortByOwner, sorted(SortKey::Owner))),
+            state.shows(SortKey::Permissions).then(|| {
+                check(
+                    "Sort by permissions",
+                    SortByPermissions,
+                    sorted(SortKey::Permissions),
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten(),
+    );
     let mut defs = vec![
         MenuDef {
             title: "Files",
@@ -122,23 +164,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         },
         MenuDef {
             title: "Show",
-            entries: vec![
-                check("Hidden files", ToggleHidden, state.show_hidden),
-                MenuEntry::Separator,
-                check("Sort by name", SortByName, sorted(SortKey::Name)),
-                check("Sort by size", SortBySize, sorted(SortKey::Size)),
-                check(
-                    "Sort by modified",
-                    SortByModified,
-                    sorted(SortKey::Modified),
-                ),
-                check("Sort by owner", SortByOwner, sorted(SortKey::Owner)),
-                check(
-                    "Sort by permissions",
-                    SortByPermissions,
-                    sorted(SortKey::Permissions),
-                ),
-            ],
+            entries: show,
         },
     ];
     if mac {
@@ -240,6 +266,7 @@ mod tests {
     const STATE: MenuState = MenuState {
         show_hidden: false,
         sort: SortKey::Name,
+        columns: [true; 3],
     };
 
     #[test]
@@ -303,6 +330,7 @@ mod tests {
         let state = MenuState {
             show_hidden: true,
             sort: SortKey::Size,
+            ..STATE
         };
         let defs = menus(state, false);
         assert_eq!(checked(&defs, "Hidden files"), Some(true));
@@ -336,7 +364,7 @@ mod tests {
     fn gpui_menus_keep_titles_items_and_checks() {
         let state = MenuState {
             show_hidden: true,
-            sort: SortKey::Name,
+            ..STATE
         };
         let gpui = to_gpui(&menus(state, false));
         assert_eq!(gpui[2].name.as_ref(), "Show");
@@ -348,5 +376,24 @@ mod tests {
             _ => panic!("expected an action"),
         }
         assert!(matches!(gpui[2].items[1], gpui_kit::MenuItem::Separator));
+    }
+
+    #[test]
+    fn hidden_columns_have_no_sort_item() {
+        let state = MenuState {
+            columns: [false, true, false],
+            ..STATE
+        };
+        let defs = menus(state, false);
+        assert_eq!(
+            labels(&defs[2]),
+            [
+                "Hidden files",
+                "-",
+                "Sort by name",
+                "Sort by size",
+                "Sort by owner"
+            ]
+        );
     }
 }

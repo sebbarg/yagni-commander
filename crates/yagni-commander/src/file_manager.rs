@@ -272,6 +272,12 @@ impl FileManager {
                 cx.notify();
             });
         }
+        if config.hidden_columns() != old.hidden_columns() {
+            self.commander.update(cx, |c, cx| {
+                c.hide_columns(&config.hidden_columns());
+                cx.notify();
+            });
+        }
         if config.log != old.log {
             let (log, problem) = if config.log {
                 oplog::start(self.log_dir.as_deref(), true, config.log_keep_days)

@@ -295,6 +295,15 @@ impl Panel {
         self.resort(self.sort.toggled(key));
     }
 
+    /// Back to Name ascending (the column sorted by was hidden).
+    pub(crate) fn sort_by_name(&mut self) {
+        self.resort(Sort {
+            key: SortKey::Name,
+            descending: false,
+            ..self.sort
+        });
+    }
+
     fn resort(&mut self, sort: Sort) {
         let keep = self.cursor_entry().map(|e| e.name.clone());
         self.sort = sort;

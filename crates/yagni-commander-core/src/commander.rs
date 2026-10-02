@@ -85,6 +85,8 @@ pub struct Commander {
     next_load: u64,
     /// Loads the UI has not taken yet (see [`Commander::take_requests`]).
     requests: Vec<LoadRequest>,
+    /// Columns turned off in the config; panels can't be sorted by them.
+    hidden_columns: Vec<SortKey>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,6 +146,7 @@ impl Commander {
             home,
             next_load: 0,
             requests: Vec::new(),
+            hidden_columns: Vec::new(),
         }
     }
 
@@ -549,6 +552,22 @@ impl Commander {
     }
 
     /// Applies the case-sensitive sorting setting to both panels.
+    /// The config's hidden columns. A panel sorted by one goes back to Name.
+    pub fn hide_columns(&mut self, hidden: &[SortKey]) {
+        self.hidden_columns = hidden.to_vec();
+        for side in [Side::Left, Side::Right] {
+            let panel = self.panel_mut(side);
+            if hidden.contains(&panel.sort().key) {
+                panel.sort_by_name();
+            }
+        }
+    }
+
+    /// Whether the column for `key` is shown (and can be sorted by).
+    pub fn shows_column(&self, key: SortKey) -> bool {
+        !self.hidden_columns.contains(&key)
+    }
+
     pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
         self.left.set_case_sensitive(case_sensitive);
         self.right.set_case_sensitive(case_sensitive);
@@ -570,6 +589,11 @@ impl Commander {
                 self.active = side;
             }
             return Outcome::Done;
+        }
+        if let Command::SortBy(_, key) = command
+            && !self.shows_column(key)
+        {
+            return Outcome::Done; // its column is hidden
         }
         self.error = None;
         self.search.clear();
@@ -1597,5 +1621,33 @@ mod tests {
         let err = c.check_dir(&sub).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(err.to_string().contains(&*sub.to_string_lossy()));
+    }
+
+    #[test]
+    fn hiding_a_column_resets_panels_sorted_by_it() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::SortBy(Side::Left, SortKey::Owner));
+        c.execute(Command::SortBy(Side::Right, SortKey::Size));
+        c.hide_columns(&[SortKey::Owner, SortKey::Permissions]);
+        assert_eq!(c.panel(Side::Left).sort().key, SortKey::Name);
+        assert!(!c.panel(Side::Left).sort().descending);
+        assert_eq!(c.panel(Side::Right).sort().key, SortKey::Size, "untouched");
+    }
+
+    #[test]
+    fn a_hidden_column_cannot_be_sorted_by() {
+        let (_tmp, mut c) = commander();
+        c.hide_columns(&[SortKey::Modified]);
+        c.execute(Command::SortBy(Side::Left, SortKey::Modified));
+        assert_eq!(c.panel(Side::Left).sort().key, SortKey::Name);
+        assert!(c.shows_column(SortKey::Owner));
+        assert!(!c.shows_column(SortKey::Modified));
+        c.hide_columns(&[]);
+        c.execute(Command::SortBy(Side::Left, SortKey::Modified));
+        assert_eq!(
+            c.panel(Side::Left).sort().key,
+            SortKey::Modified,
+            "shown again"
+        );
     }
 }

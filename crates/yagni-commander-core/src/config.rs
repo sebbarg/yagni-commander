@@ -6,6 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::sort::SortKey;
 use crate::storage::{self, StorageError};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +21,10 @@ pub struct Config {
     pub log: bool,
     /// Log files older than this many days are deleted at startup.
     pub log_keep_days: u32,
+    /// Optional panel columns. Name and Size are always shown.
+    pub show_modified: bool,
+    pub show_owner: bool,
+    pub show_permissions: bool,
 }
 
 impl Default for Config {
@@ -29,6 +34,9 @@ impl Default for Config {
             case_sensitive_sort: false,
             log: false,
             log_keep_days: 7,
+            show_modified: true,
+            show_owner: true,
+            show_permissions: true,
         }
     }
 }
@@ -48,6 +56,11 @@ log = false
 
 # Log files older than this many days are deleted at startup.
 log_keep_days = 7
+
+# Optional panel columns. Name and Size are always shown.
+show_modified = true
+show_owner = true
+show_permissions = true
 "#;
 
 impl Config {
@@ -68,6 +81,9 @@ pub enum Setting {
     CaseSensitiveSort(bool),
     Log(bool),
     LogKeepDays(u32),
+    ShowModified(bool),
+    ShowOwner(bool),
+    ShowPermissions(bool),
 }
 
 impl Setting {
@@ -97,7 +113,28 @@ impl Config {
             Setting::CaseSensitiveSort(on) => self.case_sensitive_sort = *on,
             Setting::Log(on) => self.log = *on,
             Setting::LogKeepDays(days) => self.log_keep_days = *days,
+            Setting::ShowModified(on) => self.show_modified = *on,
+            Setting::ShowOwner(on) => self.show_owner = *on,
+            Setting::ShowPermissions(on) => self.show_permissions = *on,
         }
+    }
+
+    /// Whether the panels show the column for `key`. Name and Size always.
+    pub fn shows_column(&self, key: SortKey) -> bool {
+        match key {
+            SortKey::Name | SortKey::Size => true,
+            SortKey::Modified => self.show_modified,
+            SortKey::Owner => self.show_owner,
+            SortKey::Permissions => self.show_permissions,
+        }
+    }
+
+    /// The optional columns turned off, in display order.
+    pub fn hidden_columns(&self) -> Vec<SortKey> {
+        [SortKey::Modified, SortKey::Owner, SortKey::Permissions]
+            .into_iter()
+            .filter(|&key| !self.shows_column(key))
+            .collect()
     }
 }
 
@@ -119,6 +156,9 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
         Setting::CaseSensitiveSort(on) => doc["case_sensitive_sort"] = toml_edit::value(*on),
         Setting::Log(on) => doc["log"] = toml_edit::value(*on),
         Setting::LogKeepDays(days) => doc["log_keep_days"] = toml_edit::value(i64::from(*days)),
+        Setting::ShowModified(on) => doc["show_modified"] = toml_edit::value(*on),
+        Setting::ShowOwner(on) => doc["show_owner"] = toml_edit::value(*on),
+        Setting::ShowPermissions(on) => doc["show_permissions"] = toml_edit::value(*on),
     }
     let text = doc.to_string();
     let config: Config =
@@ -213,6 +253,9 @@ mod tests {
             case_sensitive_sort: true,
             log: true,
             log_keep_days: 30,
+            show_modified: false,
+            show_owner: true,
+            show_permissions: false,
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);
@@ -345,5 +388,66 @@ case_sensitive_sort = false
                 "{bad}"
             );
         }
+    }
+
+    #[test]
+    fn optional_columns_are_shown_by_default() {
+        let config: Config = toml::from_str("editor = \"vim\"").unwrap();
+        assert!(config.show_modified && config.show_owner && config.show_permissions);
+        let template = TEMPLATE;
+        for key in ["show_modified", "show_owner", "show_permissions"] {
+            assert!(
+                template.lines().any(|l| l == format!("{key} = true")),
+                "{key} in the template"
+            );
+        }
+    }
+
+    #[test]
+    fn name_and_size_are_always_shown() {
+        let config = Config {
+            show_modified: false,
+            show_owner: false,
+            show_permissions: false,
+            ..Config::default()
+        };
+        assert!(config.shows_column(SortKey::Name));
+        assert!(config.shows_column(SortKey::Size));
+        assert!(!config.shows_column(SortKey::Modified));
+        assert!(!config.shows_column(SortKey::Owner));
+        assert!(!config.shows_column(SortKey::Permissions));
+        assert_eq!(
+            config.hidden_columns(),
+            [SortKey::Modified, SortKey::Owner, SortKey::Permissions]
+        );
+        assert!(Config::default().hidden_columns().is_empty());
+    }
+
+    #[test]
+    fn column_settings_are_saved_and_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let mut expected = Config::load_or_create(&path).unwrap();
+        for (setting, key) in [
+            (Setting::ShowModified(false), "show_modified"),
+            (Setting::ShowOwner(false), "show_owner"),
+            (Setting::ShowPermissions(false), "show_permissions"),
+        ] {
+            let config = save_setting(&path, &setting).unwrap();
+            expected.set(&setting);
+            assert_eq!(config, expected);
+            let text = fs::read_to_string(&path).unwrap();
+            assert!(
+                text.lines().any(|l| l == format!("{key} = false")),
+                "{text}"
+            );
+        }
+        assert!(!expected.show_modified && !expected.show_owner && !expected.show_permissions);
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# my settings")
+        );
     }
 }

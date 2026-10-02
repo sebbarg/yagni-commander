@@ -218,6 +218,12 @@ check "other keys kept" grep -q '^editor = "true"' "$cfg"
 keys ctrl+comma Tab space Escape
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
+echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
+keys ctrl+comma Tab Tab Tab Tab Tab space
+shot 07g-owner-hidden
+keys Escape
+check "show_owner saved" grep -q "^show_owner = false" "$cfg"
+
 echo "a big folder loads in the background"
 typed many
 keys Return

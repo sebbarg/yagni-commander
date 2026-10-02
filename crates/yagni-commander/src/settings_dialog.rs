@@ -218,6 +218,37 @@ impl Render for SettingsView {
                         )
                     }),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child("Columns")
+                    .child(switch(
+                        "settings-modified",
+                        "Modified",
+                        config.show_modified,
+                        Setting::ShowModified,
+                    ))
+                    .child(switch(
+                        "settings-owner",
+                        "Owner",
+                        config.show_owner,
+                        Setting::ShowOwner,
+                    ))
+                    .child(switch(
+                        "settings-permissions",
+                        "Permissions",
+                        config.show_permissions,
+                        Setting::ShowPermissions,
+                    ))
+                    .child(
+                        div()
+                            .text_color(colors.text_dim)
+                            .text_size(px(12.0))
+                            .child("Name and Size are always shown."),
+                    ),
+            )
     }
 }
 
