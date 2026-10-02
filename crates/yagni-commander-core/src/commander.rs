@@ -87,6 +87,8 @@ pub struct Commander {
     requests: Vec<LoadRequest>,
     /// Columns turned off in the config; panels can't be sorted by them.
     hidden_columns: Vec<SortKey>,
+    /// Panels show an icon before each name (`Config::icons`).
+    icons: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +149,7 @@ impl Commander {
             next_load: 0,
             requests: Vec::new(),
             hidden_columns: Vec::new(),
+            icons: true,
         }
     }
 
@@ -568,6 +571,15 @@ impl Commander {
         !self.hidden_columns.contains(&key)
     }
 
+    /// Panels show an icon before each name.
+    pub fn set_icons(&mut self, on: bool) {
+        self.icons = on;
+    }
+
+    pub fn shows_icons(&self) -> bool {
+        self.icons
+    }
+
     pub fn set_case_sensitive_sort(&mut self, case_sensitive: bool) {
         self.left.set_case_sensitive(case_sensitive);
         self.right.set_case_sensitive(case_sensitive);
@@ -698,6 +710,15 @@ mod tests {
     use super::*;
     use crate::listing::read_listing;
     use std::fs;
+
+    #[test]
+    fn icons_are_on_until_turned_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        assert!(c.shows_icons());
+        c.set_icons(false);
+        assert!(!c.shows_icons());
+    }
 
     #[test]
     fn switch_panel_toggles_and_commands_target_active_panel() {

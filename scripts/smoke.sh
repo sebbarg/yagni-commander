@@ -222,10 +222,17 @@ keys ctrl+comma Tab space Escape
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
-keys ctrl+comma Tab Tab Tab Tab Tab space
+keys ctrl+comma Tab Tab Tab Tab Tab Tab space
 shot 07g-owner-hidden
 keys Escape
 check "show_owner saved" grep -q "^show_owner = false" "$cfg"
+
+echo "settings: the Icons switch turns icons off and on"
+keys ctrl+comma Tab Tab Tab Tab space Escape
+check "icons = false saved" grep -q "^icons = false" "$cfg"
+shot 07h-icons-off
+keys ctrl+comma Tab Tab Tab Tab space Escape
+check "icons = true saved" grep -q "^icons = true" "$cfg"
 
 echo "a big folder loads in the background"
 typed many

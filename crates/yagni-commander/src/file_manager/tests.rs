@@ -5,6 +5,7 @@ use gpui_kit::{TestAppContext, VisualTestContext};
 fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        crate::icon_font::register(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
         cx.set_global(crate::config_state::CurrentConfig::default());
@@ -2087,8 +2088,8 @@ fn the_close_button_closes(cx: &mut TestAppContext) {
     activate(cx);
     cx.simulate_keystrokes("ctrl-,");
     cx.run_until_parked();
-    // editor -> sort -> log -> days -> modified -> owner -> permissions -> Close
-    cx.simulate_keystrokes("tab tab tab tab tab tab tab");
+    // editor -> sort -> log -> days -> icons -> modified -> owner -> permissions -> Close
+    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab");
     press(cx, "space");
     assert!(!settings_open(cx));
 }
@@ -2420,4 +2421,52 @@ mod menu_bar {
         cx.simulate_input("f");
         assert_eq!(search(&commander, cx).as_deref(), Some("f"));
     }
+}
+
+#[gpui_kit::test]
+fn rows_show_icons_unless_turned_off(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    // Rows: "..", a, b, f.
+    for ix in 0..4 {
+        let selector: &'static str = format!("icon-left-{ix}").leak();
+        assert!(cx.debug_bounds(selector).is_some(), "{selector}");
+    }
+    commander.update(cx, |c, cx| {
+        c.set_icons(false);
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("icon-left-1").is_none());
+    assert!(cx.debug_bounds("row-left-1").is_some());
+}
+
+#[gpui_kit::test]
+fn ctrl_r_applies_a_hand_edited_icons_key(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    assert!(cx.debug_bounds("icon-left-1").is_some());
+    std::fs::write(&path, "icons = false\n").unwrap();
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("icon-left-1").is_none());
+}
+
+#[gpui_kit::test]
+fn the_icons_switch_turns_icons_off_at_once_and_saves(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "# mine\nlog = false\n", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    click(cx, "settings-icons", 1);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("icon-left-1").is_none());
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("# mine"), "{text}");
+    assert!(text.lines().any(|l| l == "icons = false"), "{text}");
+    click(cx, "settings-icons", 1);
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("icon-left-1").is_some());
 }

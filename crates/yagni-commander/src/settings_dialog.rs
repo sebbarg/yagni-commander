@@ -269,6 +269,12 @@ impl Render for SettingsView {
                     .gap(px(8.0))
                     .child("Columns")
                     .child(switch(
+                        "settings-icons",
+                        "Icons",
+                        config.icons,
+                        Setting::Icons,
+                    ))
+                    .child(switch(
                         "settings-modified",
                         "Modified",
                         config.show_modified,

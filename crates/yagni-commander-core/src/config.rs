@@ -25,6 +25,8 @@ pub struct Config {
     pub show_modified: bool,
     pub show_owner: bool,
     pub show_permissions: bool,
+    /// A Nerd Font icon in front of every name (see [`crate::icons`]).
+    pub icons: bool,
 }
 
 impl Default for Config {
@@ -37,6 +39,7 @@ impl Default for Config {
             show_modified: true,
             show_owner: true,
             show_permissions: true,
+            icons: true,
         }
     }
 }
@@ -61,6 +64,9 @@ log_keep_days = 7
 show_modified = true
 show_owner = true
 show_permissions = true
+
+# An icon in front of every name.
+icons = true
 "#;
 
 impl Config {
@@ -84,6 +90,7 @@ pub enum Setting {
     ShowModified(bool),
     ShowOwner(bool),
     ShowPermissions(bool),
+    Icons(bool),
 }
 
 impl Setting {
@@ -116,6 +123,7 @@ impl Config {
             Setting::ShowModified(on) => self.show_modified = *on,
             Setting::ShowOwner(on) => self.show_owner = *on,
             Setting::ShowPermissions(on) => self.show_permissions = *on,
+            Setting::Icons(on) => self.icons = *on,
         }
     }
 
@@ -159,6 +167,7 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
         Setting::ShowModified(on) => doc["show_modified"] = toml_edit::value(*on),
         Setting::ShowOwner(on) => doc["show_owner"] = toml_edit::value(*on),
         Setting::ShowPermissions(on) => doc["show_permissions"] = toml_edit::value(*on),
+        Setting::Icons(on) => doc["icons"] = toml_edit::value(*on),
     }
     let text = doc.to_string();
     let config: Config =
@@ -256,6 +265,7 @@ mod tests {
             show_modified: false,
             show_owner: true,
             show_permissions: false,
+            icons: false,
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);
@@ -421,6 +431,28 @@ case_sensitive_sort = false
             [SortKey::Modified, SortKey::Owner, SortKey::Permissions]
         );
         assert!(Config::default().hidden_columns().is_empty());
+    }
+
+    #[test]
+    fn icons_are_on_by_default_and_in_the_template() {
+        let config: Config = toml::from_str("editor = \"vim\"").unwrap();
+        assert!(config.icons);
+        assert!(TEMPLATE.lines().any(|l| l == "icons = true"));
+    }
+
+    #[test]
+    fn the_icons_setting_is_saved_and_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let mut expected = Config::load_or_create(&path).unwrap();
+        let config = save_setting(&path, &Setting::Icons(false)).unwrap();
+        expected.set(&Setting::Icons(false));
+        assert_eq!(config, expected);
+        assert!(!config.icons);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "icons = false"), "{text}");
+        assert!(text.starts_with("# my settings"));
     }
 
     #[test]

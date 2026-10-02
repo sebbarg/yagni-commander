@@ -4,6 +4,7 @@ mod button_row;
 mod columns;
 mod config_state;
 mod file_manager;
+mod icon_font;
 mod menu_bar;
 mod menus;
 mod panel_view;
@@ -47,6 +48,7 @@ fn main() {
     let config = &current.config;
     commander.set_case_sensitive_sort(config.case_sensitive_sort);
     commander.hide_columns(&config.hidden_columns());
+    commander.set_icons(config.icons);
     let log_dir = storage::log_dir();
     let (log, log_problem) = oplog::start(log_dir.as_deref(), config.log, config.log_keep_days);
     commander.set_log(log.map(std::sync::Arc::new));
@@ -57,6 +59,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            icon_font::register(cx);
             Theme::default().install(cx);
             cx.set_global(current);
             actions::bind_default_keys(cx);

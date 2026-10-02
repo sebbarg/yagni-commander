@@ -23,3 +23,5 @@ nix.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# Already in the tree via gpui: same version, no new crate. Reads the icon font in tests.
+ttf-parser = "0.25"

@@ -278,6 +278,12 @@ impl FileManager {
                 cx.notify();
             });
         }
+        if config.icons != old.icons {
+            self.commander.update(cx, |c, cx| {
+                c.set_icons(config.icons);
+                cx.notify();
+            });
+        }
         if config.log != old.log {
             let (log, problem) = if config.log {
                 oplog::start(self.log_dir.as_deref(), true, config.log_keep_days)

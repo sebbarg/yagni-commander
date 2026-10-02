@@ -62,13 +62,13 @@ impl Column {
         }
     }
 
-    /// Cell text. Directories show as `[name]`; this is display only, so
-    /// sorting and quick search still use the bare name.
-    pub fn text(&self, entry: &Entry) -> String {
+    /// Cell text. Without icons, directories show as `[name]`; this is
+    /// display only, so sorting and quick search still use the bare name.
+    pub fn text(&self, entry: &Entry, icons: bool) -> String {
         match self.key {
             SortKey::Name => match entry.kind {
-                EntryKind::Dir => format!("[{}]", entry.label),
-                EntryKind::Parent | EntryKind::File => entry.label.clone(),
+                EntryKind::Dir if !icons => format!("[{}]", entry.label),
+                EntryKind::Parent | EntryKind::Dir | EntryKind::File => entry.label.clone(),
             },
             SortKey::Size => match entry.kind {
                 EntryKind::Parent => String::new(),
@@ -132,18 +132,24 @@ mod tests {
     }
 
     #[test]
-    fn directory_names_are_bracketed_but_parent_and_files_are_not() {
+    fn directory_names_are_bracketed_only_without_icons() {
         let (_tmp, entries) = entries();
         let name = column(SortKey::Name);
-        let texts: Vec<_> = entries.iter().map(|e| name.text(e)).collect();
-        assert_eq!(texts, ["..", "[d]", "f"]);
+        let texts = |icons| {
+            entries
+                .iter()
+                .map(|e| name.text(e, icons))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(false), ["..", "[d]", "f"]);
+        assert_eq!(texts(true), ["..", "d", "f"]);
     }
 
     #[test]
     fn size_text_depends_on_entry_kind() {
         let (_tmp, entries) = entries();
         let size = column(SortKey::Size);
-        let texts: Vec<_> = entries.iter().map(|e| size.text(e)).collect();
+        let texts: Vec<_> = entries.iter().map(|e| size.text(e, false)).collect();
         assert_eq!(texts, ["", "<DIR>", "5 B"]);
     }
 
@@ -152,10 +158,13 @@ mod tests {
         let (_tmp, entries) = entries();
         let (parent, file) = (&entries[0], &entries[2]);
         for key in [SortKey::Modified, SortKey::Owner, SortKey::Permissions] {
-            assert_eq!(column(key).text(parent), "", "{key:?} for ..");
-            assert!(!column(key).text(file).is_empty(), "{key:?} for file");
+            assert_eq!(column(key).text(parent, false), "", "{key:?} for ..");
+            assert!(
+                !column(key).text(file, false).is_empty(),
+                "{key:?} for file"
+            );
         }
-        assert_eq!(column(SortKey::Name).text(file), "f");
-        assert_eq!(column(SortKey::Permissions).text(file).len(), 10);
+        assert_eq!(column(SortKey::Name).text(file, false), "f");
+        assert_eq!(column(SortKey::Permissions).text(file, false).len(), 10);
     }
 }

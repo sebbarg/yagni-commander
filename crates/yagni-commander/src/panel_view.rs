@@ -12,6 +12,8 @@ use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
 };
 
+use yagni_commander_core::icons;
+
 use crate::columns::{Column, visible_columns};
 use crate::file_manager::execute;
 use crate::theme::{Colors, Theme};
@@ -75,6 +77,7 @@ impl PanelView {
         let panel = commander.panel(side);
         let is_active = commander.active() == side;
         let columns: Vec<_> = visible_columns(commander).collect();
+        let icons = commander.shows_icons();
         range
             .map(|ix| {
                 let entry = &panel.entries()[ix];
@@ -82,7 +85,8 @@ impl PanelView {
                     cursor: (ix == panel.cursor()).then_some(is_active),
                     selected: panel.is_selected(entry),
                 };
-                entry_row(entry, row, colors, &columns)
+                let icon = icons.then(|| icon_slot(entry, side, ix));
+                entry_row(entry, row, colors, &columns, icon)
                     .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -253,7 +257,30 @@ struct RowState {
     selected: bool,
 }
 
-fn entry_row(entry: &Entry, row: RowState, colors: &Colors, columns: &[&Column]) -> Div {
+/// Width of the icon slot before a name: about 1.3 em of the list text.
+const ICON_WIDTH: f32 = 18.0;
+
+/// The entry's icon in the bundled Nerd Font, in the row's text color.
+fn icon_slot(entry: &Entry, side: Side, ix: usize) -> Div {
+    div()
+        .debug_selector(move || format!("icon-{}-{ix}", side_name(side)))
+        .w(px(ICON_WIDTH))
+        .flex_none()
+        .font_family(icons::FONT_FAMILY)
+        .child(icons::icon(entry).to_string())
+}
+
+/// One list row. With `icon`, the Name cell starts with it and folders lose
+/// their brackets.
+fn entry_row(
+    entry: &Entry,
+    row: RowState,
+    colors: &Colors,
+    columns: &[&Column],
+    icon: Option<Div>,
+) -> Div {
+    let icons = icon.is_some();
+    let mut icon = icon;
     // Selected rows are orange throughout; under the active cursor the bar
     // itself turns orange so selection stays visible.
     let (name, detail) = if row.selected {
@@ -283,11 +310,21 @@ fn entry_row(entry: &Entry, row: RowState, colors: &Colors, columns: &[&Column])
         .when_some(bg, |d, bg| d.bg(bg))
         .children(columns.iter().map(|column| {
             let is_name = column.key == SortKey::Name;
-            column
+            let text = column.text(entry, icons);
+            let cell = column
                 .cell()
                 .when(!is_name, |d| d.text_size(px(13.0)))
-                .text_color(if is_name { fg } else { detail })
-                .child(column.text(entry))
+                .text_color(if is_name { fg } else { detail });
+            // Name is the only column that takes the icon, so `take` runs once.
+            match (is_name, if is_name { icon.take() } else { None }) {
+                (true, Some(icon)) => cell
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(icon)
+                    .child(div().min_w_0().truncate().child(text)),
+                _ => cell.child(text),
+            }
         }))
 }
 
