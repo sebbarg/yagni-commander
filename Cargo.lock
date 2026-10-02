@@ -8867,6 +8867,7 @@ name = "yagni-commander"
 version = "0.1.0"
 dependencies = [
  "env_logger",
+ "futures",
  "gpui-kit",
  "log",
  "serde",
@@ -8882,6 +8883,7 @@ dependencies = [
  "dirs 7.0.0",
  "jiff",
  "nix",
+ "notify",
  "serde",
  "shlex 2.0.1",
  "tempfile",

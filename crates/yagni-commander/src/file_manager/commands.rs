@@ -55,6 +55,7 @@ impl FileManager {
         };
         let from = entry.name.clone();
         let label = entry.label.clone();
+        let dir = panel.path().to_path_buf();
         let stem = stem_range(&label, entry.kind == EntryKind::Dir);
         self.prompt_name(
             Prompt {
@@ -67,7 +68,9 @@ impl FileManager {
             },
             Rc::new(move |this, to, _, cx| {
                 this.commander.update(cx, |commander, cx| {
-                    let result = commander.rename(&from, to);
+                    let result = commander
+                        .check_dir(&dir)
+                        .and_then(|()| commander.rename(&from, to));
                     cx.notify();
                     result
                 })
@@ -83,6 +86,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
+        let dir = self.active_panel(cx).path().to_path_buf();
         self.prompt_name(
             Prompt {
                 title: "New directory",
@@ -92,9 +96,11 @@ impl FileManager {
                 detail: None,
                 width: PROMPT_WIDTH,
             },
-            Rc::new(|this, name, _, cx| {
+            Rc::new(move |this, name, _, cx| {
                 this.commander.update(cx, |commander, cx| {
-                    let result = commander.make_directory(name);
+                    let result = commander
+                        .check_dir(&dir)
+                        .and_then(|()| commander.make_directory(name));
                     cx.notify();
                     result
                 })
@@ -130,6 +136,7 @@ impl FileManager {
         let Some(editor) = configured_editor(window, cx) else {
             return;
         };
+        let dir = self.active_panel(cx).path().to_path_buf();
         self.prompt_name(
             Prompt {
                 title: "Edit new file",
@@ -141,7 +148,9 @@ impl FileManager {
             },
             Rc::new(move |this, name, _, cx| {
                 let path = this.commander.update(cx, |commander, cx| {
-                    let result = commander.create_file(name);
+                    let result = commander
+                        .check_dir(&dir)
+                        .and_then(|()| commander.create_file(name));
                     cx.notify();
                     result
                 })?;

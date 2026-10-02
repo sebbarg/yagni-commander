@@ -14,6 +14,7 @@ use yagni_commander_core::{Command, Commander, Config, Setting, Side, SortKey, c
 pub(crate) mod commands;
 mod file_ops;
 mod loads;
+mod watch;
 
 use crate::actions::{
     About, Activate, ButtonTest, CancelSearch, Copy, CursorDown, CursorEnd, CursorHome, CursorUp,
@@ -74,6 +75,14 @@ pub struct FileManager {
     loads: Vec<loads::RunningLoad>,
     /// Whether the timer that collects their results is running.
     polling_loads: bool,
+    /// Watches each panel's folder (left, right); `None` in tests, which
+    /// report changes through `changes` by hand.
+    watchers: Option<[yagni_commander_core::watch::PanelWatcher; 2]>,
+    /// The folder each watcher was last pointed at.
+    watched: [Option<PathBuf>; 2],
+    /// Where the watchers report changes; tests report through it by hand.
+    #[cfg(test)]
+    changes: futures::channel::mpsc::UnboundedSender<Side>,
     /// The open settings dialog's view.
     pub(crate) settings: Option<Entity<crate::settings_dialog::SettingsView>>,
     /// Where the operation log goes. Tests replace it.
@@ -107,6 +116,7 @@ impl FileManager {
         let subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
+                this.watch_panels(cx);
                 AppState::remember_panels(&commander, cx);
                 this.update_title(window, cx);
                 this.update_menus(cx);
@@ -149,6 +159,7 @@ impl FileManager {
         AppState::remember_window(window.window_bounds(), cx);
         AppState::remember_panels(&commander, cx);
 
+        let (changes, received) = futures::channel::mpsc::unbounded();
         let this = Self {
             commander,
             left,
@@ -162,6 +173,10 @@ impl FileManager {
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
+            watchers: Some(watch::spawn_watchers(&changes)),
+            watched: [None, None],
+            #[cfg(test)]
+            changes,
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
             menu_bar,
@@ -171,6 +186,7 @@ impl FileManager {
             _subscriptions: subscriptions,
         };
         this.update_title(window, cx);
+        Self::receive_changes(received, window, cx);
         // Startup's reads: the observer above starts them.
         this.commander.update(cx, |_, cx| cx.notify());
         this

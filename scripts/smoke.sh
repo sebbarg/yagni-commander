@@ -226,6 +226,27 @@ check "big folder opened" xdotool search --name "^$left/many - yagni-commander\$
 keys BackSpace
 check "back in the left folder" xdotool search --name "^$left - yagni-commander\$"
 
+echo "the watcher lists a file created outside the app"
+printf watched >"$left/watched.txt"
+sleep 1.5
+typed watched
+keys F2
+typed seen
+keys Return
+check "the new file was listed (renamed through the panel)" test -f "$left/seen.txt"
+check "watched.txt is gone" test ! -e "$left/watched.txt"
+shot 08b-watched
+
+echo "the watcher leaves a folder deleted outside the app"
+mkdir -p "$left/vanish/inner"
+sleep 1.5
+typed vanish
+keys Return
+check "in the folder" xdotool search --name "^$left/vanish - yagni-commander\$"
+rm -rf "$left/vanish"
+check "back in the parent" xdotool search --name "^$left - yagni-commander\$"
+shot 08c-vanished
+
 echo "F3 viewer"
 typed big
 keys F3

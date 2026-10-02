@@ -7,7 +7,7 @@ use std::sync::atomic::AtomicUsize;
 use crate::fs_ops;
 use crate::listing::{Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
-use crate::panel::{Enter, Loading, Navigation, Panel};
+use crate::panel::{Enter, Loading, Navigation, Panel, Refresh};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 
@@ -154,15 +154,11 @@ impl Commander {
             self.panel_mut(side).stale = true;
             return;
         }
-        self.next_load += 1;
-        let id = self.next_load;
-        let progress = Arc::new(AtomicUsize::new(0));
-        self.requests.push(LoadRequest {
-            id,
-            path: nav.target.clone(),
-            fallback: (kind == LoadKind::Startup).then(|| self.home.clone()),
-            progress: progress.clone(),
-        });
+        // A navigation or reload replaces a quiet re-read; its result will
+        // be dropped as stale.
+        self.panel_mut(side).take_refresh();
+        let fallback = (kind == LoadKind::Startup).then(|| self.home.clone());
+        let (id, progress) = self.push_request(nav.target.clone(), fallback);
         self.panel_mut(side).set_loading(Loading {
             id,
             path: nav.target,
@@ -170,6 +166,85 @@ impl Commander {
             progress,
             visible: false,
         });
+    }
+
+    /// Queues a read for the UI to take (see [`Commander::take_requests`]).
+    fn push_request(
+        &mut self,
+        path: PathBuf,
+        fallback: Option<PathBuf>,
+    ) -> (u64, Arc<AtomicUsize>) {
+        self.next_load += 1;
+        let id = self.next_load;
+        let progress = Arc::new(AtomicUsize::new(0));
+        self.requests.push(LoadRequest {
+            id,
+            path,
+            fallback,
+            progress: progress.clone(),
+        });
+        (id, progress)
+    }
+
+    /// The directory watcher saw a change in `side`'s folder: re-read it
+    /// quietly. Not a [`Command`]: the quick search and the error stay.
+    pub fn watch_reload(&mut self, side: Side) {
+        self.refresh(side, None);
+    }
+
+    /// Starts a quiet re-read, or marks the panel stale if a read is
+    /// pending. `gone`: the panel's folder vanished, so the read walks up
+    /// to its nearest readable parent (then home).
+    fn refresh(&mut self, side: Side, gone: Option<PathBuf>) {
+        let panel = self.panel_mut(side);
+        if !panel.is_loaded() {
+            return; // the startup read is still to come
+        }
+        if panel.loading().is_some() || panel.is_refreshing() {
+            panel.stale = true;
+            return;
+        }
+        let path = gone.clone().unwrap_or_else(|| panel.path().to_path_buf());
+        let fallback = gone.is_some().then(|| self.home.clone());
+        let (id, _) = self.push_request(path, fallback);
+        self.panel_mut(side).set_refresh(Refresh { id, gone });
+    }
+
+    fn refresh_side(&self, id: u64) -> Option<Side> {
+        [Side::Left, Side::Right]
+            .into_iter()
+            .find(|&side| self.panel(side).refresh_id() == Some(id))
+    }
+
+    /// Shows a quiet re-read's result. The cursor stays on the entry it is
+    /// on now, which may differ from when the read started.
+    fn finish_refresh(&mut self, side: Side, result: io::Result<Listing>) {
+        let panel = self.panel_mut(side);
+        let refresh = panel.take_refresh().expect("refresh_side found it");
+        match result {
+            Ok(listing) => {
+                let select = match refresh.gone {
+                    None => panel.cursor_entry().map(|e| e.name.clone()),
+                    Some(_) => None,
+                };
+                panel.apply(listing, select.as_deref());
+            }
+            Err(e)
+                if refresh.gone.is_none()
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+            {
+                let gone = panel.path().to_path_buf();
+                self.refresh(side, Some(gone));
+                return;
+            }
+            // A flaky network read or lost permission: keep the listing and
+            // say nothing; the user didn't ask for this read.
+            Err(_) => {}
+        }
+        self.reread_if_stale(side);
     }
 
     /// The reads to run, oldest first. Requests replaced before they were
@@ -190,7 +265,7 @@ impl Commander {
 
     /// Whether load `id` is still wanted by a panel.
     pub fn is_pending(&self, id: u64) -> bool {
-        self.loading_side(id).is_some()
+        self.loading_side(id).is_some() || self.refresh_side(id).is_some()
     }
 
     fn loading_side(&self, id: u64) -> Option<Side> {
@@ -202,6 +277,10 @@ impl Commander {
     /// Shows a finished read in the panel that asked for it. Returns false
     /// for a stale result (cancelled or replaced), which is dropped.
     pub fn finish_load(&mut self, id: u64, result: io::Result<Listing>) -> bool {
+        if let Some(side) = self.refresh_side(id) {
+            self.finish_refresh(side, result);
+            return true;
+        }
         let Some(side) = self.loading_side(id) else {
             return false;
         };
@@ -216,14 +295,15 @@ impl Commander {
     }
 
     /// Runs a re-read that was held back while another read was pending.
+    /// It is quiet: the user already sees this folder.
     fn reread_if_stale(&mut self, side: Side) {
         let panel = self.panel_mut(side);
-        if !panel.stale || !panel.is_loaded() || panel.loading().is_some() {
+        if !panel.stale || !panel.is_loaded() || panel.loading().is_some() || panel.is_refreshing()
+        {
             return;
         }
         panel.stale = false;
-        let nav = panel.reload_target(None);
-        self.request(side, nav, LoadKind::Reload);
+        self.refresh(side, None);
     }
 
     /// The load took long enough to show the indicator.
@@ -367,6 +447,19 @@ impl Commander {
         let open = self.search.prefix().is_some();
         self.search.clear();
         open
+    }
+
+    /// Whether the active panel still shows `dir`, the folder a prompt
+    /// opened on. The directory watcher can move a panel whose folder
+    /// vanished while a dialog was open; acting then would hit the parent.
+    pub fn check_dir(&self, dir: &Path) -> io::Result<()> {
+        if self.panel(self.active).path() == dir {
+            return Ok(());
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{} no longer exists", dir.display()),
+        ))
     }
 
     /// F2: renames `from` in the active panel's directory to `to`, then
@@ -1281,5 +1374,228 @@ mod tests {
             .map(|e| e.label.clone())
             .collect();
         assert!(names.contains(&"new".to_owned()), "{names:?}");
+    }
+
+    fn labels(c: &Commander, side: Side) -> Vec<String> {
+        c.panel(side)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    fn cursor_label(c: &Commander, side: Side) -> String {
+        c.panel(side).cursor_entry().unwrap().label.clone()
+    }
+
+    #[test]
+    fn watch_reload_reads_quietly_and_commands_keep_working() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        fs::write(tmp.path().join("new"), b"").unwrap();
+        c.watch_reload(Side::Left);
+        assert!(c.panel(Side::Left).loading().is_none(), "no indicator");
+        assert!(c.panel(Side::Left).is_refreshing());
+        c.execute(Command::CursorDown);
+        assert_eq!(cursor_label(&c, Side::Left), "b", "commands still work");
+        c.run_loads_now();
+        assert!(!c.panel(Side::Left).is_refreshing());
+        assert!(labels(&c, Side::Left).contains(&"new".to_owned()));
+        assert_eq!(cursor_label(&c, Side::Left), "b");
+    }
+
+    #[test]
+    fn the_cursor_follows_a_move_made_during_the_quiet_read() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.watch_reload(Side::Left);
+        c.execute(Command::CursorDown); // onto "b" while the read runs
+        fs::create_dir(tmp.path().join("0")).unwrap(); // shifts every index
+        c.run_loads_now();
+        assert_eq!(cursor_label(&c, Side::Left), "b");
+    }
+
+    #[test]
+    fn a_quiet_reload_keeps_the_selection() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.execute(Command::ToggleSelection); // selects "a"
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        let selected: Vec<_> = c
+            .panel(Side::Left)
+            .selection()
+            .map(|e| e.label.clone())
+            .collect();
+        assert_eq!(selected, ["a"]);
+    }
+
+    #[test]
+    fn a_quiet_reload_keeps_the_search_and_the_error() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        fs::remove_dir(tmp.path().join("a")).unwrap();
+        run(&mut c, Command::Activate); // fails: sets the error
+        assert!(c.error().is_some());
+        assert!(c.search_type('b'));
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.search(), Some("b"));
+        assert!(c.error().is_some());
+    }
+
+    #[test]
+    fn a_quiet_request_during_a_read_runs_quietly_afterwards() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::Reload);
+        let requests = c.take_requests();
+        let results: Vec<_> = requests.iter().map(|r| (r.id, read_listing(r))).collect();
+        c.watch_reload(Side::Left);
+        assert!(!c.panel(Side::Left).is_refreshing(), "waits for the read");
+        fs::write(tmp.path().join("new"), b"").unwrap();
+        for (id, result) in results {
+            c.finish_load(id, result); // listings from before "new"
+        }
+        assert!(c.panel(Side::Left).loading().is_none());
+        assert!(c.panel(Side::Left).is_refreshing(), "the re-read is quiet");
+        c.run_loads_now();
+        assert!(labels(&c, Side::Left).contains(&"new".to_owned()));
+    }
+
+    #[test]
+    fn a_second_change_during_a_quiet_read_reads_once_more() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.watch_reload(Side::Left);
+        let first = c.take_requests();
+        assert_eq!(first.len(), 1);
+        let result = read_listing(&first[0]);
+        c.watch_reload(Side::Left);
+        assert!(c.take_requests().is_empty(), "no second read at once");
+        fs::write(tmp.path().join("new"), b"").unwrap();
+        c.finish_load(first[0].id, result);
+        assert!(c.panel(Side::Left).is_refreshing());
+        c.run_loads_now();
+        assert!(labels(&c, Side::Left).contains(&"new".to_owned()));
+    }
+
+    #[test]
+    fn navigation_replaces_a_quiet_read() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.watch_reload(Side::Left);
+        let quiet = c.take_requests();
+        c.execute(Command::Activate); // into "a": not blocked
+        assert!(!c.panel(Side::Left).is_refreshing());
+        let result = read_listing(&quiet[0]);
+        assert!(
+            !c.finish_load(quiet[0].id, result),
+            "the quiet result is dropped"
+        );
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn ctrl_r_replaces_a_quiet_read() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.watch_reload(Side::Left);
+        c.execute(Command::Reload);
+        assert!(!c.panel(Side::Left).is_refreshing());
+        assert!(c.panel(Side::Left).loading().is_some());
+    }
+
+    #[test]
+    fn a_reload_held_back_by_ctrl_r_runs_quietly() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::Reload);
+        let requests = c.take_requests();
+        c.execute(Command::Reload); // stale
+        for r in requests {
+            let result = read_listing(&r);
+            c.finish_load(r.id, result);
+        }
+        assert!(c.panel(Side::Left).loading().is_none(), "keys work");
+        assert!(c.panel(Side::Left).is_refreshing());
+    }
+
+    #[test]
+    fn a_vanished_folder_moves_the_panel_to_its_nearest_parent() {
+        let tmp = tree();
+        fs::create_dir_all(tmp.path().join("a/deep/er")).unwrap();
+        let mut c = Commander::new(tmp.path().join("a/deep/er"), tmp.path(), false).unwrap();
+        fs::remove_dir_all(tmp.path().join("a/deep")).unwrap();
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(c.panel(Side::Left).cursor(), 0);
+        assert!(c.error().is_none());
+        assert!(c.panel(Side::Left).loading().is_none());
+        assert!(!c.panel(Side::Left).is_refreshing());
+    }
+
+    #[test]
+    fn other_read_errors_keep_the_listing_silently() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tree();
+        let a = tmp.path().join("a");
+        fs::write(a.join("x"), b"").unwrap();
+        let mut c = Commander::new(&a, tmp.path(), false).unwrap();
+        fs::set_permissions(&a, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_dir(&a).is_ok() {
+            fs::set_permissions(&a, fs::Permissions::from_mode(0o755)).unwrap();
+            return; // root reads anyway
+        }
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        fs::set_permissions(&a, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(c.panel(Side::Left).path(), a);
+        assert!(labels(&c, Side::Left).contains(&"x".to_owned()));
+        assert!(c.error().is_none());
+        assert!(!c.panel(Side::Left).is_refreshing());
+    }
+
+    #[test]
+    fn watch_reload_before_the_first_listing_does_nothing() {
+        let tmp = tree();
+        let home = tempfile::tempdir().unwrap();
+        let mut c = Commander::start(
+            tmp.path().join("a"),
+            tmp.path().join("b"),
+            false,
+            home.path().to_path_buf(),
+        );
+        c.watch_reload(Side::Left);
+        assert!(!c.panel(Side::Left).is_refreshing());
+        assert_eq!(c.take_requests().len(), 2, "only the startup reads");
+    }
+
+    #[test]
+    fn a_quiet_read_has_no_indicator_or_count() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.watch_reload(Side::Left);
+        let id = c.take_requests()[0].id;
+        assert!(c.is_pending(id));
+        assert!(!c.show_loading(id));
+        assert_eq!(c.panel_loading_count(id), None);
+    }
+
+    #[test]
+    fn check_dir_refuses_once_the_panel_left_the_folder() {
+        let tmp = tree();
+        fs::create_dir(tmp.path().join("a/sub")).unwrap();
+        let sub = tmp.path().join("a/sub");
+        let mut c = Commander::new(&sub, tmp.path(), false).unwrap();
+        assert!(c.check_dir(&sub).is_ok());
+        fs::remove_dir(&sub).unwrap();
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        let err = c.check_dir(&sub).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        assert!(err.to_string().contains(&*sub.to_string_lossy()));
     }
 }

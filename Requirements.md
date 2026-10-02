@@ -1,6 +1,6 @@
 # Requirements
 
-Working document for what yagni-commander should do. Items are v1 unless marked (v2).
+Working document for what yagni-commander should do. Items are v1 unless marked (v2) or (v3, later than v2).
 
 ## Decisions
 
@@ -57,6 +57,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 - Directories show as `[name]` (display only: sorting and quick search use the bare name). ".." has no brackets.
 - File icons in the lists (v2).
+- New and updated files pulse briefly (v3; discussed 2026-10-02, parked). Leanings so far: every reload of the folder a panel already shows pulses (watcher, Ctrl-R, the reload after F5/F6), never a navigation or a first listing; "updated" means same name, different size or modified time (compared in `Panel::apply`); a file that keeps changing pulses about once a second. Look not decided: a background tint in a new theme role `changed`, fading out over about 1.5 s, was proposed; no pulse with reduce motion on. Drive it from a per-name timestamp, not gpui's per-element animation state, since list rows are recreated on scroll.
 
 ### Directory loading
 
@@ -172,7 +173,12 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 - After a copy that finished without errors, the source panel's selection is cleared (like TC). Errors are listed in one error box at the end (the first 10, then "and N more").
 - A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.
 - Queue of operations, like TC's F2 queue (v2).
-- A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2).
+- A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2). Decided 2026-10-02 (design: `docs/superpowers/specs/2026-10-02-directory-watcher-design.md`):
+  - Each panel watches its own folder, not subfolders. Reloads are throttled: 100 ms after the first change, then at most once per second while changes continue, and a final one at most 1 s after the last.
+  - A watcher reload is quiet: no "Loading..." indicator, no dimming, and keys and dialogs keep working on the old listing. Cursor, selection and quick search stay.
+  - It keeps running during F5/F6/F8, so files appear and vanish as the job runs (like TC).
+  - If the watched folder disappears, the panel moves to the nearest existing parent (then home), cursor at the top. No error.
+  - Network mounts get no fallback: only changes made from this machine are seen there; Ctrl-R covers the rest.
 
 ## Operation log
 

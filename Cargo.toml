@@ -15,12 +15,16 @@ yagni-commander-core = { path = "crates/yagni-commander-core" }
 gpui-kit = "0.7"
 dirs = "7"
 env_logger = "0.11"
+# Already in the tree via gpui: same version, no new crate.
+futures = "0.3"
 jiff = "0.2"
 log = "0.4"
 shlex = "2"
 serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"
+# Already in the tree via gpui-component: same version, no new crate.
+notify = "7.0.0"
 nix = { version = "0.31", default-features = false, features = ["user", "fs", "dir"] }
 trash = "5"
 unicode-width = "0.2"

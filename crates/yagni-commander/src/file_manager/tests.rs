@@ -19,6 +19,8 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
         let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
         gpui_kit::base::Root::new(view, window, cx)
     });
+    // No real watchers: tests report changes with `changed`.
+    file_manager(cx).update(cx, |this, _| this.watchers = None);
     cx
 }
 
@@ -1231,6 +1233,120 @@ fn release(tmp: &tempfile::TempDir) {
 
 fn loading(commander: &Entity<Commander>, cx: &VisualTestContext) -> bool {
     commander.read_with(cx, |c, _| c.panel(Side::Left).loading().is_some())
+}
+
+/// The watcher reports a change in `side`'s folder.
+fn changed(cx: &mut VisualTestContext, side: Side) {
+    file_manager(cx).update(cx, |this, _| this.changes.unbounded_send(side).unwrap());
+    cx.run_until_parked();
+}
+
+fn labels(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> Vec<String> {
+    commander.read_with(cx, |c, _| {
+        c.panel(side)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    })
+}
+
+fn refreshing(commander: &Entity<Commander>, cx: &VisualTestContext) -> bool {
+    commander.read_with(cx, |c, _| c.panel(Side::Left).is_refreshing())
+}
+
+#[gpui_kit::test]
+fn a_change_outside_reloads_the_panel(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    std::fs::write(tmp.path().join("new"), b"").unwrap();
+    changed(cx, Side::Left);
+    assert!(labels(&commander, Side::Left, cx).contains(&"new".to_owned()));
+    assert!(
+        !labels(&commander, Side::Right, cx).contains(&"new".to_owned()),
+        "only that side"
+    );
+    assert!(!loading(&commander, cx));
+}
+
+#[gpui_kit::test]
+fn keys_and_dialogs_work_during_a_quiet_reload(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    use_held_loads(cx);
+    std::fs::write(tmp.path().join("hold"), b"").unwrap();
+    changed(cx, Side::Left);
+    assert!(refreshing(&commander, cx));
+    // Long enough for the "Loading..." indicator of a normal read.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    assert!(!loading(&commander, cx), "no indicator, nothing blocked");
+    cx.simulate_keystrokes("down");
+    assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    cx.simulate_keystrokes("f7");
+    cx.run_until_parked();
+    assert!(dialog_open(cx), "F7 is not blocked");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    std::fs::remove_file(tmp.path().join("hold")).unwrap();
+    wait_until(cx, |cx| !refreshing(&commander, cx));
+    let label = commander.read_with(cx, |c, _| {
+        c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+    });
+    assert_eq!(label, "a", "the cursor stayed where it was moved");
+}
+
+#[gpui_kit::test]
+fn the_watchers_follow_the_panels(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    let watched =
+        |cx: &mut VisualTestContext| file_manager(cx).read_with(cx, |this, _| this.watched.clone());
+    let root = Some(tmp.path().to_path_buf());
+    let a = Some(tmp.path().join("a"));
+    assert_eq!(watched(cx), [root.clone(), root.clone()]);
+    cx.simulate_keystrokes("down enter");
+    assert_eq!(watched(cx), [a.clone(), root.clone()]);
+    cx.simulate_keystrokes("ctrl-u");
+    assert_eq!(watched(cx), [root, a]);
+}
+
+#[gpui_kit::test]
+fn a_prompt_does_not_act_in_the_folder_a_vanished_one_left_for(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    set_editor("true", cx);
+    let a = tmp.path().join("a");
+    cx.simulate_keystrokes("down enter"); // into a
+    std::fs::write(a.join("b"), b"").unwrap(); // what a misdirected F2 would hit
+    for key in ["f7", "shift-f4", "f2"] {
+        std::fs::create_dir(a.join("sub")).unwrap();
+        std::fs::write(a.join("sub/b"), b"").unwrap();
+        changed(cx, Side::Left);
+        cx.simulate_keystrokes("home down enter end"); // into a/sub, onto b
+        assert_eq!(path(&commander, Side::Left, cx), a.join("sub"), "{key}");
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "{key}");
+        std::fs::remove_dir_all(a.join("sub")).unwrap();
+        changed(cx, Side::Left);
+        assert_eq!(path(&commander, Side::Left, cx), a, "{key}: moved up");
+        cx.simulate_input(if key == "f2" { "y" } else { "x" });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!a.join("x").exists(), "{key} acted in the parent");
+        assert!(!a.join("y").exists(), "{key} acted in the parent");
+        assert!(dialog_open(cx), "{key}: the error shows");
+        cx.simulate_keystrokes("enter escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "{key}");
+    }
+}
+
+#[gpui_kit::test]
+fn the_quick_search_survives_a_quiet_reload(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("b");
+    std::fs::write(tmp.path().join("new"), b"").unwrap();
+    changed(cx, Side::Left);
+    commander.read_with(cx, |c, _| assert_eq!(c.search(), Some("b")));
 }
 
 #[gpui_kit::test]

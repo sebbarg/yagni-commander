@@ -30,6 +30,9 @@ pub struct Panel {
     selection: HashSet<OsString>,
     /// The folder being read for this panel, if any.
     loading: Option<Loading>,
+    /// A quiet re-read in progress (directory watcher): no indicator, and
+    /// commands keep working on the shown listing.
+    refresh: Option<Refresh>,
     /// False until the first listing arrives (startup).
     loaded: bool,
     /// A re-read was asked for while another read was pending: the folder
@@ -93,6 +96,15 @@ impl Loading {
     }
 }
 
+/// A quiet re-read of a panel's folder (see [`Panel::is_refreshing`]).
+#[derive(Debug)]
+pub(crate) struct Refresh {
+    pub id: u64,
+    /// The panel's folder, if it vanished: this read looks for its nearest
+    /// existing parent.
+    pub gone: Option<PathBuf>,
+}
+
 /// What happened when the entry under the cursor was activated (the tests'
 /// synchronous wrappers).
 #[cfg(test)]
@@ -118,6 +130,7 @@ impl Panel {
             sort: Sort::default(),
             selection: HashSet::new(),
             loading: None,
+            refresh: None,
             loaded: false,
             stale: false,
         }
@@ -146,6 +159,24 @@ impl Panel {
 
     pub(crate) fn take_loading(&mut self) -> Option<Loading> {
         self.loading.take()
+    }
+
+    /// Whether a quiet re-read is pending. Unlike [`Panel::loading`], it
+    /// blocks nothing and shows nothing.
+    pub fn is_refreshing(&self) -> bool {
+        self.refresh.is_some()
+    }
+
+    pub(crate) fn refresh_id(&self) -> Option<u64> {
+        self.refresh.as_ref().map(|r| r.id)
+    }
+
+    pub(crate) fn set_refresh(&mut self, refresh: Refresh) {
+        self.refresh = Some(refresh);
+    }
+
+    pub(crate) fn take_refresh(&mut self) -> Option<Refresh> {
+        self.refresh.take()
     }
 
     /// Whether a listing has arrived yet (false only at startup).
