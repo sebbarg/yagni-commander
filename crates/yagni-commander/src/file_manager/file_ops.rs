@@ -19,15 +19,18 @@ use gpui_kit::{
     Render, SharedString, Styled, WeakEntity, Window, div, px,
 };
 use yagni_commander_core::file_ops::{
-    Answer, Conflict, Destination, Event, Incoming, Job, LinkAnswer, LinkChoice, LinkPlace,
-    LinkQuestion, Operation, PasswordAnswer, PasswordQuestion, Progress, Report, Settings,
-    is_archive,
+    Answer, Comparison, Conflict, Destination, Difference, Event, Incoming, Job, LinkAnswer,
+    LinkChoice, LinkPlace, LinkQuestion, Operation, PasswordAnswer, PasswordQuestion, Progress,
+    Report, Settings, is_archive,
 };
-use yagni_commander_core::{Command, Side, format_modified, format_size};
+use yagni_commander_core::{
+    Command, Commander, Entry, EntryKind, Panel, Side, format_modified, format_size,
+};
 
 use super::FileManager;
 use super::commands::{
-    Prompt, dialog_password_field, focus_when_open, show_error, show_message, stem_range,
+    Prompt, dialog_password_field, focus_when_open, show_error, show_message, show_message_box,
+    stem_range,
 };
 use crate::button_row::{ButtonRow, OnPress};
 use crate::theme::Theme;
@@ -47,6 +50,7 @@ pub(super) enum Kind {
     Delete,
     Pack,
     Extract,
+    Compare,
 }
 
 impl Kind {
@@ -58,6 +62,7 @@ impl Kind {
             Kind::Delete => "Delete",
             Kind::Pack => "Pack",
             Kind::Extract => "Extract",
+            Kind::Compare => "Compare",
         }
     }
 
@@ -69,6 +74,7 @@ impl Kind {
             Kind::Delete => "Deleting",
             Kind::Pack => "Packing",
             Kind::Extract => "Extracting",
+            Kind::Compare => "Comparing",
         }
     }
 }
@@ -84,6 +90,8 @@ pub(super) struct RunningJob {
     view: Entity<ProgressView>,
     polls: u32,
     progress_open: bool,
+    /// What a compare runs on, for its result.
+    compare: Option<ComparePair>,
 }
 
 #[cfg(test)]
@@ -284,6 +292,41 @@ impl FileManager {
 
     /// F8 and Del: confirm, then move to the trash. Shift-F8 and Shift-Del
     /// (`Kind::Delete`): confirm, then delete permanently.
+    /// Files menu, Compare by content: two selected entries in the active
+    /// panel, else one from each panel; the result in a message box.
+    pub(super) fn compare(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        let other = self.commander.read(cx).active().other();
+        if self.commander.read(cx).panel(other).loading().is_some() {
+            return;
+        }
+        self.end_search(cx);
+        if self.refuse_second_job(window, cx) {
+            return;
+        }
+        let pair = match compare_pair(self.commander.read(cx)) {
+            Ok(pair) => pair,
+            Err(message) => {
+                show_error("Cannot compare", message, None, window, cx);
+                return;
+            }
+        };
+        let operation = Operation::Compare {
+            first: pair.first.clone(),
+            second: pair.second.clone(),
+        };
+        match self.start_job(Kind::Compare, operation, window, cx) {
+            Ok(()) => {
+                if let Some(running) = &mut self.job {
+                    running.compare = Some(pair);
+                }
+            }
+            Err(e) => show_error("Cannot compare", e.to_string(), None, window, cx),
+        }
+    }
+
     pub(super) fn trash(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
             return;
@@ -394,6 +437,7 @@ impl FileManager {
             view: cx.new(|_| ProgressView::new()),
             polls: 0,
             progress_open: false,
+            compare: None,
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -743,6 +787,26 @@ impl FileManager {
         if running.progress_open {
             window.close_dialog(cx);
         }
+        if running.kind == Kind::Compare {
+            // Reads only: no reload, the selection stays.
+            if let (Some(pair), Some(comparison), false) =
+                (&running.compare, &report.comparison, report.cancelled)
+            {
+                let shown = comparison_text(comparison, pair, Some(MAX_LISTED_DIFFERENCES));
+                let copied = format!("Compare\n{}", comparison_text(comparison, pair, None));
+                show_message_box(
+                    "Compare",
+                    shown.into(),
+                    copied,
+                    COMPARE_BOX_WIDTH,
+                    "OK",
+                    None,
+                    window,
+                    cx,
+                );
+            }
+            return;
+        }
         let complete = report.failures.is_empty() && !report.cancelled;
         if matches!(running.kind, Kind::Copy | Kind::Pack) && complete {
             self.commander.update(cx, |commander, _| {
@@ -759,6 +823,7 @@ impl FileManager {
                 Kind::Delete => "Some entries were not deleted",
                 Kind::Pack => "Some entries were not packed",
                 Kind::Extract => "Some entries were not extracted",
+                Kind::Compare => unreachable!("reported above"),
             };
             let mut text = failure_summary(&report);
             if let Some(left_out) = &left_out {
@@ -794,6 +859,123 @@ fn answer_job(this: &WeakEntity<FileManager>, answer: Answer, cx: &mut App) {
             running.job.answer(answer);
         }
     });
+}
+
+/// Differences listed in the compare result before "and N more".
+const MAX_LISTED_DIFFERENCES: usize = 20;
+/// Width of the compare result: room for paths.
+const COMPARE_BOX_WIDTH: f32 = 640.0;
+
+/// The two entries a compare runs on, and how the result names them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ComparePair {
+    first: PathBuf,
+    second: PathBuf,
+    /// "left"/"right", or the two names when both come from one panel.
+    labels: [String; 2],
+    folders: bool,
+}
+
+/// What Compare by content runs on: two selected entries in the active
+/// panel, else one entry from each panel (its one selected entry, or the
+/// cursor entry when nothing is selected), left panel first.
+fn compare_pair(commander: &Commander) -> Result<ComparePair, &'static str> {
+    const SELECT: &str = "Select two files or two folders to compare.";
+    let at = |panel: &Panel, entry: &Entry| (panel.path().join(&entry.name), entry.kind);
+    let active = commander.panel(commander.active());
+    let selected: Vec<&Entry> = active.selection().collect();
+    let ((first, x), (second, y), labels) = if let [a, b] = selected[..] {
+        let labels = [a.label.clone(), b.label.clone()];
+        (at(active, a), at(active, b), labels)
+    } else {
+        let pick = |side: Side| {
+            let panel = commander.panel(side);
+            let selected: Vec<&Entry> = panel.selection().collect();
+            let entry = match selected[..] {
+                [] => panel
+                    .cursor_entry()
+                    .filter(|e| e.kind != EntryKind::Parent)?,
+                [one] => one,
+                _ => return None,
+            };
+            Some(at(panel, entry))
+        };
+        let (Some(left), Some(right)) = (pick(Side::Left), pick(Side::Right)) else {
+            return Err(SELECT);
+        };
+        (left, right, ["left".to_owned(), "right".to_owned()])
+    };
+    if x != y {
+        return Err("Cannot compare a file with a folder.");
+    }
+    Ok(ComparePair {
+        first,
+        second,
+        labels,
+        folders: x == EntryKind::Dir,
+    })
+}
+
+/// The compare result: identical, or the differences (at most `limit`
+/// lines, then "and N more").
+fn comparison_text(comparison: &Comparison, pair: &ComparePair, limit: Option<usize>) -> String {
+    let unreadable = |d: &Difference| matches!(d, Difference::Unreadable { .. });
+    if !pair.folders {
+        return if comparison.identical() {
+            "The files are identical.".to_owned()
+        } else if comparison.differences.iter().any(unreadable) {
+            let lines: Vec<String> = comparison
+                .differences
+                .iter()
+                .map(difference_line(pair))
+                .collect();
+            format!("Could not compare the files:\n{}", lines.join("\n"))
+        } else {
+            "The files differ.".to_owned()
+        };
+    }
+    if comparison.identical() {
+        let files = match comparison.files {
+            1 => "1 file".to_owned(),
+            n => format!("{n} files"),
+        };
+        return format!("The folders are identical ({files}).");
+    }
+    let heading = if comparison.differences.iter().all(unreadable) {
+        "The folders could not be fully compared:"
+    } else {
+        "The folders differ:"
+    };
+    let total = comparison.differences.len();
+    let shown = limit.unwrap_or(total).min(total);
+    let mut lines = vec![heading.to_owned()];
+    lines.extend(
+        comparison.differences[..shown]
+            .iter()
+            .map(difference_line(pair)),
+    );
+    if shown < total {
+        lines.push(format!("and {} more", total - shown));
+    }
+    lines.join("\n")
+}
+
+fn difference_line(pair: &ComparePair) -> impl Fn(&Difference) -> String + '_ {
+    move |difference| {
+        let only = |label: &str, path: &Path, is_dir: bool| {
+            let slash = if is_dir { "/" } else { "" };
+            format!("only in {label}: {}{slash}", path.display())
+        };
+        match difference {
+            Difference::OnlyFirst { path, is_dir } => only(&pair.labels[0], path, *is_dir),
+            Difference::OnlySecond { path, is_dir } => only(&pair.labels[1], path, *is_dir),
+            Difference::Content(path) => format!("different: {}", path.display()),
+            Difference::Type(path) => format!("different type: {}", path.display()),
+            Difference::Unreadable { path, message } => {
+                format!("could not read: {}: {message}", path.display())
+            }
+        }
+    }
 }
 
 /// Paths of the panel's targets (selection, else the entry under the cursor).
@@ -1369,6 +1551,83 @@ mod tests {
         assert!(extract_folder(dir, "").is_err());
         std::fs::write(dir.join("file"), "").unwrap();
         assert!(extract_folder(dir, "file").is_err());
+    }
+
+    fn pair(folders: bool) -> ComparePair {
+        ComparePair {
+            first: PathBuf::from("/l/x"),
+            second: PathBuf::from("/r/x"),
+            labels: ["left".into(), "right".into()],
+            folders,
+        }
+    }
+
+    fn unreadable(path: &str) -> Difference {
+        Difference::Unreadable {
+            path: PathBuf::from(path),
+            message: "denied".into(),
+        }
+    }
+
+    #[test]
+    fn compare_text_for_files() {
+        let mut comparison = Comparison {
+            files: 1,
+            differences: vec![],
+        };
+        let text = |c: &Comparison| comparison_text(c, &pair(false), Some(20));
+        assert_eq!(text(&comparison), "The files are identical.");
+        comparison.differences = vec![Difference::Content(PathBuf::new())];
+        assert_eq!(text(&comparison), "The files differ.");
+        comparison.differences = vec![unreadable("/r/x")];
+        assert_eq!(
+            text(&comparison),
+            "Could not compare the files:\ncould not read: /r/x: denied"
+        );
+    }
+
+    #[test]
+    fn compare_text_for_folders_lists_up_to_the_limit() {
+        let mut comparison = Comparison {
+            files: 1,
+            differences: vec![],
+        };
+        let text = |c: &Comparison, limit| comparison_text(c, &pair(true), limit);
+        assert_eq!(
+            text(&comparison, Some(20)),
+            "The folders are identical (1 file)."
+        );
+        comparison.files = 0;
+        assert_eq!(
+            text(&comparison, Some(20)),
+            "The folders are identical (0 files)."
+        );
+        comparison.differences = vec![unreadable("/l/x/s")];
+        assert_eq!(
+            text(&comparison, Some(20)),
+            "The folders could not be fully compared:\ncould not read: /l/x/s: denied"
+        );
+        comparison.differences = vec![
+            Difference::OnlyFirst {
+                path: PathBuf::from("d"),
+                is_dir: true,
+            },
+            Difference::OnlySecond {
+                path: PathBuf::from("e/f"),
+                is_dir: false,
+            },
+            Difference::Type(PathBuf::from("t")),
+            Difference::Content(PathBuf::from("u")),
+            unreadable("/l/x/v"),
+        ];
+        assert_eq!(
+            text(&comparison, Some(3)),
+            "The folders differ:\nonly in left: d/\nonly in right: e/f\ndifferent type: t\nand 2 more"
+        );
+        assert!(
+            text(&comparison, None).ends_with("different: u\ncould not read: /l/x/v: denied"),
+            "no limit lists all"
+        );
     }
 
     #[test]

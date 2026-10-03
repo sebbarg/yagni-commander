@@ -4019,3 +4019,128 @@ mod archives {
         );
     }
 }
+
+mod compare {
+    use super::*;
+
+    /// Runs Compare by content and returns the box's text (copied with
+    /// Ctrl-C), then closes the box.
+    fn compare(cx: &mut VisualTestContext) -> String {
+        cx.dispatch_action(crate::actions::CompareContents);
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(dialog_open(cx), "a result or error box");
+        cx.simulate_keystrokes("ctrl-c");
+        let text = clipboard_text(cx).unwrap();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        text
+    }
+
+    /// Adds files `g` and `h` next to `f` (listing: .., a, b, f, g, h).
+    fn with_files(tmp: &tempfile::TempDir, f: &str, g: &str, cx: &mut VisualTestContext) {
+        std::fs::write(tmp.path().join("f"), f).unwrap();
+        std::fs::write(tmp.path().join("g"), g).unwrap();
+        std::fs::write(tmp.path().join("h"), "").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn two_selected_files_in_one_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        with_files(&tmp, "same", "same", cx);
+        cx.simulate_keystrokes("end up up space space");
+        assert_eq!(compare(cx), "Compare\nThe files are identical.");
+        assert_eq!(selected(&commander, Side::Left, cx), ["f", "g"], "kept");
+        std::fs::write(tmp.path().join("g"), "diff").unwrap();
+        assert_eq!(compare(cx), "Compare\nThe files differ.");
+    }
+
+    #[gpui_kit::test]
+    fn the_cursor_entries_of_both_panels(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x.txt"), "1").unwrap();
+        std::fs::write(tmp.path().join("a/only.txt"), "").unwrap();
+        std::fs::write(tmp.path().join("b/x.txt"), "2").unwrap();
+        std::fs::create_dir(tmp.path().join("b/sub")).unwrap();
+        // Left on a, right (active) on b.
+        cx.simulate_keystrokes("down tab down down");
+        assert_eq!(
+            compare(cx),
+            "Compare\nThe folders differ:\nonly in left: only.txt\nonly in right: sub/\ndifferent: x.txt"
+        );
+        std::fs::write(tmp.path().join("b/x.txt"), "1").unwrap();
+        std::fs::write(tmp.path().join("b/only.txt"), "").unwrap();
+        std::fs::remove_dir(tmp.path().join("b/sub")).unwrap();
+        assert_eq!(compare(cx), "Compare\nThe folders are identical (2 files).");
+    }
+
+    #[gpui_kit::test]
+    fn one_selected_entry_per_panel_beats_the_cursor(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        with_files(&tmp, "1", "1", cx);
+        // Left: f selected, cursor moves on to g. Right: cursor on h.
+        cx.simulate_keystrokes("end up up space tab end");
+        assert_eq!(compare(cx), "Compare\nThe files differ.", "f vs h");
+        cx.simulate_keystrokes("up space");
+        assert_eq!(compare(cx), "Compare\nThe files are identical.", "f vs g");
+    }
+
+    #[gpui_kit::test]
+    fn the_names_label_a_pair_from_one_panel(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("b/new"), "").unwrap();
+        cx.simulate_keystrokes("down space space");
+        assert_eq!(compare(cx), "Compare\nThe folders differ:\nonly in b: new");
+    }
+
+    #[gpui_kit::test]
+    fn wrong_picks_are_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        with_files(&tmp, "", "", cx);
+        let select = "Cannot compare\nSelect two files or two folders to compare.";
+        // Both cursors on "..".
+        assert_eq!(compare(cx), select);
+        // A file and a folder.
+        cx.simulate_keystrokes("down tab end");
+        assert_eq!(
+            compare(cx),
+            "Cannot compare\nCannot compare a file with a folder."
+        );
+        // Three selected in the active panel.
+        cx.simulate_keystrokes("end up up space space space");
+        assert_eq!(compare(cx), select);
+    }
+
+    #[gpui_kit::test]
+    fn compare_waits_while_a_panel_loads(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        enter_held_a(&tmp, cx);
+        cx.dispatch_action(crate::actions::CompareContents);
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(!job_running(cx));
+        release(&tmp);
+    }
+
+    #[gpui_kit::test]
+    fn the_files_menu_offers_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let labels = cx.update(|_, cx| {
+            let state = crate::menus::MenuState::of(_commander.read(cx));
+            crate::menus::menus(state, false)
+                .remove(0)
+                .entries
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    crate::menus::MenuEntry::Item { label, action, .. } => {
+                        Some((label, action.name()))
+                    }
+                    crate::menus::MenuEntry::Separator => None,
+                })
+                .collect::<Vec<_>>()
+        });
+        assert!(labels.contains(&("Compare by content", "yagni_commander::CompareContents")));
+    }
+}

@@ -36,6 +36,8 @@ actions!(
         Delete,
         Pack,
         Extract,
+        /// Files menu only; no key by default.
+        CompareContents,
         SyncOtherPanel,
         SwapPanels,
         NewTab,

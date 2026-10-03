@@ -437,6 +437,24 @@ pub(super) fn show_message(
     cx: &mut App,
 ) {
     let message = message.into();
+    // Ctrl-C copies the title and the text, e.g. for a bug report.
+    let copied = format!("{title}\n{message}");
+    show_message_box(title, message, copied, 420.0, button, refocus, window, cx);
+}
+
+/// A [`show_message`] box `width` px wide whose Ctrl-C copies `copied`,
+/// which may say more than the box shows.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn show_message_box(
+    title: &'static str,
+    message: SharedString,
+    copied: String,
+    width: f32,
+    button: &'static str,
+    refocus: Option<FocusHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     // After the dialog stack has finished restoring focus.
     let restore = move |refocus: &Option<FocusHandle>, window: &mut Window, cx: &mut App| {
         if let Some(focus) = refocus.clone() {
@@ -451,15 +469,13 @@ pub(super) fn show_message(
         }
     });
     let buttons = ButtonRow::build([(button, dismiss)], 0, cx);
-    // Ctrl-C copies the title and the text, e.g. for a bug report.
-    let copied = format!("{title}\n{message}");
     buttons.update(cx, |row, _| row.set_copy_text(copied));
     focus_when_open(buttons.focus_handle(cx), window, cx);
     window.open_dialog(cx, move |dialog, _, _| {
         let refocus = refocus.clone();
         dialog
             .title(title)
-            .w(gpui_kit::px(420.0))
+            .w(gpui_kit::px(width))
             .close_button(false)
             .child(message.clone())
             .footer(buttons.clone())

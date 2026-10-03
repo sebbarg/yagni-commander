@@ -275,6 +275,26 @@ check "the error copied" sh -c 'xclip -o -selection clipboard | head -1 | grep -
 shot 01b-error-box
 keys Return Escape     # dismiss, then cancel the prompt
 
+echo "menu: Files > Compare by content on two selected folders"
+mkdir -p "$left/cmp1" "$left/cmp2"
+printf a >"$left/cmp1/x"
+printf b >"$left/cmp2/x"
+printf o >"$left/cmp1/only"
+keys ctrl+r
+typed cmp1
+keys Escape space space
+# Compare by content is the 12th Files item.
+keys F10 Down Down Down Down Down Down Down Down Down Down Down Down
+shot 08d-menu-compare
+keys Return
+sleep 1
+shot 08e-compare-result
+keys ctrl+c
+check "compare listed the differences" clipboard "$(printf 'Compare\nThe folders differ:\nonly in cmp1: only\ndifferent: x')"
+keys Return
+typed cmp1
+keys Escape space space   # deselect
+
 echo "Ctrl-. hidden files"
 keys ctrl+period
 shot 07-hidden-shown

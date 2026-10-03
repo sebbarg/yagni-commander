@@ -22,10 +22,12 @@ use crate::fs_ops::{rename_noreplace, same_file};
 use crate::oplog::OperationLog;
 
 mod archive_names;
+mod compare;
 mod extract;
 mod pack;
 mod safe_dir;
 pub use archive_names::{Format, is_archive};
+pub use compare::{Comparison, Difference};
 
 /// Bytes copied between progress reports and cancel checks.
 const CHUNK: u64 = 4 << 20;
@@ -61,6 +63,9 @@ pub enum Operation {
         archives: Vec<PathBuf>,
         into: PathBuf,
     },
+    /// Compares two files byte for byte, or two folders by names, types
+    /// and contents. Reads only and logs nothing.
+    Compare { first: PathBuf, second: PathBuf },
 }
 
 /// Where copied or moved entries go. Missing folders on the way are created.
@@ -203,6 +208,8 @@ pub struct Report {
     pub cancelled: bool,
     /// Links the user chose to leave out of a zip.
     pub left_out: Vec<PathBuf>,
+    /// The result of [`Operation::Compare`].
+    pub comparison: Option<Comparison>,
 }
 
 pub trait Observer {
@@ -246,19 +253,22 @@ pub fn system_trash(path: &Path) -> Result<(), String> {
 
 /// Runs `operation` to completion (or cancellation) on the calling thread.
 pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settings) -> Report {
-    let (name, sources): (&'static str, &[PathBuf]) = match operation {
-        Operation::Copy { sources, .. } => ("copy", sources),
-        Operation::Move { sources, .. } => ("move", sources),
-        Operation::Trash { sources } => ("trash", sources),
-        Operation::Delete { sources } => ("delete", sources),
-        Operation::Pack { sources, .. } => ("pack", sources),
-        Operation::Extract { archives, .. } => ("extract", archives),
-    };
-    let to: Option<&Path> = match operation {
-        Operation::Copy { to, .. } | Operation::Move { to, .. } => Some(to.path()),
-        Operation::Pack { to, .. } => Some(to),
-        Operation::Extract { into, .. } => Some(into),
-        Operation::Trash { .. } | Operation::Delete { .. } => None,
+    let (name, sources, to): (&'static str, &[PathBuf], Option<&Path>) = match operation {
+        Operation::Copy { sources, to } => ("copy", sources, Some(to.path())),
+        Operation::Move { sources, to } => ("move", sources, Some(to.path())),
+        Operation::Trash { sources } => ("trash", sources, None),
+        Operation::Delete { sources } => ("delete", sources, None),
+        Operation::Pack { sources, to, .. } => ("pack", sources, Some(to)),
+        Operation::Extract { archives, into } => ("extract", archives, Some(into)),
+        // Reads only: no engine, nothing logged.
+        Operation::Compare { first, second } => {
+            let (comparison, cancelled) = compare::run(first, second, observer);
+            return Report {
+                comparison: Some(comparison),
+                cancelled,
+                ..Report::default()
+            };
+        }
     };
     let mut engine = Engine {
         observer,
@@ -288,6 +298,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Operation::Delete { sources } => engine.delete(sources),
         Operation::Pack { sources, base, to } => engine.pack(sources, base, to),
         Operation::Extract { archives, into } => engine.extract(archives, into),
+        Operation::Compare { .. } => unreachable!("returned above"),
     }
     let report = &engine.report;
     engine.note(format_args!(

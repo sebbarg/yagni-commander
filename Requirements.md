@@ -16,7 +16,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 - Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
 - Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
-  - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8), Pack (Alt-F5), Extract (Alt-F6); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS); Quit (Linux only, Alt-F4).
+  - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8), Pack (Alt-F5), Extract (Alt-F6), Compare by content (no key); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS); Quit (Linux only, Alt-F4).
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
@@ -188,6 +188,16 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
   - It keeps running during F5/F6/F8, so files appear and vanish as the job runs (like TC).
   - If the watched folder disappears, the panel moves to the nearest existing parent (then home), cursor at the top. No error.
   - Network mounts get no fallback: only changes made from this machine are seen there; Ctrl-R covers the rest.
+
+### Compare by content
+
+Files menu, no key (action `CompareContents`, so a key can be bound). Decided with the owner 2026-10-03 (spec `docs/superpowers/specs/2026-10-03-compare-design.md`).
+
+- Which entries, like TC: two selected in the active panel, else one from each panel (its one selected entry, or the cursor entry when nothing is selected; never ".."). Anything else: "Select two files or two folders to compare."; a file and a folder: "Cannot compare a file with a folder."
+- Files: byte for byte (sizes first, then 1 MiB chunks to the first difference). No diff view. A picked symlink is followed.
+- Folders: recursive; names (case-sensitive), types and contents count, not times, permissions or owners. Hidden files always count. Symlinks inside are not followed (equal when their target text is equal); FIFOs, sockets and devices compare by type only, never opened. A folder on one side only is listed once.
+- Runs in the background like F5 (progress after ~300 ms, Cancel). Result in a message box: identical (with the file count for folders), or the differences, the first 20 then "and N more" (`only in left/right: path`, folders with a trailing `/`; the entry names instead of left/right for two entries from one panel; `different`, `different type`, `could not read`). Ctrl-C copies all of them. Never "identical" when something could not be read.
+- Reads only: no reload, the selection stays, nothing in the operation log.
 
 ## Operation log
 
