@@ -25,7 +25,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
 - Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Alt-F opens Files (also from another open menu; it doesn't close it); Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10, lone Alt and Alt-F do nothing.
 - About: a dialog with the name and version (`CARGO_PKG_VERSION`) and an OK button.
-- Right-click context menu (later): it reuses the menu's item model and popup builder with its own item list. Open decision: whether right-click selects, as in TC's default on Linux and Windows.
+- Right-click context menu (v3; postponed by the owner on 2026-10-03, nothing useful to put in it yet): it reuses the menu's item model and popup builder with its own item list. Open decision: whether right-click selects, as in TC's default on Linux and Windows.
 
 ### Config
 
