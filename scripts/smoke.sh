@@ -206,6 +206,11 @@ keys alt
 shot 07a-menu-files
 keys Escape
 
+echo "menu: Alt-F opens Files, Escape closes it"
+keys alt+f
+shot 07a2-menu-alt-f
+keys Escape
+
 echo "menu: F10, Show > Hidden files"
 keys F10 Right Right
 shot 07b-menu-show

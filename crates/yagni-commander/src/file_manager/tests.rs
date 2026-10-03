@@ -2471,6 +2471,25 @@ mod menu_bar {
     }
 
     #[gpui_kit::test]
+    fn alt_f_opens_the_files_menu(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("b alt-f");
+        assert_eq!(menu_open(cx), Some(0));
+        assert_eq!(search(&commander, cx), None, "Alt-F ends the quick search");
+        // Again: Files stays open (no toggle).
+        cx.simulate_keystrokes("alt-f");
+        assert_eq!(menu_open(cx), Some(0));
+        // From another menu: back to Files.
+        cx.simulate_keystrokes("right alt-f");
+        assert_eq!(menu_open(cx), Some(0));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(menu_open(cx), None);
+        // Keys reach the panel again: from "b" (the search's match) to "f".
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    }
+
+    #[gpui_kit::test]
     fn left_and_right_wrap_between_menus(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         cx.simulate_keystrokes("f10 left");

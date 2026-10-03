@@ -19,8 +19,8 @@ mod watch;
 use crate::actions::{
     About, Activate, CancelSearch, CloseTab, Copy, CopyPath, CursorDown, CursorEnd, CursorHome,
     CursorUp, Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move,
-    NewTab, NextTab, OpenSettings, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll,
-    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
+    NewTab, NextTab, OpenFilesMenu, OpenSettings, PageDown, PageUp, PrevTab, Reload, Rename,
+    SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
     SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
 };
 use crate::app_state::AppState;
@@ -215,6 +215,14 @@ impl FileManager {
         self.end_search(cx);
         if let Some(bar) = self.menu_bar.clone() {
             bar.update(cx, |bar, cx| bar.toggle(window, cx));
+        }
+    }
+
+    /// Alt-F: opens the Files menu, also from another open menu.
+    fn open_files_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
+        if let Some(bar) = self.menu_bar.clone() {
+            bar.update(cx, |bar, cx| bar.open_first(window, cx));
         }
     }
 
@@ -531,6 +539,9 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &ToggleMenu, window, cx| this.toggle_menu(window, cx)))
             .on_action(cx.listener(|this, _: &MenuAlt, window, cx| this.menu_alt(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenFilesMenu, window, cx| this.open_files_menu(window, cx)),
+            )
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 // Wayland reports an Alt still held from Alt-Tab right after
                 // the window gets focus; that press belongs to the switch.

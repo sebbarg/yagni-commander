@@ -66,6 +66,13 @@ impl MenuBar {
         }
     }
 
+    /// Alt-F: opens the first menu (Files), unless it is already open.
+    pub fn open_first(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_index() != Some(0) {
+            self.open(0, window, cx);
+        }
+    }
+
     fn open(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(def) = self.menus.get(index) else {
             return;
@@ -115,6 +122,13 @@ impl MenuBar {
 /// Keys an open menu acts on. Every other key is ignored while a menu is
 /// open, so it can't act on the panel behind it.
 pub fn passes(keystroke: &gpui_kit::Keystroke) -> bool {
+    let alt_only = gpui_kit::Modifiers {
+        alt: true,
+        ..Default::default()
+    };
+    if keystroke.modifiers == alt_only && keystroke.key == "f" {
+        return true;
+    }
     !keystroke.modifiers.modified()
         && matches!(
             keystroke.key.as_str(),
@@ -206,7 +220,7 @@ mod tests {
     #[test]
     fn only_menu_keys_pass_while_open() {
         for k in [
-            "up", "down", "left", "right", "enter", "escape", "f10", "alt",
+            "up", "down", "left", "right", "enter", "escape", "f10", "alt", "alt-f",
         ] {
             assert!(passes(&key(k)), "{k}");
         }
@@ -218,6 +232,8 @@ mod tests {
             "ctrl-a",
             "shift-f4",
             "alt-z",
+            "alt-shift-f",
+            "ctrl-alt-f",
             "shift-down",
         ] {
             assert!(!passes(&key(k)), "{k}");

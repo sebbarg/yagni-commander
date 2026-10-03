@@ -53,6 +53,7 @@ actions!(
         About,
         ToggleMenu,
         MenuAlt,
+        OpenFilesMenu,
         OpenSettings
     ]
 );
@@ -152,6 +153,7 @@ pub fn bind_default_keys(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("f10", ToggleMenu, context),
             KeyBinding::new("alt", MenuAlt, context),
+            KeyBinding::new("alt-f", OpenFilesMenu, context),
         ]);
     }
     // Text fields: the classic clipboard keys next to gpui-base's Ctrl-C/X/V.
