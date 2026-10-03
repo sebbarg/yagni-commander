@@ -16,18 +16,21 @@ use gpui_kit::{
 use yagni_commander_core::find::text::Text;
 use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{
-    Direction, Document, FileSource, LineIndex, Row, Visible, Wrap, count_lines,
+    Direction, Document, FileSource, Highlight, LineIndex, Row, Visible, Wrap, count_lines,
 };
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
-    Close, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown, PageUp, ScrollLeft,
-    ScrollRight, Start, ToggleHex, ToggleWrap,
+    Close, Copy as CopySelection, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown,
+    PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap,
 };
 use crate::app_state::AppState;
 use crate::theme::Theme;
 
 mod search;
+mod select;
+
+use select::{Run, Selection};
 
 const PADDING: f32 = 8.0;
 const LINE_HEIGHT: f32 = 18.0;
@@ -99,10 +102,21 @@ pub struct ViewerView {
     cancel_count: Arc<AtomicBool>,
     /// Ctrl-F / F3 / Shift-F3.
     search: search::SearchState,
-    /// Texts of the rows last drawn, and their marked parts (tests read
-    /// them).
-    shown: Vec<String>,
-    shown_marks: Vec<Vec<String>>,
+    /// Tests: what the rows last drawn showed.
+    #[cfg(test)]
+    shown: Shown,
+    /// The mouse selection (a byte range), and whether a drag is extending
+    /// it.
+    selection: Option<Selection>,
+    selecting: bool,
+    /// Auto-scroll is ticking (a drag past an edge).
+    autoscrolling: bool,
+    /// Where the mouse was last, for auto-scroll.
+    last_mouse: gpui_kit::Point<gpui_kit::Pixels>,
+    /// Width of a column in pixels, from the last layout.
+    char_width: f32,
+    /// The rows last drawn, for hit tests.
+    drawn: Vec<Row>,
     /// Bytes shown, for the scrollbar thumb and the percentage.
     shown_end: u64,
     dragging_thumb: bool,
@@ -161,8 +175,14 @@ impl ViewerView {
             top_line: None,
             cancel_count,
             search: search::SearchState::default(),
-            shown: Vec::new(),
-            shown_marks: Vec::new(),
+            #[cfg(test)]
+            shown: Shown::default(),
+            selection: None,
+            selecting: false,
+            autoscrolling: false,
+            last_mouse: Default::default(),
+            char_width: 8.0,
+            drawn: Vec::new(),
             shown_end: 0,
             dragging_thumb: false,
             wheel_rows: 0.0,
@@ -253,8 +273,9 @@ impl ViewerView {
         }
     }
 
-    /// Rows and columns that fit the window, from the monospace font.
-    fn measure(&self, window: &mut Window, cx: &App) -> (usize, u32) {
+    /// Rows and columns that fit the window, and a column's width, from the
+    /// monospace font.
+    fn measure(&self, window: &mut Window, cx: &App) -> (usize, u32, f32) {
         let theme = cx.theme();
         let font = font(theme.mono_font_family.clone());
         let text_system = window.text_system();
@@ -268,7 +289,17 @@ impl ViewerView {
         let height = f32::from(viewport.height) - 2.0 * PADDING - STATUS_HEIGHT;
         let rows = (height / LINE_HEIGHT).floor().max(1.0) as usize;
         let cols = (width / char_width).floor().max(1.0) as u32;
-        (rows, cols)
+        (rows, cols, char_width)
+    }
+
+    /// Up to `n` rows from the top, with the search match and the selection.
+    fn layout_rows(&mut self, n: usize) -> Vec<Row> {
+        let selection = self.selection.as_ref().map(Selection::range);
+        let hl = Highlight {
+            mark: self.search.current.as_ref(),
+            selection: selection.as_ref(),
+        };
+        self.doc.marked_rows(self.top, n, self.layout(), hl)
     }
 
     /// "file.txt · 1.2 MiB · 37% · wrap · line 120 of 5,000"
@@ -336,7 +367,7 @@ impl ViewerView {
     }
     #[cfg(test)]
     pub(crate) fn shown(&self) -> &[String] {
-        &self.shown
+        &self.shown.rows
     }
     #[cfg(test)]
     pub(crate) fn screen_rows(&self) -> usize {
@@ -344,8 +375,26 @@ impl ViewerView {
     }
 
     #[cfg(test)]
+    pub(crate) fn shown_selection(&self) -> &[Vec<String>] {
+        &self.shown.selection
+    }
+
+    #[cfg(test)]
+    pub(crate) fn selection_range(&self) -> Option<std::ops::Range<u64>> {
+        self.selection
+            .as_ref()
+            .map(Selection::range)
+            .filter(|r| !r.is_empty())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn char_width(&self) -> f32 {
+        self.char_width
+    }
+
+    #[cfg(test)]
     pub(crate) fn shown_marks(&self) -> &[Vec<String>] {
-        &self.shown_marks
+        &self.shown.marks
     }
 
     #[cfg(test)]
@@ -356,6 +405,32 @@ impl ViewerView {
     #[cfg(test)]
     pub(crate) fn searching(&self) -> bool {
         self.search.running.is_some()
+    }
+}
+
+/// Tests: the texts of the rows last drawn, and their marked and selected
+/// parts.
+#[cfg(test)]
+#[derive(Default)]
+struct Shown {
+    rows: Vec<String>,
+    marks: Vec<Vec<String>>,
+    selection: Vec<Vec<String>>,
+}
+
+#[cfg(test)]
+impl Shown {
+    fn push(
+        &mut self,
+        text: &str,
+        marks: &[std::ops::Range<usize>],
+        selection: &[std::ops::Range<usize>],
+    ) {
+        let parts =
+            |rs: &[std::ops::Range<usize>]| rs.iter().map(|r| text[r.clone()].to_owned()).collect();
+        self.rows.push(text.to_owned());
+        self.marks.push(parts(marks));
+        self.selection.push(parts(selection));
     }
 }
 
@@ -444,17 +519,16 @@ impl ViewerView {
 
 impl Render for ViewerView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (rows, cols) = self.measure(window, cx);
+        let (rows, cols, char_width) = self.measure(window, cx);
         self.screen_rows = rows;
+        self.char_width = char_width;
         if cols != self.cols {
             self.cols = cols;
             if self.wraps_rows() {
                 self.top = self.doc.row_start_at(self.top, self.layout());
             }
         }
-        let visible: Vec<Row> =
-            self.doc
-                .marked_rows(self.top, rows, self.layout(), self.search.current.as_ref());
+        let visible = self.layout_rows(rows);
         self.shown_end = visible.last().map_or(self.top, |r| r.end);
         self.widest = visible.iter().map(|r| r.width).max().unwrap_or(0);
 
@@ -468,35 +542,45 @@ impl Render for ViewerView {
             background_color: Some(colors.accent.into()),
             ..Default::default()
         };
-        self.shown.clear();
-        self.shown_marks.clear();
+        let selected = HighlightStyle {
+            color: Some(colors.text_on_selected.into()),
+            background_color: Some(colors.selected.into()),
+            ..Default::default()
+        };
+        #[cfg(test)]
+        {
+            self.shown = Shown::default();
+        }
         let mut row_elements = Vec::with_capacity(visible.len());
         for (ix, row) in visible.iter().enumerate() {
             let Visible {
                 text,
                 dim: dims,
                 marks,
+                selection,
             } = if self.wraps_rows() {
                 Visible {
                     text: row.text.clone(),
                     dim: row.dim.clone(),
                     marks: row.marks.clone(),
+                    selection: row.selection.clone(),
                 }
             } else {
                 row.visible(self.h_offset, self.cols)
             };
-            self.shown.push(text.clone());
-            self.shown_marks
-                .push(marks.iter().map(|m| text[m.clone()].to_owned()).collect());
-            // The marks win over the placeholders inside them; gpui wants the
-            // ranges in order.
-            let mut highlights: Vec<_> = dims
+            #[cfg(test)]
+            self.shown.push(&text, &marks, &selection);
+            let highlights: Vec<_> = select::highlight_runs(&dims, &selection, &marks)
                 .into_iter()
-                .filter(|d| !marks.iter().any(|m| m.contains(&d.start)))
-                .map(|r| (r, dim))
-                .chain(marks.iter().map(|m| (m.clone(), marked)))
+                .map(|(range, run)| {
+                    let style = match run {
+                        Run::Dim => dim,
+                        Run::Selected => selected,
+                        Run::Marked => marked,
+                    };
+                    (range, style)
+                })
                 .collect();
-            highlights.sort_by_key(|(r, _)| r.start);
             let styled = StyledText::new(SharedString::from(text)).with_highlights(highlights);
             row_elements.push(
                 div()
@@ -507,6 +591,7 @@ impl Render for ViewerView {
                     .child(styled),
             );
         }
+        self.drawn = visible;
 
         let status = self.status_text();
         let error = self.doc.error().map(str::to_owned);
@@ -538,6 +623,8 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &End, _, cx| this.end(cx)))
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
             .on_action(cx.listener(|this, _: &ToggleHex, _, cx| this.toggle_hex(cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
+            .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollRight, _, cx| this.scroll_h(true, cx)))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
@@ -562,6 +649,8 @@ impl Render for ViewerView {
                 }),
             )
             .size_full()
+            .relative()
+            .child(select::follow_drag(cx))
             .flex()
             .flex_col()
             .bg(colors.panel_bg)
@@ -574,6 +663,13 @@ impl Render for ViewerView {
                     .p(px(PADDING))
                     .child(
                         div()
+                            .id("viewer-text")
+                            .on_mouse_down(
+                                gpui_kit::MouseButton::Left,
+                                cx.listener(|this, event, window, cx| {
+                                    this.on_text_mouse_down(event, window, cx)
+                                }),
+                            )
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()

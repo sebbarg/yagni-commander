@@ -91,7 +91,9 @@ pub mod viewer {
             Find,
             FindNext,
             FindPrevious,
-            ToggleHex
+            ToggleHex,
+            SelectAll,
+            Copy
         ]
     );
 }
@@ -320,5 +322,11 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("f3", viewer::FindNext, ctx),
         KeyBinding::new("enter", viewer::FindNext, ctx),
         KeyBinding::new("shift-f3", viewer::FindPrevious, ctx),
+        KeyBinding::new("ctrl-a", viewer::SelectAll, ctx),
+        KeyBinding::new("ctrl-c", viewer::Copy, ctx),
+        KeyBinding::new("ctrl-insert", viewer::Copy, ctx),
     ]);
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("cmd-c", viewer::Copy, ctx)]);
+    }
 }

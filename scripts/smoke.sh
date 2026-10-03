@@ -506,8 +506,21 @@ keys ctrl+End
 shot 09-viewer-end
 keys w Right Right
 shot 10-viewer-nowrap
+echo "Selection and copy in the viewer"
+keys w ctrl+Home
+viewer=$(xdotool search --name "big.txt - yagni-commander" | head -1)
+# Drag from the start of row 0 to far right on row 1 (rows are 18 px, 8 px padding).
+xdotool mousemove --window "$viewer" 10 17 mousedown 1
+sleep 0.2
+xdotool mousemove --window "$viewer" 400 35
+sleep 0.2
+xdotool mouseup 1
+sleep 0.3
+shot 10s-viewer-selection
+keys ctrl+c
+check "viewer selection copied" clipboard "$(printf 'line 1\nline 2')"
 echo "Ctrl-F and F3 in the viewer"
-keys w ctrl+Home ctrl+f
+keys ctrl+Home ctrl+f
 typed "line 150000"
 shot 10a0-viewer-find-dialog
 keys Return

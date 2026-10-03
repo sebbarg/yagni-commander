@@ -328,6 +328,97 @@ mod search {
         settle(viewer, cx);
     }
 
+    #[gpui_kit::test]
+    fn a_found_match_becomes_the_selection(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        find(&viewer, "line 500", &mut cx);
+        let m = viewer.read_with(&cx, |v, _| v.current_match()).unwrap();
+        assert_eq!(viewer.read_with(&cx, |v, _| v.selection_range()), Some(m));
+        cx.simulate_keystrokes("ctrl-c");
+        let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
+        assert_eq!(copied.as_deref(), Some("line 500"));
+    }
+
+    fn prefill(
+        viewer: &Entity<ViewerView>,
+        range: std::ops::Range<u64>,
+        cx: &mut VisualTestContext,
+    ) -> Option<String> {
+        viewer.update(cx, |v, _| {
+            v.select_bytes(range);
+            v.find_prefill()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_f_starts_with_a_short_one_line_selection(cx: &mut TestAppContext) {
+        let mut text = b"hello world\nsecond\n".to_vec();
+        text.extend(vec![b'x'; 300]);
+        text.extend(b"\xff\xfe\n");
+        let (_tmp, viewer, mut cx) = view(&text, cx);
+        assert_eq!(prefill(&viewer, 6..11, &mut cx).as_deref(), Some("world"));
+        assert_eq!(prefill(&viewer, 6..15, &mut cx), None, "spans a line break");
+        assert_eq!(prefill(&viewer, 19..319, &mut cx), None, "over 256 bytes");
+        assert_eq!(prefill(&viewer, 319..321, &mut cx), None, "invalid UTF-8");
+        assert_eq!(prefill(&viewer, 3..3, &mut cx), None, "empty");
+    }
+
+    #[gpui_kit::test]
+    fn after_a_search_ctrl_f_keeps_the_typed_pattern(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        // Case-insensitive: the match reads "line 500", the pattern doesn't.
+        find(&viewer, "LINE 500", &mut cx);
+        assert!(viewer.read_with(&cx, |v, _| v.selection_range()).is_some());
+        assert_eq!(viewer.update(&mut cx, |v, _| v.find_prefill()), None);
+    }
+
+    #[gpui_kit::test]
+    fn a_hex_match_extends_in_the_characters(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"0123456789abcdef", cx);
+        cx.simulate_keystrokes("h");
+        find(&viewer, "45", &mut cx);
+        assert_eq!(
+            viewer.read_with(&cx, |v, _| v.selection_range()),
+            Some(4..6)
+        );
+        // Shift-press in the characters (they start at column 60), drag on
+        // in them: the head follows the characters, not the codes.
+        let row = cx.debug_bounds("viewer-row-0").unwrap();
+        let w = viewer.read_with(&cx, |v, _| v.char_width());
+        let col = |c: f32| point(row.origin.x + px(c * w), row.center().y);
+        let shift = gpui_kit::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let left = gpui_kit::MouseButton::Left;
+        cx.simulate_mouse_down(col(70.2), left, shift);
+        cx.simulate_mouse_move(col(72.2), left, shift);
+        cx.simulate_mouse_up(col(72.2), left, shift);
+        cx.run_until_parked();
+        assert_eq!(
+            viewer.read_with(&cx, |v, _| v.selection_range()),
+            Some(4..12)
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_prefill_is_what_ctrl_f_searches(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"one two\ntwo three\n", cx);
+        cx.update(|_, cx| {
+            cx.set_global(LastSearch(Text {
+                pattern: "three".into(),
+                ..Default::default()
+            }))
+        });
+        viewer.update(&mut cx, |v, _| v.select_bytes(4..7));
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        settle(&viewer, &mut cx);
+        assert_eq!(viewer.read_with(&cx, |v, _| v.current_match()), Some(4..7));
+    }
+
     /// (row on screen, marked text) of every marked row.
     fn marks(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Vec<(usize, String)> {
         cx.run_until_parked();
@@ -668,5 +759,337 @@ mod hex {
         let marks = viewer.read_with(&cx, |v, _| v.shown_marks()[0].clone());
         // Across the gap after the 8th byte.
         assert_eq!(marks, ["6E 65 65 64  6C 65", "needle"]);
+    }
+}
+
+mod select {
+    use super::*;
+    use gpui_kit::{Modifiers, MouseButton, Pixels, Point};
+
+    /// The window point of column `col` (fractional) on screen row `row`.
+    fn at(
+        viewer: &Entity<ViewerView>,
+        row: usize,
+        col: f32,
+        cx: &mut VisualTestContext,
+    ) -> Point<Pixels> {
+        let selector: &'static str = Box::leak(format!("viewer-row-{row}").into_boxed_str());
+        let b = bounds_of(cx, selector);
+        let w = viewer.read_with(cx, |v, _| v.char_width());
+        point(b.origin.x + px(col * w), b.center().y)
+    }
+
+    fn drag(from: Point<Pixels>, to: Point<Pixels>, cx: &mut VisualTestContext) {
+        let m = Modifiers::default();
+        cx.simulate_mouse_down(from, MouseButton::Left, m);
+        cx.simulate_mouse_move(to, MouseButton::Left, m);
+        cx.simulate_mouse_up(to, MouseButton::Left, m);
+        cx.run_until_parked();
+    }
+
+    fn clicks(p: Point<Pixels>, count: usize, shift: bool, cx: &mut VisualTestContext) {
+        let modifiers = Modifiers {
+            shift,
+            ..Default::default()
+        };
+        cx.simulate_event(gpui_kit::MouseDownEvent {
+            button: MouseButton::Left,
+            position: p,
+            modifiers,
+            click_count: count,
+            first_mouse: false,
+        });
+        cx.simulate_event(gpui_kit::MouseUpEvent {
+            button: MouseButton::Left,
+            position: p,
+            modifiers,
+            click_count: count,
+        });
+        cx.run_until_parked();
+    }
+
+    pub(super) fn selection(
+        viewer: &Entity<ViewerView>,
+        cx: &mut VisualTestContext,
+    ) -> Option<std::ops::Range<u64>> {
+        cx.run_until_parked();
+        viewer.read_with(cx, |v, _| v.selection_range())
+    }
+
+    pub(super) fn clipboard(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()))
+    }
+
+    #[gpui_kit::test]
+    fn dragging_selects_and_ctrl_c_copies(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"line 1\nline 2\nline 3\n", cx);
+        let (from, to) = (at(&viewer, 0, 5.2, &mut cx), at(&viewer, 1, 4.8, &mut cx));
+        drag(from, to, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(5..12));
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("1\nline "));
+        let shown = viewer.read_with(&cx, |v, _| v.shown_selection().to_vec());
+        assert_eq!(shown[0], ["1"]);
+        assert_eq!(shown[1], ["line "]);
+        assert!(shown[2].is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_insert_copies_too(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"abc def\n", cx);
+        let (from, to) = (at(&viewer, 0, 0.1, &mut cx), at(&viewer, 0, 2.9, &mut cx));
+        drag(from, to, &mut cx);
+        cx.simulate_keystrokes("ctrl-insert");
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("abc"));
+    }
+
+    #[gpui_kit::test]
+    fn shift_click_extends_from_the_anchor(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"0123456789\n", cx);
+        let (from, to) = (at(&viewer, 0, 2.1, &mut cx), at(&viewer, 0, 4.1, &mut cx));
+        drag(from, to, &mut cx);
+        let p = at(&viewer, 0, 8.1, &mut cx);
+        clicks(p, 1, true, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(2..8));
+        let p = at(&viewer, 0, 0.1, &mut cx);
+        clicks(p, 1, true, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(0..2));
+    }
+
+    #[gpui_kit::test]
+    fn double_click_selects_a_word_and_triple_click_a_line(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"say hello_world now\nnext\n", cx);
+        let p = at(&viewer, 0, 6.5, &mut cx);
+        clicks(p, 2, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(4..15));
+        clicks(p, 3, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(0..20));
+    }
+
+    #[gpui_kit::test]
+    fn double_click_past_the_last_line_selects_its_last_word(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"first\nsay hello", cx);
+        let p = at(&viewer, 1, 30.0, &mut cx);
+        clicks(p, 2, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(10..15));
+        clicks(p, 3, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(6..15));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_clears_the_selection(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"abc def\n", cx);
+        let (from, to) = (at(&viewer, 0, 0.1, &mut cx), at(&viewer, 0, 2.9, &mut cx));
+        drag(from, to, &mut cx);
+        let p = at(&viewer, 0, 5.0, &mut cx);
+        clicks(p, 1, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_c_without_a_selection_copies_nothing(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"abc\n", cx);
+        cx.update(|_, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()))
+        });
+        let p = at(&viewer, 0, 1.0, &mut cx);
+        clicks(p, 1, false, &mut cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("before"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_a_selects_the_whole_file(cx: &mut TestAppContext) {
+        let text = numbered(1000);
+        let (_tmp, viewer, mut cx) = view(&text, cx);
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(selection(&viewer, &mut cx), Some(0..text.len() as u64));
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(&mut cx).unwrap().as_bytes(), &text[..]);
+    }
+
+    #[gpui_kit::test]
+    fn a_selection_over_the_cap_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"abc\n", cx);
+        let cap = yagni_commander_core::viewer::COPY_CAP;
+        viewer.update(&mut cx, |v, _| v.select_bytes(0..cap + 1));
+        cx.simulate_keystrokes("ctrl-c");
+        cx.run_until_parked();
+        assert!(cx.update(|window, cx| {
+            use gpui_kit::component::WindowExt;
+            window.has_active_dialog(cx)
+        }));
+    }
+
+    #[gpui_kit::test]
+    fn the_selection_survives_w_h_and_scrolling(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let (from, to) = (at(&viewer, 1, 0.1, &mut cx), at(&viewer, 2, 2.1, &mut cx));
+        drag(from, to, &mut cx);
+        let before = selection(&viewer, &mut cx);
+        assert!(before.is_some());
+        cx.simulate_keystrokes("w h down down pagedown pageup h w");
+        assert_eq!(selection(&viewer, &mut cx), before);
+    }
+
+    #[gpui_kit::test]
+    fn hex_copies_the_column_the_drag_started_in(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"0123456789abcdefXYZ", cx);
+        cx.simulate_keystrokes("h");
+        // Byte i's code starts at column 10 + 3i (+1 from the 9th on).
+        let code = |i: usize| (10 + i * 3 + usize::from(i >= 8)) as f32;
+        let (from, to) = (
+            at(&viewer, 0, code(1) + 0.2, &mut cx),
+            at(&viewer, 0, code(3) + 1.8, &mut cx),
+        );
+        drag(from, to, &mut cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("31 32 33"));
+        let marks = viewer.read_with(&cx, |v, _| v.shown_selection()[0].clone());
+        assert_eq!(marks, ["31 32 33", "123"]);
+        // The characters start at column 60.
+        let (from, to) = (at(&viewer, 0, 60.2, &mut cx), at(&viewer, 1, 60.9, &mut cx));
+        drag(from, to, &mut cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard(&mut cx).as_deref(), Some("0123456789abcdefX"));
+    }
+
+    #[gpui_kit::test]
+    fn the_scrollbar_does_not_touch_the_selection(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let (from, to) = (at(&viewer, 0, 0.1, &mut cx), at(&viewer, 0, 3.9, &mut cx));
+        drag(from, to, &mut cx);
+        let track = bounds_of(&mut cx, "viewer-scrollbar");
+        clicks(track.center(), 1, false, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(0..4));
+    }
+
+    #[gpui_kit::test]
+    fn a_release_outside_the_window_ends_the_drag(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"0123456789\n", cx);
+        let m = Modifiers::default();
+        let (a, b, c) = (
+            at(&viewer, 0, 0.1, &mut cx),
+            at(&viewer, 0, 3.1, &mut cx),
+            at(&viewer, 0, 8.1, &mut cx),
+        );
+        cx.simulate_mouse_down(a, MouseButton::Left, m);
+        cx.simulate_mouse_move(b, MouseButton::Left, m);
+        // Released elsewhere: the next move has no button.
+        cx.simulate_mouse_move(c, None::<MouseButton>, m);
+        cx.simulate_mouse_move(a, MouseButton::Left, m);
+        assert_eq!(selection(&viewer, &mut cx), Some(0..3));
+    }
+
+    #[gpui_kit::test]
+    fn dragging_below_the_end_selects_the_last_byte(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"ab\ncd", cx);
+        let p = at(&viewer, 1, 0.0, &mut cx);
+        let below = point(p.x, p.y + px(5.0 * LINE_HEIGHT));
+        let from = at(&viewer, 0, 0.1, &mut cx);
+        drag(from, below, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(0..5));
+    }
+
+    fn tick(cx: &mut VisualTestContext) {
+        cx.executor()
+            .advance_clock(crate::viewer_view::select::TICK);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn dragging_past_the_bottom_scrolls_and_extends(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let m = Modifiers::default();
+        let start = at(&viewer, 0, 0.1, &mut cx);
+        let status = bounds_of(&mut cx, "viewer-status").center();
+        cx.simulate_mouse_down(start, MouseButton::Left, m);
+        cx.simulate_mouse_move(status, MouseButton::Left, m);
+        let shown_end = selection(&viewer, &mut cx).unwrap().end;
+        for _ in 0..5 {
+            tick(&mut cx);
+        }
+        assert!(viewer.read_with(&cx, |v, _| v.top()) > 0, "scrolled");
+        let sel = selection(&viewer, &mut cx).unwrap();
+        assert_eq!(sel.start, 0);
+        assert!(sel.end > shown_end, "{sel:?} past {shown_end}");
+        cx.simulate_mouse_up(status, MouseButton::Left, m);
+        let top = viewer.read_with(&cx, |v, _| v.top());
+        tick(&mut cx);
+        tick(&mut cx);
+        assert_eq!(
+            viewer.read_with(&cx, |v, _| v.top()),
+            top,
+            "stops on release"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn dragging_past_the_right_edge_scrolls_sideways_without_wrap(cx: &mut TestAppContext) {
+        let long = format!("{}\n", "0123456789".repeat(100));
+        let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
+        cx.simulate_keystrokes("w");
+        let m = Modifiers::default();
+        let track = bounds_of(&mut cx, "viewer-scrollbar");
+        let start = at(&viewer, 0, 0.1, &mut cx);
+        cx.simulate_mouse_down(start, MouseButton::Left, m);
+        let right = point(track.origin.x + px(1.0), start.y);
+        cx.simulate_mouse_move(right, MouseButton::Left, m);
+        tick(&mut cx);
+        tick(&mut cx);
+        assert!(viewer.read_with(&cx, |v, _| v.h_offset()) > 0);
+        cx.simulate_mouse_up(right, MouseButton::Left, m);
+    }
+
+    #[gpui_kit::test]
+    fn wrap_mode_never_scrolls_sideways(cx: &mut TestAppContext) {
+        let long = format!("{}\n", "0123456789".repeat(100));
+        let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
+        let m = Modifiers::default();
+        let track = bounds_of(&mut cx, "viewer-scrollbar");
+        let start = at(&viewer, 0, 0.1, &mut cx);
+        cx.simulate_mouse_down(start, MouseButton::Left, m);
+        let right = point(track.origin.x + px(1.0), start.y);
+        cx.simulate_mouse_move(right, MouseButton::Left, m);
+        tick(&mut cx);
+        assert_eq!(viewer.read_with(&cx, |v, _| v.h_offset()), 0);
+        cx.simulate_mouse_up(right, MouseButton::Left, m);
+    }
+
+    #[gpui_kit::test]
+    fn a_release_below_the_window_stops_auto_scroll(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let m = Modifiers::default();
+        let start = at(&viewer, 0, 0.1, &mut cx);
+        let status = bounds_of(&mut cx, "viewer-status");
+        cx.simulate_mouse_down(start, MouseButton::Left, m);
+        cx.simulate_mouse_move(status.center(), MouseButton::Left, m);
+        tick(&mut cx);
+        let outside = point(status.center().x, status.bottom() + px(100.0));
+        cx.simulate_mouse_up(outside, MouseButton::Left, m);
+        cx.run_until_parked();
+        let top = viewer.read_with(&cx, |v, _| v.top());
+        let sel = selection(&viewer, &mut cx);
+        tick(&mut cx);
+        tick(&mut cx);
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), top, "stopped");
+        assert_eq!(selection(&viewer, &mut cx), sel);
+    }
+
+    #[gpui_kit::test]
+    fn further_below_the_window_scrolls_faster(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let m = Modifiers::default();
+        let start = at(&viewer, 0, 0.1, &mut cx);
+        let status = bounds_of(&mut cx, "viewer-status");
+        cx.simulate_mouse_down(start, MouseButton::Left, m);
+        let far = point(status.center().x, status.bottom() + px(10.0 * LINE_HEIGHT));
+        cx.simulate_mouse_move(far, MouseButton::Left, m);
+        tick(&mut cx);
+        // "line N": the top row after one tick is well past line 3.
+        let top_row = shown(&viewer, &mut cx)[0].clone();
+        let n: usize = top_row["line ".len()..].parse().unwrap();
+        assert!(n > 5, "one tick scrolled to {top_row}");
+        cx.simulate_mouse_up(far, MouseButton::Left, m);
     }
 }

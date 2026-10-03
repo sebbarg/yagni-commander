@@ -5,6 +5,8 @@ use std::ops::Range;
 
 use unicode_width::UnicodeWidthChar;
 
+use super::hex::{chars_at, code_at};
+
 /// Block size of the read cache and spacing of forced row breaks in giant lines.
 pub const BLOCK: u64 = 64 * 1024;
 /// Longest row in characters, in both modes (no-wrap rows are cut here, and it
@@ -26,6 +28,37 @@ pub enum Wrap {
     Hex,
 }
 
+/// What rows highlight: the current search match and the selection, both
+/// file byte ranges.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Highlight<'a> {
+    pub mark: Option<&'a Range<u64>>,
+    pub selection: Option<&'a Range<u64>>,
+}
+
+impl<'a> Highlight<'a> {
+    pub fn mark(range: &'a Range<u64>) -> Self {
+        Self {
+            mark: Some(range),
+            selection: None,
+        }
+    }
+
+    pub fn selection(range: &'a Range<u64>) -> Self {
+        Self {
+            mark: None,
+            selection: Some(range),
+        }
+    }
+}
+
+/// Which half of a hex row a click is in. Ignored by text rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HexColumn {
+    Codes,
+    Chars,
+}
+
 /// One display row: the bytes `start..end` of the file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
@@ -41,11 +74,19 @@ pub struct Row {
     /// The ranges of `text` that show the marked bytes (the current match):
     /// at most one in text mode, two in hex (the codes and the characters).
     pub marks: Vec<Range<usize>>,
+    /// The ranges of `text` that show selected bytes: at most one in text
+    /// mode, two in hex.
+    pub selection: Vec<Range<usize>>,
+    /// Text rows: for each character of `text`, the offset from `start` of
+    /// the file byte it shows (a tab's spaces all point at the tab), plus a
+    /// last entry where the shown bytes end (before a line ending). Hex
+    /// rows: empty.
+    pub sources: Vec<u32>,
 }
 
 impl Row {
     /// The part of the row from column `from_col`, at most `cols` wide, with
-    /// its dim ranges and mark. A wide character cut by either edge becomes a
+    /// its dim ranges, marks and selection. A wide character cut by either edge becomes a
     /// space.
     pub fn visible(&self, from_col: u32, cols: u32) -> Visible {
         let to_col = from_col.saturating_add(cols);
@@ -53,6 +94,7 @@ impl Row {
         let mut dim = Vec::new();
         // One slot per mark of the row, filled as its characters show.
         let mut marks: Vec<Option<Range<usize>>> = vec![None; self.marks.len()];
+        let mut selection: Vec<Option<Range<usize>>> = vec![None; self.selection.len()];
         let mut col = 0;
         // `self.dim` is sorted, so one pass over it keeps this linear.
         let mut dims = self.dim.iter().map(|r| r.start).peekable();
@@ -80,9 +122,18 @@ impl Row {
             if let Some(k) = self.marks.iter().position(|m| m.contains(&ix)) {
                 marks[k].get_or_insert(at..at).end = text.len();
             }
+            if let Some(k) = self.selection.iter().position(|s| s.contains(&ix)) {
+                selection[k].get_or_insert(at..at).end = text.len();
+            }
         }
         let marks = marks.into_iter().flatten().collect();
-        Visible { text, dim, marks }
+        let selection = selection.into_iter().flatten().collect();
+        Visible {
+            text,
+            dim,
+            marks,
+            selection,
+        }
     }
 }
 
@@ -100,12 +151,89 @@ impl Row {
     }
 }
 
+impl Row {
+    /// Where the row's shown bytes end: before its line ending.
+    pub fn content_end(&self) -> u64 {
+        match self.sources.last() {
+            Some(&end) => self.start + u64::from(end),
+            None => self.end, // hex
+        }
+    }
+
+    /// The row's cells: (first byte, start column, end column). A text cell
+    /// is one character (a tab's spaces are one cell); a hex cell is one
+    /// byte's code or character.
+    fn cells(&self, column: HexColumn) -> Vec<(u64, f32, f32)> {
+        if self.sources.is_empty() {
+            return hex_cells(self, column);
+        }
+        let mut cells: Vec<(u64, f32, f32)> = Vec::new();
+        let mut col = 0.0;
+        for (ch, &src) in self.text.chars().zip(&self.sources) {
+            let w = ch.width().unwrap_or(1) as f32;
+            let byte = self.start + u64::from(src);
+            match cells.last_mut() {
+                Some(last) if last.0 == byte => last.2 += w,
+                _ => cells.push((byte, col, col + w)),
+            }
+            col += w;
+        }
+        cells
+    }
+
+    /// The position between bytes nearest column `x` (fractional, from the
+    /// row's first column).
+    pub fn boundary_at(&self, x: f32, column: HexColumn) -> u64 {
+        self.cells(column)
+            .iter()
+            .find(|(_, start, end)| (start + end) / 2.0 > x)
+            .map_or_else(|| self.content_end(), |c| c.0)
+    }
+
+    /// The first byte of the cell under column `x`: in a gap or past the
+    /// end, the cell before it; before the first cell, the first one. An
+    /// empty row answers its start.
+    pub fn char_at(&self, x: f32, column: HexColumn) -> u64 {
+        let cells = self.cells(column);
+        cells
+            .iter()
+            .rev()
+            .find(|(_, start, _)| *start <= x)
+            .or(cells.first())
+            .map_or(self.start, |c| c.0)
+    }
+
+    /// Hex rows: the characters from one column before they start.
+    pub fn hex_column(&self, x: f32) -> HexColumn {
+        let digits = self.text.find(' ').unwrap_or(8);
+        if x >= chars_at(digits) as f32 - 1.0 {
+            HexColumn::Chars
+        } else {
+            HexColumn::Codes
+        }
+    }
+}
+
+fn hex_cells(row: &Row, column: HexColumn) -> Vec<(u64, f32, f32)> {
+    let digits = row.text.find(' ').unwrap_or(8);
+    (0..(row.end - row.start) as usize)
+        .map(|i| {
+            let (at, w) = match column {
+                HexColumn::Codes => (code_at(digits, i), 2),
+                HexColumn::Chars => (chars_at(digits) + i, 1),
+            };
+            (row.start + i as u64, at as f32, (at + w) as f32)
+        })
+        .collect()
+}
+
 /// What [`Row::visible`] shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Visible {
     pub text: String,
     pub dim: Vec<Range<usize>>,
     pub marks: Vec<Range<usize>>,
+    pub selection: Vec<Range<usize>>,
 }
 
 /// Decodes one unit at the start of `bytes`: a valid UTF-8 character and its
@@ -126,32 +254,32 @@ pub(crate) fn decode(bytes: &[u8]) -> (Option<char>, usize) {
 
 /// Lays out the row starting at file offset `start`. `bytes` begins there;
 /// the row never extends past `limit` bytes (a forced break or the end of
-/// the file) and, wrapping, never past `cols` columns. `mark`: file bytes
-/// whose characters get [`Row::marks`].
-pub(crate) fn layout_row(
-    bytes: &[u8],
-    start: u64,
-    limit: usize,
-    wrap: Wrap,
-    mark: Option<&Range<u64>>,
-) -> Row {
+/// the file) and, wrapping, never past `cols` columns. `hl`: file bytes
+/// whose characters get [`Row::marks`] and [`Row::selection`].
+pub(crate) fn layout_row(bytes: &[u8], start: u64, limit: usize, wrap: Wrap, hl: Highlight) -> Row {
     let limit = limit.min(bytes.len());
     let mut text = String::new();
     let mut dim = Vec::new();
+    let mut sources = Vec::new();
+    // Where the shown bytes end, if a line ending ends the row.
+    let mut shown_end = None;
     let mut marked: Option<Range<usize>> = None;
+    let mut selected: Option<Range<usize>> = None;
     let mut col = 0u32;
     let mut chars = 0;
     let mut i = 0;
     // Where to break for word wrap: after the last space or tab
-    // (byte offset, text length, dim count, column).
-    let mut soft: Option<(usize, usize, usize, u32)> = None;
+    // (byte offset, text length, dim count, column, sources count).
+    let mut soft: Option<(usize, usize, usize, u32, usize)> = None;
     while i < limit && chars < MAX_ROW_CHARS {
         let (ch, len) = decode(&bytes[i..]);
         if ch == Some('\n') {
+            shown_end = Some(i);
             i += 1;
             break;
         }
         if ch == Some('\r') && i + 1 < limit && bytes[i + 1] == b'\n' {
+            shown_end = Some(i);
             i += 2;
             break;
         }
@@ -165,40 +293,50 @@ pub(crate) fn layout_row(
             && chars > 0
             && col + w > cols
         {
-            if let Some((si, st, sd, sc)) = soft {
+            if let Some((si, st, sd, sc, ss)) = soft {
                 i = si;
                 text.truncate(st);
                 dim.truncate(sd);
                 col = sc;
+                sources.truncate(ss);
             }
             break;
         }
         let at = text.len();
         if ch == Some('\t') {
             text.extend(std::iter::repeat_n(' ', w as usize));
+            sources.extend(std::iter::repeat_n(i as u32, w as usize));
         } else {
             text.push(shown);
+            sources.push(i as u32);
         }
         if is_dim {
             dim.push(at..text.len());
         }
         let pos = start + i as u64;
-        if mark.is_some_and(|m| pos < m.end && pos + len as u64 > m.start) {
+        let covers = |r: &Range<u64>| pos < r.end && pos + len as u64 > r.start;
+        if hl.mark.is_some_and(covers) {
             marked.get_or_insert(at..at).end = text.len();
+        }
+        if hl.selection.is_some_and(covers) {
+            selected.get_or_insert(at..at).end = text.len();
         }
         col += w;
         chars += 1;
         i += len;
         if matches!(ch, Some(' ' | '\t')) {
-            soft = Some((i, text.len(), dim.len(), col));
+            soft = Some((i, text.len(), dim.len(), col, sources.len()));
         }
     }
-    // A word-wrap break may have cut the marked text off.
-    let marks = marked
-        .map(|m| m.start..m.end.min(text.len()))
-        .filter(|m| m.start < m.end)
-        .into_iter()
-        .collect();
+    // A word-wrap break may have cut the highlighted text off.
+    let trim = |r: Option<Range<usize>>| -> Vec<Range<usize>> {
+        r.map(|m| m.start..m.end.min(text.len()))
+            .filter(|m| m.start < m.end)
+            .into_iter()
+            .collect()
+    };
+    let (marks, selection) = (trim(marked), trim(selected));
+    sources.push(shown_end.unwrap_or(i) as u32);
     Row {
         start,
         end: start + i as u64,
@@ -206,6 +344,8 @@ pub(crate) fn layout_row(
         dim,
         width: col,
         marks,
+        selection,
+        sources,
     }
 }
 
@@ -222,7 +362,13 @@ mod tests {
         let mut rows = Vec::new();
         let mut pos = 0;
         while pos < bytes.len() {
-            let row = layout_row(&bytes[pos..], pos as u64, bytes.len() - pos, wrap, None);
+            let row = layout_row(
+                &bytes[pos..],
+                pos as u64,
+                bytes.len() - pos,
+                wrap,
+                Highlight::default(),
+            );
             pos = row.end as usize;
             rows.push(row);
         }
@@ -312,7 +458,7 @@ mod tests {
 
     #[test]
     fn limit_forces_a_break() {
-        let row = layout_row(b"abcdef", 10, 3, Wrap::Off, None);
+        let row = layout_row(b"abcdef", 10, 3, Wrap::Off, Highlight::default());
         assert_eq!((row.start, row.end, row.text.as_str()), (10, 13, "abc"));
     }
 
@@ -320,7 +466,7 @@ mod tests {
     fn crlf_split_by_the_limit_shows_the_cr() {
         // A forced break between \r and \n: the \r stays a placeholder so the
         // row ends exactly at the break.
-        let row = layout_row(b"a\r\n", 0, 2, Wrap::Off, None);
+        let row = layout_row(b"a\r\n", 0, 2, Wrap::Off, Highlight::default());
         assert_eq!((row.end, row.text.as_str()), (2, "a·"));
     }
 
@@ -334,7 +480,7 @@ mod tests {
                 pos as u64,
                 bytes.len() - pos,
                 wrap,
-                Some(&mark),
+                Highlight::mark(&mark),
             );
             pos = row.end as usize;
             rows.push(row.marks.first().map(|m| row.text[m.clone()].to_owned()));
@@ -379,25 +525,174 @@ mod tests {
 
     #[test]
     fn mark_columns_count_display_columns() {
-        let row = layout_row("日\tab".as_bytes(), 0, 6, Wrap::Off, Some(&(4..6)));
+        let row = layout_row(
+            "日\tab".as_bytes(),
+            0,
+            6,
+            Wrap::Off,
+            Highlight::mark(&(4..6)),
+        );
         assert_eq!(row.mark_columns(), Some(8..10));
         assert_eq!(
-            layout_row(b"ab", 0, 2, Wrap::Off, None).mark_columns(),
+            layout_row(b"ab", 0, 2, Wrap::Off, Highlight::default()).mark_columns(),
             None
         );
     }
 
     #[test]
     fn visible_clips_the_mark() {
-        let row = layout_row(b"abcdef", 0, 6, Wrap::Off, Some(&(1..5)));
+        let row = layout_row(b"abcdef", 0, 6, Wrap::Off, Highlight::mark(&(1..5)));
         let shown = row.visible(2, 2);
         assert_eq!(shown.text, "cd");
         assert_eq!(shown.marks, std::iter::once(0..2).collect::<Vec<_>>());
         assert!(row.visible(5, 3).marks.is_empty());
-        let wide = layout_row("a日b".as_bytes(), 0, 5, Wrap::Off, Some(&(1..4)));
+        let wide = layout_row("a日b".as_bytes(), 0, 5, Wrap::Off, Highlight::mark(&(1..4)));
         let shown = wide.visible(2, 3);
         assert_eq!(shown.text, " b");
         assert_eq!(shown.marks, std::iter::once(0..1).collect::<Vec<_>>());
+    }
+
+    fn row_of(bytes: &[u8]) -> Row {
+        layout_row(bytes, 100, bytes.len(), Wrap::Off, Highlight::default())
+    }
+
+    const C: HexColumn = HexColumn::Codes;
+
+    #[test]
+    fn sources_point_at_the_bytes_shown() {
+        let row = row_of("a\té\x01".as_bytes());
+        // a, 7 spaces for the tab, é (2 bytes), the placeholder, then the end.
+        assert_eq!(row.sources, [0, 1, 1, 1, 1, 1, 1, 1, 2, 4, 5]);
+        let row = row_of(b"ab\r\n");
+        assert_eq!(row.sources, [0, 1, 2], "the line ending is not shown");
+        assert_eq!(row.content_end(), 102);
+    }
+
+    #[test]
+    fn a_wrap_break_trims_the_sources() {
+        let row = layout_row(
+            b"hello big world",
+            0,
+            15,
+            Wrap::Columns(10),
+            Highlight::default(),
+        );
+        assert_eq!(row.text, "hello big ");
+        assert_eq!(row.sources.len(), row.text.chars().count() + 1);
+        assert_eq!(*row.sources.last().unwrap(), 10);
+    }
+
+    #[test]
+    fn boundary_at_takes_the_nearer_edge_of_a_cell() {
+        let row = row_of(b"abc");
+        assert_eq!(row.boundary_at(0.2, C), 100);
+        assert_eq!(row.boundary_at(0.7, C), 101);
+        assert_eq!(row.boundary_at(2.6, C), 103);
+        assert_eq!(row.boundary_at(50.0, C), 103, "past the end");
+        assert_eq!(row.boundary_at(-3.0, C), 100, "before the start");
+    }
+
+    #[test]
+    fn boundary_at_treats_tabs_and_wide_characters_as_one_cell() {
+        let row = row_of("a\tb".as_bytes()); // the tab spans columns 1..8
+        assert_eq!(row.boundary_at(3.0, C), 101);
+        assert_eq!(row.boundary_at(6.0, C), 102);
+        let row = row_of("日本".as_bytes()); // 2 columns each, 3 bytes each
+        assert_eq!(row.boundary_at(0.9, C), 100);
+        assert_eq!(row.boundary_at(1.1, C), 103);
+        assert_eq!(row.boundary_at(3.5, C), 106);
+    }
+
+    #[test]
+    fn char_at_is_the_cell_under_the_mouse() {
+        let row = row_of("ab日c\n".as_bytes());
+        assert_eq!(row.char_at(1.9, C), 101);
+        assert_eq!(row.char_at(2.1, C), 102);
+        assert_eq!(row.char_at(3.9, C), 102, "the wide character's right half");
+        assert_eq!(row.char_at(4.0, C), 105);
+        assert_eq!(
+            row.char_at(40.0, C),
+            105,
+            "past the end: the last character"
+        );
+        assert_eq!(row.char_at(-1.0, C), 100);
+    }
+
+    #[test]
+    fn an_empty_row_answers_its_start() {
+        let row = row_of(b"\n");
+        assert_eq!(row.sources, [0]);
+        assert_eq!(row.boundary_at(5.0, C), 100);
+        assert_eq!(row.char_at(5.0, C), 100);
+    }
+
+    #[test]
+    fn char_at_past_a_wrapped_row_stays_in_the_row() {
+        let row = layout_row(
+            b"hello big world",
+            0,
+            15,
+            Wrap::Columns(10),
+            Highlight::default(),
+        );
+        assert_eq!(row.text, "hello big ");
+        assert_eq!(
+            row.char_at(30.0, C),
+            9,
+            "the row's last character, not the next row's"
+        );
+        let row = row_of(b"ab\r\n");
+        assert_eq!(row.char_at(30.0, C), 101, "never the \\r of a line ending");
+    }
+
+    fn selected(bytes: &[u8], wrap: Wrap, sel: Range<u64>) -> Vec<Option<String>> {
+        let mut rows = Vec::new();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let hl = Highlight::selection(&sel);
+            let row = layout_row(&bytes[pos..], pos as u64, bytes.len() - pos, wrap, hl);
+            pos = row.end as usize;
+            rows.push(
+                row.selection
+                    .first()
+                    .map(|s| row.text[s.clone()].to_owned()),
+            );
+        }
+        rows
+    }
+
+    #[test]
+    fn the_selection_covers_its_characters_on_every_row() {
+        assert_eq!(
+            selected(b"ab\ncd\nef", Wrap::Off, 1..7),
+            [Some("b".into()), Some("cd".into()), Some("e".into())]
+        );
+        // Only the line ending selected: nothing to draw.
+        assert_eq!(selected(b"ab\ncd", Wrap::Off, 2..3), [None, None]);
+        assert_eq!(
+            selected(b"hello big world", Wrap::Columns(10), 6..13),
+            [Some("big ".into()), Some("wor".into())]
+        );
+    }
+
+    #[test]
+    fn mark_and_selection_are_independent() {
+        let (mark, sel) = (1..2, 0..3);
+        let hl = Highlight {
+            mark: Some(&mark),
+            selection: Some(&sel),
+        };
+        let row = layout_row(b"abc", 0, 3, Wrap::Off, hl);
+        assert_eq!(row.marks, vec![1..2]);
+        assert_eq!(row.selection, vec![0..3]);
+    }
+
+    #[test]
+    fn visible_clips_the_selection() {
+        let row = layout_row(b"abcdef", 0, 6, Wrap::Off, Highlight::selection(&(1..5)));
+        let shown = row.visible(2, 2);
+        assert_eq!(shown.selection, vec![0..2]);
+        assert!(row.visible(5, 3).selection.is_empty());
     }
 
     #[test]

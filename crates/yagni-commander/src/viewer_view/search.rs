@@ -18,7 +18,7 @@ use gpui_kit::{
     Render, Styled, Window, div, px,
 };
 use yagni_commander_core::find::text::{Text, TextQuery};
-use yagni_commander_core::viewer::{Direction, find};
+use yagni_commander_core::viewer::{Direction, Highlight, find};
 
 use super::ViewerView;
 use crate::button_row::{ButtonRow, OnPress};
@@ -26,6 +26,8 @@ use crate::file_manager::commands::{OPENER_POLL, dialog_field, show_error, show_
 
 /// Polls before the status line says "searching...": ~300 ms.
 const QUIET_POLLS: u32 = 3;
+/// Longest selection Ctrl-F starts with.
+const PREFILL_MAX: u64 = 256;
 
 /// The last search asked for in any viewer (or handed over by Alt-F7): what
 /// the Find dialog starts with. For the session only.
@@ -66,12 +68,32 @@ pub(super) struct SearchState {
 }
 
 impl ViewerView {
-    /// Ctrl-F: the Find dialog, with the last search.
+    /// The selected text, if Ctrl-F should start with it: 1 to 256 bytes,
+    /// valid UTF-8, one line, and not just the match last found (Ctrl-F
+    /// then keeps the pattern that found it).
+    pub(super) fn find_prefill(&mut self) -> Option<String> {
+        let range = self.selection.as_ref()?.range();
+        if self.search.current.as_ref() == Some(&range) {
+            return None;
+        }
+        let len = range.end - range.start;
+        if len == 0 || len > PREFILL_MAX {
+            return None;
+        }
+        let bytes = self.doc.bytes(range.start, len as usize);
+        let text = String::from_utf8(bytes).ok()?;
+        (!text.contains(['\n', '\r'])).then_some(text)
+    }
+
+    /// Ctrl-F: the Find dialog, with the selection or the last search.
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let last = cx
+        let mut last = cx
             .try_global::<LastSearch>()
             .map(|l| l.0.clone())
             .unwrap_or_default();
+        if let Some(text) = self.find_prefill() {
+            last.pattern = text;
+        }
         let view = cx.new(|cx| FindView::new(&last, window, cx));
         let this = cx.entity().downgrade();
         // Whether the dialog may close.
@@ -298,6 +320,7 @@ impl ViewerView {
         match result {
             Ok(Some(found)) => {
                 self.search.current = Some(found.clone());
+                self.selection = Some(super::Selection::new(found.clone(), None));
                 self.reveal(found);
             }
             Ok(None) => {
@@ -351,7 +374,9 @@ impl ViewerView {
             self.top = top.min(last);
         }
         if !self.wraps_rows() {
-            let row = self.doc.marked_rows(row_start, 1, wrap, Some(&found));
+            let row = self
+                .doc
+                .marked_rows(row_start, 1, wrap, Highlight::mark(&found));
             if let Some(cols) = row.first().and_then(|r| r.mark_columns()) {
                 let shown = self.h_offset..self.h_offset + self.cols;
                 if !shown.contains(&cols.start) {

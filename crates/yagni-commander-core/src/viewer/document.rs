@@ -12,7 +12,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use super::hex::{HEX_ROW, hex_row, offset_digits};
-use super::layout::{BLOCK, ROW_WINDOW, Row, Wrap, decode, layout_row};
+use super::layout::{BLOCK, Highlight, ROW_WINDOW, Row, Wrap, decode, layout_row};
 use super::source::Source;
 
 /// Cached blocks (16 x 64 KiB = 1 MiB).
@@ -20,6 +20,8 @@ const CACHE_BLOCKS: usize = 16;
 /// How far back `segment_start` looks: far enough to always pass a forced
 /// break inside a giant line (see there).
 const LOOKBACK: u64 = 3 * BLOCK;
+/// How far a double-click's word reaches each way.
+const WORD_REACH: u64 = 4096;
 
 pub struct Document<S: Source> {
     source: S,
@@ -182,39 +184,34 @@ impl<S: Source> Document<S> {
     }
 
     fn row(&mut self, start: u64, wrap: Wrap) -> Row {
-        self.marked_row(start, wrap, None)
+        self.marked_row(start, wrap, Highlight::default())
     }
 
-    fn marked_row(&mut self, start: u64, wrap: Wrap, mark: Option<&Range<u64>>) -> Row {
+    fn marked_row(&mut self, start: u64, wrap: Wrap, hl: Highlight) -> Row {
         let window = self.bytes(start, ROW_WINDOW);
         let limit = match self.break_after(start) {
             Some(b) => ((b - start) as usize).min(window.len()),
             None => window.len(),
         };
-        layout_row(&window, start, limit, wrap, mark)
+        layout_row(&window, start, limit, wrap, hl)
     }
 
     /// Up to `n` rows from the row start `top`.
     pub fn rows(&mut self, top: u64, n: usize, wrap: Wrap) -> Vec<Row> {
-        self.marked_rows(top, n, wrap, None)
+        self.marked_rows(top, n, wrap, Highlight::default())
     }
 
-    /// [`Self::rows`], with [`Row::mark`] set where they show `mark`.
-    pub fn marked_rows(
-        &mut self,
-        top: u64,
-        n: usize,
-        wrap: Wrap,
-        mark: Option<&Range<u64>>,
-    ) -> Vec<Row> {
+    /// [`Self::rows`], with [`Row::marks`] and [`Row::selection`] set where
+    /// they show `hl`'s ranges.
+    pub fn marked_rows(&mut self, top: u64, n: usize, wrap: Wrap, hl: Highlight) -> Vec<Row> {
         self.check_shrunk();
         if wrap == Wrap::Hex {
-            return self.hex_rows(top, n, mark);
+            return self.hex_rows(top, n, hl);
         }
         let mut rows = Vec::new();
         let mut pos = top;
         while rows.len() < n && pos < self.len {
-            let row = self.marked_row(pos, wrap, mark);
+            let row = self.marked_row(pos, wrap, hl);
             if row.end == pos {
                 break; // the file shrank under us
             }
@@ -224,7 +221,7 @@ impl<S: Source> Document<S> {
         rows
     }
 
-    fn hex_rows(&mut self, top: u64, n: usize, mark: Option<&Range<u64>>) -> Vec<Row> {
+    fn hex_rows(&mut self, top: u64, n: usize, hl: Highlight) -> Vec<Row> {
         let digits = offset_digits(self.len);
         let mut rows = Vec::new();
         let mut pos = top;
@@ -233,7 +230,7 @@ impl<S: Source> Document<S> {
             if bytes.is_empty() {
                 break; // the file shrank under us
             }
-            let row = hex_row(&bytes, pos, digits, mark);
+            let row = hex_row(&bytes, pos, digits, hl);
             pos = row.end;
             rows.push(row);
         }
@@ -341,6 +338,68 @@ impl<S: Source> Document<S> {
             top = seg;
         }
         top
+    }
+
+    /// The word (letters, digits, `_`) holding the character at `pos`,
+    /// looking at most [`WORD_REACH`] bytes each way; a non-word character
+    /// alone; `len..len` at the end. A slice cut inside a multi-byte
+    /// character at the reach's edge reads as non-word bytes.
+    pub fn word_at(&mut self, pos: u64) -> Range<u64> {
+        self.check_shrunk();
+        if pos >= self.len {
+            return self.len..self.len;
+        }
+        let lo = pos.saturating_sub(WORD_REACH);
+        let bytes = self.bytes(lo, (pos - lo + WORD_REACH) as usize);
+        // (offset, length, is a word character) of every unit from `lo`.
+        let mut units = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let (ch, len) = decode(&bytes[i..]);
+            let word = ch.is_some_and(|c| c.is_alphanumeric() || c == '_');
+            units.push((i, len, word));
+            i += len;
+        }
+        let at = (pos - lo) as usize;
+        let Some(k) = units.iter().position(|&(o, l, _)| o <= at && at < o + l) else {
+            return pos..pos + 1; // the file shrank under us
+        };
+        let (o, l, word) = units[k];
+        if !word {
+            return lo + o as u64..lo + (o + l) as u64;
+        }
+        let first = units[..k].iter().rposition(|u| !u.2).map_or(0, |j| j + 1);
+        let last = units[k..]
+            .iter()
+            .position(|u| !u.2)
+            .map_or(units.len(), |j| k + j);
+        let (end_o, end_l, _) = units[last - 1];
+        lo + units[first].0 as u64..lo + (end_o + end_l) as u64
+    }
+
+    /// The file line holding `pos` with its `\n`, within its segment: a
+    /// giant line stops at forced breaks, as rows do.
+    pub fn line_at(&mut self, pos: u64) -> Range<u64> {
+        self.check_shrunk();
+        if pos >= self.len {
+            return self.len..self.len;
+        }
+        let start = self.segment_start(pos);
+        let mut end = pos;
+        loop {
+            let c = (end / BLOCK + 1) * BLOCK;
+            let chunk = self.bytes(end, (c.min(self.len) - end) as usize);
+            if let Some(i) = chunk.iter().position(|&b| b == b'\n') {
+                return start..end + i as u64 + 1;
+            }
+            end += chunk.len() as u64;
+            if chunk.is_empty() || end >= self.len {
+                return start..end.min(self.len);
+            }
+            if self.forced(c) {
+                return start..self.snap(c);
+            }
+        }
     }
 
     /// The top row that shows the end of the file at the bottom of a screen.
@@ -599,7 +658,7 @@ mod tests {
         assert!(rows[2].text.starts_with("00000020  20 21 "));
         assert_eq!(d.row_start_at(37, Wrap::Hex), 32);
         assert_eq!(d.row_start_at(100, Wrap::Hex), 32, "clamped");
-        let marked = d.marked_rows(0, 3, Wrap::Hex, Some(&(15..17)));
+        let marked = d.marked_rows(0, 3, Wrap::Hex, Highlight::mark(&(15..17)));
         assert_eq!((marked[0].marks.len(), marked[1].marks.len()), (2, 2));
         assert!(doc(Vec::new()).rows(0, 3, Wrap::Hex).is_empty());
         assert_eq!(doc(Vec::new()).row_start_at(5, Wrap::Hex), 0);
@@ -637,5 +696,53 @@ mod tests {
             "{}",
             rows[0].text
         );
+    }
+
+    #[test]
+    fn marked_rows_carry_the_selection() {
+        let mut d = doc(b"one\ntwo\nthree\n".to_vec());
+        let sel = 2..9;
+        let rows = d.marked_rows(0, 3, Wrap::Off, Highlight::selection(&sel));
+        let parts: Vec<&str> = rows
+            .iter()
+            .flat_map(|r| r.selection.iter().map(|s| &r.text[s.clone()]))
+            .collect();
+        assert_eq!(parts, ["e", "two", "t"]);
+        let rows = d.marked_rows(0, 1, Wrap::Hex, Highlight::selection(&sel));
+        assert_eq!(rows[0].selection.len(), 2);
+    }
+
+    #[test]
+    fn word_at_finds_letters_digits_and_underscores() {
+        let mut d = doc("say hello_wörld2, ok".as_bytes().to_vec());
+        assert_eq!(d.word_at(6), 4..17, "hello_wörld2 (ö is 2 bytes)");
+        assert_eq!(d.word_at(4), 4..17, "from its first byte");
+        assert_eq!(d.word_at(3), 3..4, "a space alone");
+        assert_eq!(d.word_at(17), 17..18, "the comma alone");
+        assert_eq!(d.word_at(0), 0..3, "at the start of the file");
+        assert_eq!(d.word_at(19), 19..21, "at its end");
+        assert_eq!(d.word_at(21), 21..21, "past the end");
+    }
+
+    #[test]
+    fn word_at_looks_at_most_4_kib_each_way() {
+        let mut d = doc(vec![b'x'; 20_000]);
+        assert_eq!(d.word_at(10_000), 10_000 - 4096..10_000 + 4096);
+    }
+
+    #[test]
+    fn line_at_selects_the_file_line_with_its_newline() {
+        let mut d = doc(b"one\ntwo three\nlast".to_vec());
+        assert_eq!(d.line_at(6), 4..14);
+        assert_eq!(d.line_at(4), 4..14);
+        assert_eq!(d.line_at(15), 14..18, "the last line has no newline");
+        assert_eq!(d.line_at(0), 0..4);
+        assert_eq!(d.line_at(18), 18..18, "past the end");
+    }
+
+    #[test]
+    fn line_at_stops_at_the_segment_of_a_giant_line() {
+        let mut d = doc(vec![b'x'; 5 * BLOCK as usize]);
+        assert_eq!(d.line_at(BLOCK * 2 + 10), BLOCK * 2..BLOCK * 3);
     }
 }
