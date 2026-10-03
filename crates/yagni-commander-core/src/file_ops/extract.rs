@@ -13,7 +13,7 @@ use std::time::SystemTime;
 
 use super::archive_names::{Format, components, single_top_folder, stem};
 use super::safe_dir::{Kind, SafeDir};
-use super::{CHUNK, Choice, Engine, Incoming, Step};
+use super::{CHUNK, Choice, Engine, Incoming, PasswordAnswer, PasswordQuestion, Step};
 
 /// Longer link targets are refused (PATH_MAX is 4096 on Linux).
 const MAX_LINK_TARGET: u64 = 4096;
@@ -99,6 +99,76 @@ fn from_zip_time(time: Option<zip::DateTime>) -> Option<SystemTime> {
     Some(SystemTime::from(zoned.timestamp()))
 }
 
+/// An encrypted entry's data. A read error there almost always means a
+/// wrong password that passed the zip's quick check (1 in 256 for
+/// ZipCrypto), so it says that instead of "Invalid checksum".
+struct Decrypted<R>(R);
+
+impl<R: Read> Read for Decrypted<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.0
+            .read(buf)
+            .map_err(|_| io::Error::other(WRONG_PASSWORD))
+    }
+}
+
+/// The failure for an encrypted entry whose data doesn't check out.
+const WRONG_PASSWORD: &str = "wrong password or a damaged entry";
+
+/// PBKDF2 rounds of zip's AES encryption (WinZip's AE-1/AE-2 format).
+const AES_ROUNDS: u32 = 1000;
+/// Length of the authentication code at the end of an AES entry.
+const AES_CODE_LEN: u64 = 10;
+
+/// Whether an AES entry's authentication code matches `password`; true for
+/// entries this check isn't needed for. zip checks the code only when the
+/// encrypted data is read to its end, which decompression may stop short
+/// of, and AE-2 entries (CRC 0) have no CRC to fall back on: without this,
+/// a wrong password passing the 2-byte check (1 in 65536) could leave a
+/// garbage file. Stored entries are always read to the end.
+fn aes_authentic<R: Read + io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    index: usize,
+    password: &[u8],
+) -> io::Result<bool> {
+    use hmac::{KeyInit, Mac, SimpleHmac};
+    let Some(info) = zip
+        .get_aes_verification_key_and_salt(index)
+        .map_err(io::Error::other)?
+    else {
+        return Ok(true);
+    };
+    let mut raw = zip.by_index_raw(index).map_err(io::Error::other)?;
+    if raw.crc32() != 0 || raw.compression() == zip::CompressionMethod::Stored {
+        return Ok(true);
+    }
+    let key_len = info.aes_mode.key_length();
+    let mut derived = vec![0; 2 * key_len + 2];
+    pbkdf2::pbkdf2::<SimpleHmac<sha1::Sha1>>(password, &info.salt, AES_ROUNDS, &mut derived)
+        .map_err(io::Error::other)?;
+    let mut mac = SimpleHmac::<sha1::Sha1>::new_from_slice(&derived[key_len..2 * key_len])
+        .map_err(io::Error::other)?;
+    // The raw data: salt, 2 verification bytes, the encrypted data, the code.
+    let header = info.salt.len() as u64 + 2;
+    let data_len = raw
+        .compressed_size()
+        .checked_sub(header + AES_CODE_LEN)
+        .ok_or_else(|| io::Error::other(WRONG_PASSWORD))?;
+    io::copy(&mut (&mut raw).take(header), &mut io::sink())?;
+    let mut data = (&mut raw).take(data_len);
+    let mut buf = vec![0; 64 << 10];
+    loop {
+        let read = data.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        mac.update(&buf[..read]);
+    }
+    let mut code = [0; AES_CODE_LEN as usize];
+    raw.read_exact(&mut code)?;
+    Ok(mac.finalize().into_bytes()[..code.len()] == code)
+}
+
 impl Engine<'_> {
     pub(super) fn extract(&mut self, archives: &[PathBuf], into: &Path) {
         self.progress.items_total = archives.len();
@@ -168,14 +238,15 @@ impl Engine<'_> {
         let mut sink = Sink::new(dir, archive, &listed);
         self.count(&listed);
         let mut step = Step::Done;
+        let mut skip_locked = false;
         for (i, item) in listed.iter().enumerate() {
             if self.observer.is_cancelled() {
                 return self.end_archive(&mut sink, Step::Cancelled);
             }
-            let needs_data = !item.encrypted
-                && item.parts.is_ok()
-                && matches!(item.what, What::File | What::Symlink);
-            let entry_step = if needs_data {
+            let needs_data = item.parts.is_ok() && matches!(item.what, What::File | What::Symlink);
+            let entry_step = if needs_data && item.encrypted {
+                self.put_encrypted(&mut zip, i, &mut sink, item, &mut skip_locked)
+            } else if needs_data {
                 match zip.by_index(i) {
                     Ok(mut entry) => self.put(&mut sink, item, None, &mut entry),
                     Err(e) => self.fail(&inside(archive, &item.name), e),
@@ -190,6 +261,79 @@ impl Engine<'_> {
             }
         }
         self.end_archive(&mut sink, step)
+    }
+
+    /// An encrypted zip entry: opened with the job's password, asking for
+    /// one until it fits, the user skips the archive, or cancels.
+    fn put_encrypted<R: Read + io::Seek>(
+        &mut self,
+        zip: &mut zip::ZipArchive<R>,
+        index: usize,
+        sink: &mut Sink,
+        item: &Listed,
+        skip_locked: &mut bool,
+    ) -> Step {
+        let shown = inside(sink.archive, &item.name);
+        if *skip_locked {
+            return self.skip_locked(&shown, item);
+        }
+        // The remembered password is tried once per entry before asking;
+        // a question is a retry only after a typed password didn't fit.
+        let mut remembered_tried = false;
+        let mut typed = false;
+        loop {
+            let password = match &self.password {
+                Some(password) if !remembered_tried => {
+                    remembered_tried = true;
+                    password.clone()
+                }
+                _ => {
+                    let question = PasswordQuestion {
+                        archive: sink.archive.to_path_buf(),
+                        retry: typed,
+                    };
+                    match self.observer.password(&question) {
+                        PasswordAnswer::Password(password) => {
+                            typed = true;
+                            remembered_tried = true;
+                            self.password = Some(password.clone());
+                            password
+                        }
+                        PasswordAnswer::Skip => {
+                            *skip_locked = true;
+                            return self.skip_locked(&shown, item);
+                        }
+                        PasswordAnswer::Cancel => return Step::Cancelled,
+                    }
+                }
+            };
+            match zip.by_index_decrypt(index, password.as_bytes()) {
+                Ok(_) => {}
+                Err(zip::result::ZipError::InvalidPassword) => continue,
+                Err(e) => return self.fail(&shown, e),
+            }
+            match aes_authentic(zip, index, password.as_bytes()) {
+                Ok(true) => {}
+                Ok(false) => return self.fail(&shown, WRONG_PASSWORD),
+                Err(e) => return self.fail(&shown, e),
+            }
+            return match zip.by_index_decrypt(index, password.as_bytes()) {
+                Ok(entry) => self.put(sink, item, None, &mut Decrypted(entry)),
+                Err(e) => self.fail(&shown, e),
+            };
+        }
+    }
+
+    /// An encrypted entry of a skipped archive: counted as skipped, and as
+    /// done for the progress bar.
+    fn skip_locked(&mut self, shown: &Path, item: &Listed) -> Step {
+        self.note(format_args!("skipped {}: no password", shown.display()));
+        self.report.skipped += 1;
+        if matches!(item.what, What::File) {
+            self.progress.files_done += 1;
+            self.progress.bytes_done += item.size;
+        }
+        Step::Incomplete
     }
 
     fn extract_tar(&mut self, dir: &SafeDir, archive: &Path, format: Format) -> Step {
@@ -256,9 +400,6 @@ impl Engine<'_> {
             Ok(parts) => sink.parts(parts),
             Err(why) => return self.fail(&shown, why),
         };
-        if item.encrypted {
-            return self.fail(&shown, "password-protected archives are not supported yet");
-        }
         match &item.what {
             What::Dir => self.put_dir(sink, parts, item),
             What::File => self.put_file(sink, parts, item, data),

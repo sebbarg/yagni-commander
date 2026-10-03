@@ -9,6 +9,7 @@
 //! operation continues. Existing files are never partly overwritten: a
 //! replacement is written next to the target and renamed over it at the end.
 
+use std::fmt;
 use std::fs::{self, File, FileTimes, Metadata, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -159,6 +160,34 @@ pub struct Incoming {
     pub modified: Option<SystemTime>,
 }
 
+/// An encrypted zip entry and no password that fits yet; the job waits for
+/// a [`PasswordAnswer`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PasswordQuestion {
+    pub archive: PathBuf,
+    /// The password just typed for this archive was wrong.
+    pub retry: bool,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub enum PasswordAnswer {
+    Password(String),
+    /// Leave this archive's encrypted entries out.
+    Skip,
+    Cancel,
+}
+
+/// Never prints the password (answers end up in panics and debug output).
+impl fmt::Debug for PasswordAnswer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PasswordAnswer::Password(_) => f.write_str("Password(..)"),
+            PasswordAnswer::Skip => f.write_str("Skip"),
+            PasswordAnswer::Cancel => f.write_str("Cancel"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     pub path: PathBuf,
@@ -184,6 +213,8 @@ pub trait Observer {
     /// A symlink while packing. Not called again once the user has
     /// answered with `for_all`.
     fn link(&mut self, question: &LinkQuestion) -> LinkAnswer;
+    /// An encrypted zip entry and no password that fits yet.
+    fn password(&mut self, question: &PasswordQuestion) -> PasswordAnswer;
 }
 
 /// How operations run, beyond what the user chose.
@@ -237,6 +268,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         log: settings.log.as_deref(),
         name,
         link_choice: None,
+        password: None,
     };
     match to {
         Some(to) => engine.note(format_args!(
@@ -317,6 +349,8 @@ struct Engine<'a> {
     name: &'static str,
     /// Set by "Same for the remaining links".
     link_choice: Option<LinkChoice>,
+    /// The last password given, tried first on every encrypted entry.
+    password: Option<String>,
 }
 
 impl Engine<'_> {
@@ -1031,6 +1065,8 @@ pub enum Event {
     Conflict(Conflict),
     /// The job waits until [`Job::answer_link`] is called.
     Link(LinkQuestion),
+    /// The job waits until [`Job::answer_password`] is called.
+    Password(PasswordQuestion),
     /// The last event.
     Finished(Report),
 }
@@ -1041,6 +1077,7 @@ pub struct Job {
     events: Receiver<Event>,
     answers: Sender<Answer>,
     link_answers: Sender<LinkAnswer>,
+    password_answers: Sender<PasswordAnswer>,
     cancel: Arc<AtomicBool>,
 }
 
@@ -1049,11 +1086,13 @@ impl Job {
         let (event_tx, events) = mpsc::channel();
         let (answers, answer_rx) = mpsc::channel();
         let (link_answers, link_rx) = mpsc::channel();
+        let (password_answers, password_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let mut observer = ChannelObserver {
             events: event_tx,
             answers: answer_rx,
             links: link_rx,
+            passwords: password_rx,
             cancel: cancel.clone(),
             last_progress: None,
         };
@@ -1067,6 +1106,7 @@ impl Job {
             events,
             answers,
             link_answers,
+            password_answers,
             cancel,
         })
     }
@@ -1086,6 +1126,11 @@ impl Job {
         let _ = self.link_answers.send(answer);
     }
 
+    /// Answers the pending [`Event::Password`].
+    pub fn answer_password(&self, answer: PasswordAnswer) {
+        let _ = self.password_answers.send(answer);
+    }
+
     /// Stops at the next file or chunk. A pending conflict must still be
     /// answered (with [`Answer::Cancel`]).
     pub fn cancel(&self) {
@@ -1103,6 +1148,7 @@ struct ChannelObserver {
     events: Sender<Event>,
     answers: Receiver<Answer>,
     links: Receiver<LinkAnswer>,
+    passwords: Receiver<PasswordAnswer>,
     cancel: Arc<AtomicBool>,
     last_progress: Option<Instant>,
 }
@@ -1125,6 +1171,14 @@ impl Observer for ChannelObserver {
         }
         // A dropped job closes the channel, which also means cancel.
         self.answers.recv().unwrap_or(Answer::Cancel)
+    }
+
+    fn password(&mut self, question: &PasswordQuestion) -> PasswordAnswer {
+        if self.events.send(Event::Password(question.clone())).is_err() {
+            return PasswordAnswer::Cancel;
+        }
+        // A dropped job closes the channel, which also means cancel.
+        self.passwords.recv().unwrap_or(PasswordAnswer::Cancel)
     }
 
     fn link(&mut self, question: &LinkQuestion) -> LinkAnswer {

@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::InputState;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::{
     App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
@@ -19,12 +20,15 @@ use gpui_kit::{
 };
 use yagni_commander_core::file_ops::{
     Answer, Conflict, Destination, Event, Incoming, Job, LinkAnswer, LinkChoice, LinkPlace,
-    LinkQuestion, Operation, Progress, Report, Settings, is_archive,
+    LinkQuestion, Operation, PasswordAnswer, PasswordQuestion, Progress, Report, Settings,
+    is_archive,
 };
 use yagni_commander_core::{Command, Side, format_modified, format_size};
 
 use super::FileManager;
-use super::commands::{Prompt, focus_when_open, show_error, show_message, stem_range};
+use super::commands::{
+    Prompt, dialog_password_field, focus_when_open, show_error, show_message, stem_range,
+};
 use crate::button_row::{ButtonRow, OnPress};
 use crate::theme::Theme;
 
@@ -412,6 +416,7 @@ impl FileManager {
         running.polls += 1;
         let mut conflict = None;
         let mut link = None;
+        let mut password = None;
         while let Some(event) = running.job.try_event() {
             match event {
                 Event::Progress(progress) => running.view.update(cx, |view, cx| {
@@ -427,6 +432,10 @@ impl FileManager {
                     link = Some(question);
                     break;
                 }
+                Event::Password(question) => {
+                    password = Some(question);
+                    break;
+                }
                 Event::Finished(report) => {
                     self.finish_job(report, window, cx);
                     return false;
@@ -434,7 +443,10 @@ impl FileManager {
             }
         }
         if !running.progress_open
-            && (conflict.is_some() || link.is_some() || running.polls >= POLLS_BEFORE_PROGRESS)
+            && (conflict.is_some()
+                || link.is_some()
+                || password.is_some()
+                || running.polls >= POLLS_BEFORE_PROGRESS)
         {
             running.progress_open = true;
             let (kind, view) = (running.kind, running.view.clone());
@@ -445,6 +457,9 @@ impl FileManager {
         }
         if let Some(question) = link {
             self.ask_link(&question, window, cx);
+        }
+        if let Some(question) = password {
+            self.ask_password(&question, window, cx);
         }
         true
     }
@@ -629,6 +644,93 @@ impl FileManager {
                         for_all: false,
                     };
                     answer_link_job(&this_cancel, answer, cx);
+                    true
+                })
+        });
+    }
+
+    fn ask_password(
+        &mut self,
+        question: &PasswordQuestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let name = question
+            .archive
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
+        let text = SharedString::from(format!("“{name}” is password-protected."));
+        let retry = question.retry;
+        let input = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let this = cx.entity().downgrade();
+        // Sends the typed password; the caller closes the dialog.
+        let submit: Rc<dyn Fn(&mut App)> = Rc::new({
+            let (this, input) = (this.clone(), input.clone());
+            move |cx| {
+                let password = input.read(cx).value().to_string();
+                answer_password_job(&this, PasswordAnswer::Password(password), cx);
+            }
+        });
+        let ok: OnPress = Rc::new({
+            let submit = submit.clone();
+            move |window, cx| {
+                submit(cx);
+                window.close_dialog(cx);
+            }
+        });
+        let button = |answer: PasswordAnswer| -> OnPress {
+            let this = this.clone();
+            Rc::new(move |window, cx| {
+                answer_password_job(&this, answer.clone(), cx);
+                window.close_dialog(cx);
+            })
+        };
+        let buttons = ButtonRow::build(
+            [
+                ("OK", ok),
+                ("Skip archive", button(PasswordAnswer::Skip)),
+                ("Cancel", button(PasswordAnswer::Cancel)),
+            ],
+            0,
+            cx,
+        );
+        // Opening the dialog moves focus to it, so focus the field afterwards.
+        window.defer(cx, {
+            let input = input.clone();
+            move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))
+        });
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let dim = Theme::get(cx).colors.text_dim;
+            let this_cancel = this.clone();
+            let submit = submit.clone();
+            dialog
+                .title("Password")
+                .w(px(480.0))
+                .close_button(false)
+                .overlay_closable(false)
+                .child(
+                    div()
+                        .debug_selector(|| "password-prompt".into())
+                        .child(text.clone()),
+                )
+                .children(retry.then(|| {
+                    div()
+                        .debug_selector(|| "password-wrong".into())
+                        .text_color(dim)
+                        .text_size(px(13.0))
+                        .child("Wrong password.")
+                }))
+                .child(dialog_password_field(&input))
+                .footer(buttons.clone())
+                // Enter in the field.
+                .on_ok(move |_, _, cx| {
+                    submit(cx);
+                    true
+                })
+                .on_cancel(move |_, _, cx| {
+                    answer_password_job(&this_cancel, PasswordAnswer::Cancel, cx);
                     true
                 })
         });
@@ -851,6 +953,14 @@ fn confirm_overwrite(
                 }
                 true
             })
+    });
+}
+
+fn answer_password_job(this: &WeakEntity<FileManager>, answer: PasswordAnswer, cx: &mut App) {
+    let _ = this.update(cx, |this, _| {
+        if let Some(running) = &this.job {
+            running.job.answer_password(answer);
+        }
     });
 }
 

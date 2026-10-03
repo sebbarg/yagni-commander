@@ -233,6 +233,25 @@ keys Return
 check "tar.gz extracted" test -d "$work/untarred/docs"
 keys Tab               # back to the left panel
 
+echo "Alt-F6 asks for a zip's password"
+if command -v zip >/dev/null; then
+    mkdir -p "$work/locked/secret"
+    printf hidden >"$work/locked/secret/s.txt"
+    (cd "$work/locked" && zip -q -r -P pw "$left/secret.zip" secret)
+    keys ctrl+r
+    typed secret.z
+    keys Escape alt+F6 ctrl+a
+    typed "$work/unlocked"
+    keys Return
+    sleep 1
+    shot 08c-password-prompt
+    typed pw
+    keys Return
+    check "password zip extracted" has "$work/unlocked/secret/s.txt" hidden
+else
+    echo "  skip  no zip command: the password prompt is not checked"
+fi
+
 echo "Ctrl-C and Ctrl-Ins copy the full path under the cursor"
 clipboard() { [[ $(xclip -o -selection clipboard) == "$1" ]]; }
 typed notes

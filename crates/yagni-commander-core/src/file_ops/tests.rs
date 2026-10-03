@@ -17,6 +17,9 @@ struct Script {
     /// Answers to link questions, in order.
     links: VecDeque<LinkAnswer>,
     link_questions: Vec<LinkQuestion>,
+    /// Answers to password questions, in order.
+    passwords: VecDeque<PasswordAnswer>,
+    password_questions: Vec<PasswordQuestion>,
 }
 
 impl Script {
@@ -35,6 +38,19 @@ impl Script {
             ..Self::default()
         }
     }
+}
+
+impl Script {
+    fn with_passwords(answers: &[PasswordAnswer]) -> Self {
+        Self {
+            passwords: answers.iter().cloned().collect(),
+            ..Self::default()
+        }
+    }
+}
+
+fn pw(password: &str) -> PasswordAnswer {
+    PasswordAnswer::Password(password.to_owned())
 }
 
 fn link(choice: LinkChoice) -> LinkAnswer {
@@ -78,6 +94,13 @@ impl Observer for Script {
 
     fn is_cancelled(&self) -> bool {
         self.cancelled
+    }
+
+    fn password(&mut self, question: &PasswordQuestion) -> PasswordAnswer {
+        self.password_questions.push(question.clone());
+        self.passwords
+            .pop_front()
+            .expect("unexpected password question")
     }
 
     fn link(&mut self, question: &LinkQuestion) -> LinkAnswer {
@@ -649,7 +672,7 @@ fn job_runs_in_the_background_and_waits_for_answers() {
     let conflict = loop {
         match next(&job) {
             Event::Conflict(conflict) => break conflict,
-            Event::Progress(_) | Event::Link(_) => {}
+            Event::Progress(_) | Event::Link(_) | Event::Password(_) => {}
             Event::Finished(report) => panic!("finished early: {report:?}"),
         }
     };
@@ -681,6 +704,7 @@ fn job_dropped_while_asking_cancels() {
         events: sender,
         answers: answer_rx,
         links: mpsc::channel().1,
+        passwords: mpsc::channel().1,
         cancel: Arc::new(AtomicBool::new(false)),
         last_progress: None,
     };
@@ -701,6 +725,7 @@ fn job_progress_is_throttled() {
         events: sender,
         answers: answer_rx,
         links: mpsc::channel().1,
+        passwords: mpsc::channel().1,
         cancel: Arc::new(AtomicBool::new(false)),
         last_progress: None,
     };
@@ -718,6 +743,7 @@ fn job_conflict_without_a_listener_cancels() {
         events: sender,
         answers: answer_rx,
         links: mpsc::channel().1,
+        passwords: mpsc::channel().1,
         cancel: Arc::new(AtomicBool::new(false)),
         last_progress: None,
     };
@@ -739,6 +765,7 @@ fn engine(script: &mut Script) -> Engine<'_> {
         log: None,
         name: "test",
         link_choice: None,
+        password: None,
     }
 }
 
@@ -1213,6 +1240,7 @@ fn a_dropped_job_answers_link_questions_with_cancel() {
         events: sender,
         answers: answer_rx,
         links: link_rx,
+        passwords: mpsc::channel().1,
         cancel: Arc::new(AtomicBool::new(false)),
         last_progress: None,
     };
@@ -1835,42 +1863,6 @@ fn a_file_where_a_folder_goes_fails_and_the_reverse() {
     assert_eq!(read(out.join("pkg/a")), "x");
 }
 
-/// Sets the "encrypted" flag on every entry of a stored (uncompressed) zip.
-fn mark_encrypted(path: &Path) {
-    let mut bytes = fs::read(path).unwrap();
-    for i in 0..bytes.len().saturating_sub(4) {
-        if &bytes[i..i + 4] == b"PK\x03\x04" {
-            bytes[i + 6] |= 1;
-        }
-        if &bytes[i..i + 4] == b"PK\x01\x02" {
-            bytes[i + 8] |= 1;
-        }
-    }
-    fs::write(path, bytes).unwrap();
-}
-
-#[test]
-fn password_protected_entries_fail_clearly() {
-    use std::io::Write;
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("secret.zip");
-    let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
-    let stored =
-        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    zip.start_file("p/secret.txt", stored).unwrap();
-    zip.write_all(b"secret").unwrap();
-    zip.finish().unwrap();
-    mark_encrypted(&path);
-    let out = tmp.path().join("out");
-    let report = run_script(&extract_op(&[path], &out), &mut Script::default());
-    assert_eq!(report.failures.len(), 1, "{report:?}");
-    assert_eq!(
-        report.failures[0].message,
-        "password-protected archives are not supported yet"
-    );
-    assert!(!out.join("p/secret.txt").exists());
-}
-
 #[test]
 fn a_corrupt_archive_fails_and_the_next_one_runs() {
     let tmp = tempfile::tempdir().unwrap();
@@ -2487,4 +2479,434 @@ fn an_overlong_zip_link_target_fails() {
         fs::read_link(out.join("p/ok")).unwrap(),
         PathBuf::from("target")
     );
+}
+
+#[test]
+fn a_dropped_job_answers_password_questions_with_cancel() {
+    let (sender, _events) = mpsc::channel();
+    let (_answers, answer_rx) = mpsc::channel();
+    let (password_answers, password_rx) = mpsc::channel::<PasswordAnswer>();
+    let mut observer = ChannelObserver {
+        events: sender,
+        answers: answer_rx,
+        links: mpsc::channel().1,
+        passwords: password_rx,
+        cancel: Arc::new(AtomicBool::new(false)),
+        last_progress: None,
+    };
+    drop(password_answers);
+    let question = PasswordQuestion {
+        archive: PathBuf::from("/a.zip"),
+        retry: false,
+    };
+    assert_eq!(observer.password(&question), PasswordAnswer::Cancel);
+}
+
+#[test]
+fn a_password_answer_never_prints_the_password() {
+    let shown = format!("{:?}", pw("hunter2"));
+    assert!(!shown.contains("hunter2"), "{shown}");
+    assert_eq!(format!("{:?}", PasswordAnswer::Skip), "Skip");
+}
+
+/// A zip of `entries` (name, contents, encrypted) whose encrypted entries
+/// use `password`, AES-256 with `aes`, else ZipCrypto; stored, with a fixed
+/// time. Both kinds start with random bytes, so a wrong password passes
+/// the quick check by chance (ZipCrypto: 1 in 256): the zip is written
+/// again until every password in `rejects` is rejected by every encrypted
+/// entry, so tests that need a wrong password never flake.
+fn make_locked_zip(
+    path: &Path,
+    password: &str,
+    aes: bool,
+    entries: &[(&str, &str, bool)],
+    rejects: &[&str],
+) {
+    use std::io::Write;
+    use zip::unstable::write::FileOptionsExt;
+    for _ in 0..1000 {
+        let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+        for (name, contents, encrypted) in entries {
+            let plain = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .last_modified_time(
+                    zip::DateTime::from_date_and_time(2020, 1, 2, 3, 4, 6).unwrap(),
+                );
+            let options = match (encrypted, aes) {
+                (false, _) => plain,
+                (true, true) => plain.with_aes_encryption(zip::AesMode::Aes256, password),
+                (true, false) => plain
+                    .with_deprecated_encryption(password.as_bytes())
+                    .unwrap(),
+            };
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(contents.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap();
+        let mut archive = zip::ZipArchive::new(File::open(path).unwrap()).unwrap();
+        let all_rejected = (0..archive.len()).all(|i| {
+            !entries[i].2
+                || rejects.iter().all(|wrong| {
+                    matches!(
+                        archive.by_index_decrypt(i, wrong.as_bytes()),
+                        Err(zip::result::ZipError::InvalidPassword)
+                    )
+                })
+        });
+        if all_rejected {
+            return;
+        }
+    }
+    panic!("no zip rejecting {rejects:?}");
+}
+
+fn question(archive: &Path, retry: bool) -> PasswordQuestion {
+    PasswordQuestion {
+        archive: archive.to_path_buf(),
+        retry,
+    }
+}
+
+#[test]
+fn each_kind_extracts_with_its_password() {
+    for aes in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("s.zip");
+        make_locked_zip(&zip, "pw", aes, &[("p/a.txt", "secret", true)], &[]);
+        let out = tmp.path().join("out");
+        let mut script = Script::with_passwords(&[pw("pw")]);
+        let report = run_script(&extract_op(std::slice::from_ref(&zip), &out), &mut script);
+        assert_eq!(report, Report::default(), "aes {aes}");
+        assert_eq!(read(out.join("p/a.txt")), "secret", "aes {aes}");
+        assert_eq!(script.password_questions, [question(&zip, false)]);
+    }
+}
+
+#[test]
+fn a_wrong_password_asks_again() {
+    for aes in [false, true] {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("s.zip");
+        make_locked_zip(&zip, "pw", aes, &[("p/a.txt", "secret", true)], &["nope"]);
+        let out = tmp.path().join("out");
+        let mut script = Script::with_passwords(&[pw("nope"), pw("pw")]);
+        let report = run_script(&extract_op(std::slice::from_ref(&zip), &out), &mut script);
+        assert!(report.failures.is_empty(), "{report:?}");
+        assert_eq!(
+            script.password_questions,
+            [question(&zip, false), question(&zip, true)]
+        );
+        assert_eq!(read(out.join("p/a.txt")), "secret");
+    }
+}
+
+#[test]
+fn an_empty_password_is_tried_and_asks_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(&zip, "pw", true, &[("p/a.txt", "secret", true)], &[""]);
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[pw(""), pw("pw")]);
+    run_script(&extract_op(std::slice::from_ref(&zip), &out), &mut script);
+    assert_eq!(
+        script.password_questions,
+        [question(&zip, false), question(&zip, true)]
+    );
+    assert_eq!(read(out.join("p/a.txt")), "secret");
+}
+
+#[test]
+fn skip_leaves_out_the_encrypted_entries_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(
+        &zip,
+        "pw",
+        false,
+        &[
+            ("p/plain.txt", "x", false),
+            ("p/a", "a", true),
+            ("p/b", "b", true),
+        ],
+        &[],
+    );
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[PasswordAnswer::Skip]);
+    let report = run_script(&extract_op(&[zip], &out), &mut script);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(report.skipped, 2);
+    assert_eq!(script.password_questions.len(), 1, "asked once per archive");
+    assert_eq!(names(&out.join("p")), ["plain.txt"]);
+    assert_eq!(script.last.files_done, 3, "skipped entries count as done");
+}
+
+#[test]
+fn cancel_at_the_password_stops_the_job() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(
+        &zip,
+        "pw",
+        false,
+        &[("p/a", "a", true), ("p/b", "b", false)],
+        &[],
+    );
+    let out = tmp.path().join("out");
+    let report = run_script(
+        &extract_op(&[zip], &out),
+        &mut Script::with_passwords(&[PasswordAnswer::Cancel]),
+    );
+    assert!(report.cancelled);
+    assert!(!out.join("p/a").exists());
+    assert!(!out.join("p/b").exists());
+}
+
+#[test]
+fn the_password_is_remembered_for_the_next_archive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let one = tmp.path().join("one.zip");
+    let two = tmp.path().join("two.zip");
+    make_locked_zip(
+        &one,
+        "pw",
+        true,
+        &[("1/a", "a", true), ("1/b", "b", true)],
+        &[],
+    );
+    make_locked_zip(&two, "pw", false, &[("2/c", "c", true)], &[]);
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[pw("pw")]);
+    let report = run_script(&extract_op(&[one.clone(), two], &out), &mut script);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(script.password_questions, [question(&one, false)]);
+    assert_eq!(read(out.join("2/c")), "c");
+}
+
+#[test]
+fn a_second_archive_with_another_password_asks_again() {
+    let tmp = tempfile::tempdir().unwrap();
+    let one = tmp.path().join("one.zip");
+    let two = tmp.path().join("two.zip");
+    make_locked_zip(&one, "pw", true, &[("1/a", "a", true)], &[]);
+    make_locked_zip(&two, "other", true, &[("2/c", "c", true)], &["pw"]);
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[pw("pw"), pw("other")]);
+    let report = run_script(&extract_op(&[one.clone(), two.clone()], &out), &mut script);
+    assert!(report.failures.is_empty(), "{report:?}");
+    // Nothing was typed wrong for two.zip: not a retry.
+    assert_eq!(
+        script.password_questions,
+        [question(&one, false), question(&two, false)]
+    );
+    assert_eq!(read(out.join("2/c")), "c");
+}
+
+#[test]
+fn a_plain_zip_never_asks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("plain.zip");
+    make_zip(&zip, &[("p/a", "a")]);
+    // Script::default() panics on any password question.
+    let report = run_script(
+        &extract_op(&[zip], &tmp.path().join("out")),
+        &mut Script::default(),
+    );
+    assert_eq!(report, Report::default());
+}
+
+#[test]
+fn a_wrongly_accepted_password_fails_the_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(
+        &zip,
+        "pw",
+        false,
+        &[
+            ("p/a", "secret data that fails its check", true),
+            ("p/b", "b", false),
+        ],
+        &[],
+    );
+    // A wrong password that passes ZipCrypto's 1-byte check (1 in 256).
+    let mut archive = zip::ZipArchive::new(File::open(&zip).unwrap()).unwrap();
+    let lucky = (0..100_000)
+        .map(|n| format!("w{n}"))
+        .find(|wrong| archive.by_index_decrypt(0, wrong.as_bytes()).is_ok())
+        .expect("a password passing the check");
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[pw(&lucky)]);
+    let report = run_script(&extract_op(std::slice::from_ref(&zip), &out), &mut script);
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert_eq!(
+        report.failures[0].message,
+        "wrong password or a damaged entry"
+    );
+    assert_eq!(
+        report.failures[0].path,
+        PathBuf::from(format!("{}: p/a", zip.display()))
+    );
+    assert!(
+        !out.join("p/a").exists(),
+        "the half-written file is removed"
+    );
+    assert_eq!(read(out.join("p/b")), "b");
+    assert_eq!(script.password_questions.len(), 1, "no new question");
+}
+
+#[test]
+fn a_job_relays_password_questions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(&zip, "pw", true, &[("p/a", "a", true)], &[]);
+    let out = tmp.path().join("out");
+    let job = Job::spawn(extract_op(std::slice::from_ref(&zip), &out), settings()).unwrap();
+    let asked = loop {
+        match next(&job) {
+            Event::Password(asked) => break asked,
+            Event::Finished(report) => panic!("finished without asking: {report:?}"),
+            _ => {}
+        }
+    };
+    assert_eq!(asked, question(&zip, false));
+    job.answer_password(pw("pw"));
+    let report = finish(&job);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(read(out.join("p/a")), "a");
+}
+
+#[test]
+fn the_password_is_never_logged() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_locked_zip(
+        &zip,
+        "pw-secret-123",
+        true,
+        &[("p/a", "a", true)],
+        &["wrong-456"],
+    );
+    let out = tmp.path().join("out");
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(crate::oplog::OperationLog::open(dir.path()).unwrap());
+    let settings = Settings {
+        trash: fake_trash,
+        log: Some(log),
+    };
+    let mut script = Script::with_passwords(&[pw("wrong-456"), pw("pw-secret-123")]);
+    let report = run(&extract_op(&[zip], &out), &mut script, &settings);
+    assert!(report.failures.is_empty(), "{report:?}");
+    let file = fs::read_dir(dir.path()).unwrap().next().unwrap().unwrap();
+    let text = fs::read_to_string(file.path()).unwrap();
+    assert!(text.contains("created"), "{text}");
+    assert!(
+        !text.contains("pw-secret-123") && !text.contains("wrong-456"),
+        "{text}"
+    );
+}
+
+/// Finds `needle` from `from` on.
+fn find(bytes: &[u8], needle: &[u8], from: usize) -> usize {
+    from + bytes[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .unwrap()
+}
+
+/// An AES (AE-2, so no CRC) deflated entry `p/a` holding "hello", whose
+/// encrypted data runs on past the end of the deflate stream and whose
+/// authentication code doesn't match (with `damaged`). Decompression stops before the end
+/// of the encrypted data, so zip never checks the code: the way a wrong
+/// password that passed the 2-byte check would look.
+fn make_unauthenticated_zip(path: &Path, damaged: bool) {
+    use std::io::Write;
+    let mut deflate =
+        flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+    deflate.write_all(b"hello").unwrap();
+    let mut data = deflate.finish().unwrap();
+    let stream_len = data.len();
+    data.extend(vec![0u8; 64 << 10]);
+    let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .with_aes_encryption(zip::AesMode::Aes256, "pw");
+    zip.start_file("p/a", options).unwrap();
+    zip.write_all(&data).unwrap();
+    zip.finish().unwrap();
+
+    let mut bytes = fs::read(path).unwrap();
+    let local = find(&bytes, b"PK\x03\x04", 0);
+    let central = find(&bytes, b"PK\x01\x02", local + 4);
+    for (header, crc, size) in [(local, 14, 22), (central, 16, 24)] {
+        bytes[header + crc..header + crc + 4].copy_from_slice(&0u32.to_le_bytes());
+        bytes[header + size..header + size + 4].copy_from_slice(&5u32.to_le_bytes());
+        // The AES extra field: id 0x9901, size 7, vendor version, "AE",
+        // strength, the real compression method.
+        let extra = find(&bytes, b"\x01\x99\x07\x00", header);
+        bytes[extra + 4..extra + 6].copy_from_slice(&2u16.to_le_bytes());
+        bytes[extra + 9..extra + 11].copy_from_slice(&8u16.to_le_bytes());
+    }
+    // Damage the encrypted data well after the deflate stream.
+    let name_len = u16::from_le_bytes([bytes[local + 26], bytes[local + 27]]) as usize;
+    let extra_len = u16::from_le_bytes([bytes[local + 28], bytes[local + 29]]) as usize;
+    let data_start = local + 30 + name_len + extra_len + 16 + 2;
+    if damaged {
+        bytes[data_start + stream_len + 40_000] ^= 0xff;
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn an_unauthenticated_aes_entry_fails_instead_of_keeping_garbage() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_unauthenticated_zip(&zip, true);
+    let out = tmp.path().join("out");
+    let mut script = Script::with_passwords(&[pw("pw")]);
+    let report = run_script(&extract_op(&[zip], &out), &mut script);
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert_eq!(
+        report.failures[0].message,
+        "wrong password or a damaged entry"
+    );
+    assert!(!out.join("p/a").exists());
+}
+
+#[test]
+fn an_authentic_deflated_aes_entry_passes_the_check() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("s.zip");
+    make_unauthenticated_zip(&zip, false);
+    let out = tmp.path().join("out");
+    let report = run_script(
+        &extract_op(&[zip], &out),
+        &mut Script::with_passwords(&[pw("pw")]),
+    );
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(read(out.join("p/a")), "hello");
+}
+
+#[test]
+fn deflated_aes_entries_of_both_versions_extract() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("s.zip");
+    let mut zip = zip::ZipWriter::new(File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .with_aes_encryption(zip::AesMode::Aes128, "pw");
+    // zip writes AE-2 (no CRC) below 20 bytes, AE-1 from there.
+    zip.start_file("p/small", options).unwrap();
+    zip.write_all(b"tiny").unwrap();
+    zip.start_file("p/big", options).unwrap();
+    zip.write_all(&b"0123456789".repeat(1000)).unwrap();
+    zip.finish().unwrap();
+    let out = tmp.path().join("out");
+    let report = run_script(
+        &extract_op(&[path], &out),
+        &mut Script::with_passwords(&[pw("pw")]),
+    );
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(read(out.join("p/small")), "tiny");
+    assert_eq!(read(out.join("p/big")).len(), 10_000);
 }

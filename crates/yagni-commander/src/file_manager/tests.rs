@@ -3873,4 +3873,149 @@ mod archives {
         assert!(!dialog_open(cx));
         release(&tmp);
     }
+
+    /// A zip with `pkg/x.txt` ("x") under the AES password "pw", rewritten
+    /// until the wrong password "nope" fails the quick check (AES lets a
+    /// wrong password through 1 time in 65536).
+    fn make_locked_zip(path: &std::path::Path) {
+        use std::io::Write;
+        for _ in 0..1000 {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+            let options = zip::write::SimpleFileOptions::default()
+                .with_aes_encryption(zip::AesMode::Aes256, "pw");
+            zip.start_file("pkg/x.txt", options).unwrap();
+            zip.write_all(b"x").unwrap();
+            zip.finish().unwrap();
+            let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+            if archive.by_index_decrypt(0, b"nope").is_err() {
+                return;
+            }
+        }
+        panic!("no zip rejecting \"nope\"");
+    }
+
+    fn password_prompt_open(cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        cx.debug_bounds("password-prompt").is_some()
+    }
+
+    fn wrong_shown(cx: &mut VisualTestContext) -> bool {
+        cx.debug_bounds("password-wrong").is_some()
+    }
+
+    /// Alt-F6 on `pkg.zip`, OK on the folder prompt, then waits for the
+    /// password prompt.
+    fn extract_locked(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
+        make_locked_zip(&tmp.path().join("pkg.zip"));
+        extract_last_with("alt-f6", cx);
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, password_prompt_open);
+    }
+
+    fn extracted(tmp: &tempfile::TempDir) -> Option<String> {
+        std::fs::read_to_string(tmp.path().join("a/pkg/x.txt")).ok()
+    }
+
+    #[gpui_kit::test]
+    fn a_password_zip_asks_and_enter_extracts(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        extract_locked(&tmp, cx);
+        assert!(!wrong_shown(cx));
+        let masked = cx.update(|window, cx| {
+            use gpui_kit::component::WindowExt;
+            use gpui_kit::component::input::AnyInputState;
+            match window.focused_input(cx) {
+                Some(AnyInputState::Input(state)) => state.read(cx).presentation().is_masked(),
+                _ => false,
+            }
+        });
+        assert!(masked, "the focused field is masked");
+        cx.simulate_input("pw");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(extracted(&tmp).as_deref(), Some("x"));
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_wrong_password_asks_again_and_the_ok_button_answers_once(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        extract_locked(&tmp, cx);
+        cx.simulate_input("nope");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| password_prompt_open(cx) && wrong_shown(cx));
+        cx.simulate_input("pw");
+        // The button row: OK is highlighted.
+        cx.simulate_keystrokes("tab");
+        press(cx, "enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(extracted(&tmp).as_deref(), Some("x"));
+        assert!(!dialog_open(cx), "no stale answer, no error box");
+    }
+
+    /// `pkg.zip` with `pkg/x.txt` under AES "pw" and `pkg/y.txt` under
+    /// AES "other", each rewritten until "pw" fails `y`'s quick check.
+    fn make_two_password_zip(path: &std::path::Path) {
+        use std::io::Write;
+        for _ in 0..1000 {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+            for (name, password) in [("pkg/x.txt", "pw"), ("pkg/y.txt", "other")] {
+                let options = zip::write::SimpleFileOptions::default()
+                    .with_aes_encryption(zip::AesMode::Aes256, password);
+                zip.start_file(name, options).unwrap();
+                zip.write_all(b"x").unwrap();
+            }
+            zip.finish().unwrap();
+            let mut archive = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+            if archive.by_index_decrypt(1, b"pw").is_err() {
+                return;
+            }
+        }
+        panic!("no zip rejecting \"pw\" for y");
+    }
+
+    #[gpui_kit::test]
+    fn the_ok_button_answers_exactly_once(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        make_two_password_zip(&tmp.path().join("pkg.zip"));
+        extract_last_with("alt-f6", cx);
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, password_prompt_open);
+        cx.simulate_input("pw");
+        cx.simulate_keystrokes("tab");
+        press(cx, "enter"); // OK: x.txt extracts, y.txt asks
+        wait_until(cx, password_prompt_open);
+        // A second "pw" left in the channel would have answered this
+        // question at once and brought up "Wrong password.".
+        assert!(!wrong_shown(cx), "asked fresh, not answered by a stale OK");
+        cx.simulate_input("other");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("a/pkg/y.txt").is_file());
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn skip_archive_extracts_nothing_and_shows_no_error(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        extract_locked(&tmp, cx);
+        cx.simulate_keystrokes("tab right");
+        press(cx, "enter"); // Skip archive
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(extracted(&tmp), None);
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn escape_cancels_the_job(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        extract_locked(&tmp, cx);
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(extracted(&tmp), None);
+        assert!(
+            !dialog_open(cx),
+            "both the prompt and the progress dialog closed"
+        );
+    }
 }

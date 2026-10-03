@@ -490,6 +490,15 @@ pub(crate) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Di
         .child(text_field(state))
 }
 
+/// A [`dialog_field`] for a password: the text is masked (set
+/// `InputState::masked(true)` on the state) and a button shows or hides it.
+pub(crate) fn dialog_password_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
+    use gpui_kit::{ParentElement, Styled};
+    gpui_kit::div()
+        .py(gpui_kit::px(4.0))
+        .child(text_field(state).mask_toggle())
+}
+
 /// The About box's text.
 pub(super) fn about_text() -> String {
     format!(
