@@ -1795,6 +1795,10 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
     assert_eq!(key(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
     assert_eq!(first(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
     for (action, keys) in [
+        (
+            &crate::actions::DirectoryHotlist as &dyn gpui_kit::Action,
+            "ctrl-d",
+        ),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
         (&crate::actions::CloseTab, "ctrl-w"),
         (&crate::actions::NextTab, "ctrl-tab"),
@@ -2742,4 +2746,554 @@ fn the_icons_switch_turns_icons_off_at_once_and_saves(cx: &mut TestAppContext) {
     click(cx, "settings-icons", 1);
     cx.run_until_parked();
     assert!(cx.debug_bounds("icon-left-1").is_some());
+}
+
+mod hotlist {
+    use super::*;
+
+    /// A config with entries &Alpha -> a and &Beta -> b (in the test
+    /// folder), plus `extra` entries as (name, path).
+    fn use_hotlist(
+        tmp: &tempfile::TempDir,
+        cfg: &tempfile::TempDir,
+        extra: &[(&str, &str)],
+        cx: &mut VisualTestContext,
+    ) -> std::path::PathBuf {
+        let mut text = String::new();
+        let a = tmp.path().join("a").display().to_string();
+        let b = tmp.path().join("b").display().to_string();
+        for (name, path) in [("&Alpha", a.as_str()), ("&Beta", b.as_str())]
+            .into_iter()
+            .chain(extra.iter().copied())
+        {
+            text += &format!("[[hotlist]]\nname = \"{name}\"\npath = \"{path}\"\n\n");
+        }
+        use_config(cfg.path(), &text, cx)
+    }
+
+    pub(super) fn hotlist_open(cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        file_manager(cx).read_with(cx, |this, _| this.hotlist.is_some())
+    }
+
+    fn highlight(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist.as_ref().unwrap().popup.read(cx).highlight()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_d_and_a_letter_go_to_that_folder(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(hotlist_open(cx));
+        assert!(bounds(cx, "hotlist-row-0".into()).is_some());
+        cx.simulate_keystrokes("b");
+        assert!(!hotlist_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+        // Upper case works too, and keys reach the panel again.
+        cx.simulate_keystrokes("backspace ctrl-d shift-a");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn arrows_wrap_enter_picks_and_escape_closes(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d");
+        assert_eq!(highlight(cx), 0);
+        // Rows: Alpha, Beta, Add current folder, Configure...
+        cx.simulate_keystrokes("up");
+        assert_eq!(highlight(cx), 3);
+        cx.simulate_keystrokes("down down");
+        assert_eq!(highlight(cx), 1);
+        cx.simulate_keystrokes("escape");
+        assert!(!hotlist_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            cursor(&commander, Side::Left, cx),
+            1,
+            "keys reach the panel"
+        );
+        cx.simulate_keystrokes("ctrl-d down enter");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_picks_a_row(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d");
+        click(cx, "hotlist-row-1", 1);
+        assert!(!hotlist_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    #[gpui_kit::test]
+    fn other_keys_are_ignored_while_it_is_open(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d f7 tab space ctrl-a x");
+        assert!(hotlist_open(cx));
+        assert!(!dialog_open(cx), "F7 did nothing");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+        assert_eq!(search(&commander, cx), None, "x started no search");
+    }
+
+    #[gpui_kit::test]
+    fn the_first_of_two_entries_with_a_letter_wins(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let f = tmp.path().display().to_string();
+        use_hotlist(&tmp, &cfg, &[("&alpha too", f.as_str())], cx);
+        cx.simulate_keystrokes("ctrl-d a");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn the_right_panel_gets_its_own_popup_and_navigation(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("tab ctrl-d");
+        let side = file_manager(cx).read_with(cx, |this, _| this.hotlist.as_ref().unwrap().side);
+        assert_eq!(side, Side::Right);
+        let row = bounds(cx, "hotlist-row-0".into()).unwrap();
+        let divider = bounds(cx, "divider".into()).unwrap();
+        assert!(
+            row.origin.x > divider.origin.x,
+            "drawn over the right panel"
+        );
+        cx.simulate_keystrokes("a");
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path().join("a"));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn a_missing_folder_shows_its_error_and_the_panel_stays(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let gone = tmp.path().join("gone").display().to_string();
+        use_hotlist(&tmp, &cfg, &[("&Gone", gone.as_str())], cx);
+        cx.simulate_keystrokes("ctrl-d g");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        assert!(commander.read_with(cx, |c, _| c.error().is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_d_ends_the_quick_search(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("f ctrl-d");
+        assert_eq!(search(&commander, cx), None);
+        assert!(hotlist_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_d_does_nothing_while_the_panel_loads(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        enter_held_a(&tmp, cx);
+        assert!(loading(&commander, cx));
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(!hotlist_open(cx));
+        release(&tmp);
+    }
+
+    #[gpui_kit::test]
+    fn focus_leaving_closes_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(hotlist_open(cx));
+        click(cx, "row-right-1", 1);
+        assert!(!hotlist_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_commands_menu_opens_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.dispatch_action(crate::actions::DirectoryHotlist);
+        assert!(hotlist_open(cx));
+    }
+
+    fn saved_hotlist(cfg: &std::path::Path) -> Vec<yagni_commander_core::config::HotlistEntry> {
+        let text = std::fs::read_to_string(cfg).unwrap();
+        toml::from_str::<yagni_commander_core::Config>(&text)
+            .unwrap()
+            .hotlist
+    }
+
+    #[gpui_kit::test]
+    fn add_current_folder_asks_for_a_name_and_saves(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        // Rows: Alpha, Beta, Add, Configure. Up twice from Alpha is Add.
+        cx.simulate_keystrokes("ctrl-d up up enter");
+        assert!(dialog_open(cx), "name prompt");
+        // The folder's name is preselected: typing replaces it.
+        cx.simulate_input("&Here");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        let saved = saved_hotlist(&file);
+        assert_eq!(saved.len(), 3);
+        assert_eq!(saved[2].name, "&Here");
+        assert_eq!(saved[2].path, tmp.path().display().to_string());
+        assert_eq!(config(cx).hotlist, saved, "applied at once");
+        // The new entry works right away.
+        cx.simulate_keystrokes("down enter ctrl-d h");
+        assert_eq!(
+            path(&commander_of(cx), Side::Left, cx),
+            tmp.path(),
+            "back via its letter"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_name_prompt_starts_with_the_folder_name(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_config(cfg.path(), "", cx);
+        // Empty hotlist: rows are Add, Configure; Enter on Add, Enter again
+        // accepts the suggested name.
+        cx.simulate_keystrokes("ctrl-d enter");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let saved = saved_hotlist(&file);
+        let name = tmp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(saved[0].name, name);
+    }
+
+    #[gpui_kit::test]
+    fn escape_in_the_name_prompt_adds_nothing(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        let before = std::fs::read_to_string(&file).unwrap();
+        cx.simulate_keystrokes("ctrl-d up up enter");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    }
+
+    #[gpui_kit::test]
+    fn a_broken_config_refuses_add_but_entries_still_work(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_config(cfg.path(), "log = maybe\n", cx);
+        // The app keeps entries it had before the file broke.
+        cx.update(|_, cx| {
+            let current = cx.global_mut::<crate::config_state::CurrentConfig>();
+            current.config.hotlist = vec![yagni_commander_core::config::HotlistEntry {
+                name: "&Alpha".into(),
+                path: tmp.path().join("a").display().to_string(),
+            }];
+        });
+        cx.simulate_keystrokes("ctrl-d down enter"); // Add
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box, not the prompt");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "log = maybe\n");
+        cx.simulate_keystrokes("ctrl-d a");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_picks_up_a_hotlist_edited_on_disk(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_config(cfg.path(), "", cx);
+        let b = tmp.path().join("b").display().to_string();
+        std::fs::write(
+            &file,
+            format!("[[hotlist]]\nname = \"&Beta\"\npath = \"{b}\"\n"),
+        )
+        .unwrap();
+        cx.simulate_keystrokes("ctrl-r ctrl-d b");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    fn dialog_entries(cx: &mut VisualTestContext) -> Vec<(String, String)> {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist_dialog
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .entries()
+                .iter()
+                .map(|e| (e.name.clone(), e.path.clone()))
+                .collect()
+        })
+    }
+
+    fn dialog_cursor(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist_dialog.as_ref().unwrap().read(cx).cursor()
+        })
+    }
+
+    fn names(cx: &mut VisualTestContext) -> Vec<String> {
+        dialog_entries(cx)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    /// Opens Configure from the popup (Up from the first row wraps to it).
+    fn configure(cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("ctrl-d up enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn configure_lists_the_entries_with_the_cursor_on_the_first(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        assert_eq!(names(cx), ["&Alpha", "&Beta"]);
+        assert_eq!(dialog_cursor(cx), 0);
+        assert!(bounds(cx, "hotlist-entry-1".into()).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn list_keys_move_reorder_and_remove(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let c = tmp.path().display().to_string();
+        use_hotlist(&tmp, &cfg, &[("&Gamma", c.as_str())], cx);
+        configure(cx);
+        cx.simulate_keystrokes("down");
+        assert_eq!(dialog_cursor(cx), 1);
+        cx.simulate_keystrokes("alt-up");
+        assert_eq!(names(cx), ["&Beta", "&Alpha", "&Gamma"]);
+        assert_eq!(dialog_cursor(cx), 0, "the cursor follows the entry");
+        cx.simulate_keystrokes("alt-up"); // already first: nothing
+        assert_eq!(names(cx), ["&Beta", "&Alpha", "&Gamma"]);
+        cx.simulate_keystrokes("alt-down alt-down");
+        assert_eq!(names(cx), ["&Alpha", "&Gamma", "&Beta"]);
+        assert_eq!(dialog_cursor(cx), 2);
+        cx.simulate_keystrokes("delete");
+        assert_eq!(names(cx), ["&Alpha", "&Gamma"]);
+        assert_eq!(dialog_cursor(cx), 1, "the cursor stays on the last row");
+        click(cx, "hotlist-entry-0", 1);
+        assert_eq!(dialog_cursor(cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn ok_saves_and_cancel_does_not(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        let before = std::fs::read_to_string(&file).unwrap();
+        configure(cx);
+        cx.simulate_keystrokes("delete escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            before,
+            "Escape cancels"
+        );
+        configure(cx);
+        cx.simulate_keystrokes("delete enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        let saved: Vec<_> = saved_hotlist(&file).into_iter().map(|e| e.name).collect();
+        assert_eq!(saved, ["&Beta"]);
+        assert_eq!(config(cx).hotlist.len(), 1);
+    }
+
+    #[gpui_kit::test]
+    fn typing_edits_the_entry_under_the_cursor(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        // List -> Name: select all, type.
+        cx.simulate_keystrokes("down tab ctrl-a");
+        cx.simulate_input("&Bin");
+        assert_eq!(names(cx), ["&Alpha", "&Bin"], "the list follows the typing");
+        // Name -> Path.
+        cx.simulate_keystrokes("tab ctrl-a");
+        cx.simulate_input("~/bin");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let saved = saved_hotlist(&file);
+        assert_eq!(saved[1].name, "&Bin");
+        assert_eq!(saved[1].path, "~/bin");
+    }
+
+    #[gpui_kit::test]
+    fn moving_the_cursor_shows_that_entry_in_the_fields(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        cx.simulate_keystrokes("down");
+        let fields = file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist_dialog
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .field_texts(cx)
+        });
+        assert_eq!(fields.0, "&Beta");
+        assert_eq!(fields.1, tmp.path().join("b").display().to_string());
+    }
+
+    #[gpui_kit::test]
+    fn a_bad_path_keeps_the_dialog_open_on_that_entry(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        let before = std::fs::read_to_string(&file).unwrap();
+        configure(cx);
+        cx.simulate_keystrokes("down tab tab ctrl-a");
+        cx.simulate_input("relative/path");
+        cx.simulate_keystrokes("up"); // in the field: no effect on the list
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        // The error box is on top of the still-open Configure dialog.
+        assert!(file_manager(cx).read_with(cx, |this, _| this.hotlist_dialog.is_some()));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        cx.simulate_keystrokes("enter"); // dismiss the error
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "Configure stays");
+        assert_eq!(dialog_cursor(cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn the_buttons_add_remove_and_move(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        // Buttons: Add(0) Remove(1) Move up(2) Move down(3) Cancel(4) OK(5).
+        // The row remembers the last button pressed, so go to the first
+        // one, then right `ix` times. The row is reached with Shift-Tab
+        // from the list (focus cycles backwards past the dialog's start).
+        let button = |cx: &mut VisualTestContext, ix: usize| {
+            cx.simulate_keystrokes("shift-tab");
+            for _ in 0..5 {
+                cx.simulate_keystrokes("left");
+            }
+            for _ in 0..ix {
+                cx.simulate_keystrokes("right");
+            }
+            press(cx, "enter");
+        };
+        button(cx, 0); // Add current folder
+        assert_eq!(names(cx).len(), 3);
+        assert_eq!(dialog_cursor(cx), 2);
+        let folder = tmp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(
+            dialog_entries(cx)[2],
+            (folder.clone(), tmp.path().display().to_string())
+        );
+        // Add put focus in Name; a click on the list puts it back there.
+        click(cx, "hotlist-entry-2", 1);
+        button(cx, 2); // Move up: [Alpha, folder, Beta]
+        assert_eq!(dialog_cursor(cx), 1);
+        click(cx, "hotlist-entry-1", 1);
+        button(cx, 3); // Move down: [Alpha, Beta, folder]
+        assert_eq!(dialog_cursor(cx), 2);
+        click(cx, "hotlist-entry-0", 1);
+        button(cx, 1); // Remove Alpha
+        assert_eq!(names(cx), ["&Beta".to_owned(), folder]);
+        click(cx, "hotlist-entry-0", 1);
+        button(cx, 5); // OK
+        assert!(!dialog_open(cx));
+        assert_eq!(saved_hotlist(&file).len(), 2);
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_list_says_so_and_add_fills_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        cx.simulate_keystrokes("ctrl-d down enter"); // rows: Add, Configure
+        cx.run_until_parked();
+        assert!(bounds(cx, "hotlist-empty".into()).is_some());
+        cx.simulate_keystrokes("delete alt-up"); // nothing to act on: no panic
+        assert!(names(cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_broken_config_refuses_configure(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "log = maybe\n", cx);
+        cx.simulate_keystrokes("ctrl-d down enter"); // rows: Add, Configure
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        assert!(file_manager(cx).read_with(cx, |this, _| this.hotlist_dialog.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn a_dialog_taking_focus_closes_the_popup_and_keeps_the_focus(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(hotlist_open(cx));
+        // E.g. a file operation's progress dialog opening on its own.
+        cx.update(|window, cx| {
+            super::commands::show_error("Some error", "details", None, window, cx)
+        });
+        cx.run_until_parked();
+        assert!(!hotlist_open(cx));
+        let view = file_manager(cx);
+        let panels_focused = cx.update(|window, cx| view.read(cx).focus.is_focused(window));
+        assert!(!panels_focused, "focus stays in the dialog");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "Enter reached the dialog's button");
+    }
+
+    #[gpui_kit::test]
+    fn paths_are_trimmed_on_ok(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        cx.simulate_keystrokes("down tab tab ctrl-a");
+        cx.simulate_input(" ~/bin ");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "a padded path is accepted");
+        assert_eq!(saved_hotlist(&file)[1].path, "~/bin");
+    }
 }

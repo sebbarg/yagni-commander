@@ -9,6 +9,7 @@ mod entry;
 pub mod file_ops;
 mod format;
 mod fs_ops;
+pub mod hotlist;
 pub mod icons;
 pub mod launch;
 mod listing;

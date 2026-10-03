@@ -17,7 +17,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
 - Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
   - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS); Quit (Linux only, Alt-F4).
-  - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R).
+  - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
   - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit.
@@ -117,7 +117,7 @@ Toolbar with e.g. drive icons.
 | Enter | On a directory: enter it. On a file: open it with its associated program (v2). |
 | Alt-F5 | Archive/compress the selection or current entry, with confirmation if the target exists (v2). |
 | Alt-F9 | Extract the selection or current entry, with confirmation if the target exists (v2). |
-| Ctrl-D | Directory hotlist (v2). |
+| Ctrl-D | Directory hotlist: a popup over the active panel with the bookmarked folders, then "Add current folder" and "Configure...". `&` in a name marks its letter (`&Projects`: P, underlined; `&&` is a literal `&`); the letter jumps there. Up/Down (wrapping), Enter, Escape, click; other keys are ignored while it is open. Picking an entry is a normal navigation; a missing folder shows its error and the panel stays (no parent fallback). "Add current folder" asks for a name (the folder's, preselected) and saves at once; folders under home are stored as `~/...`. Configure is an OK/Cancel dialog: add the current folder, rename, change paths (absolute or `~/...`; checked on OK), remove (Del) and reorder (Alt-Up/Alt-Down). Stored in `config.toml` (`[[hotlist]]` tables with `name` and `path`; a hand-written relative path is relative to home). While the config file is broken, the entries still work but Add and Configure are refused. Decided with the owner 2026-10-03 (spec `docs/superpowers/specs/2026-10-03-directory-hotlist-design.md`). |
 | Alt-F7 | Find files (v2). |
 
 ### Quick search

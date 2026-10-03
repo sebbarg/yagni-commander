@@ -104,6 +104,36 @@ impl FileManager {
         );
     }
 
+    /// The hotlist's "Add current folder": asks for a name (the folder's
+    /// name, preselected) and appends the entry.
+    pub(super) fn add_current_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.config_refused(window, cx) {
+            return;
+        }
+        let path = self.current_folder_entry_path(cx);
+        let name = yagni_commander_core::hotlist::default_name(&path);
+        self.prompt_name(
+            Prompt {
+                title: "Add to hotlist",
+                error_title: "Cannot add folder",
+                initial: &name,
+                selection: 0..name.len(),
+                width: PROMPT_WIDTH,
+            },
+            Rc::new(move |this, name, window, cx| {
+                let mut list = cx.global::<CurrentConfig>().config.hotlist.clone();
+                list.push(yagni_commander_core::config::HotlistEntry {
+                    name: name.to_owned(),
+                    path: path.clone(),
+                });
+                this.save_hotlist(list, window, cx);
+                Ok(())
+            }),
+            window,
+            cx,
+        );
+    }
+
     /// F4: open the entry under the cursor (or the directory, on "..") in
     /// the configured editor.
     pub(super) fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -392,7 +422,7 @@ pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
 /// its children and has no vertical padding, and gpui-component draws the
 /// focus ring 3 px outside the field, so the field needs room above and
 /// below or the ring is cut off.
-pub(super) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
+pub(crate) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
     use gpui_kit::{ParentElement, Styled};
     gpui_kit::div()
         .py(gpui_kit::px(4.0))

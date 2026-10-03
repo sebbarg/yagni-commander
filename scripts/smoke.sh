@@ -233,6 +233,29 @@ keys Escape
 check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
 check "config comment kept" grep -q "^# smoke config" "$cfg"
 check "other keys kept" grep -q '^editor = "true"' "$cfg"
+
+echo "Ctrl-D hotlist: add the current folder, leave, come back by its letter"
+keys ctrl+d
+shot 07g-hotlist-popup
+keys Return            # empty hotlist: the first row is "Add current folder"
+keys ctrl+a
+typed "&Left"
+keys Return
+check "hotlist entry saved" grep -q '^name = "&Left"' "$cfg"
+check "hotlist path saved" grep -q "^path = \"$left\"" "$cfg"
+check "config comment kept after the hotlist save" grep -q "^# smoke config" "$cfg"
+typed docs
+keys Escape Return     # into docs
+title_is() { [[ $(xdotool getwindowname "$window") == "$1 - yagni-commander" ]]; }
+check "in docs" title_is "$left/docs"
+keys ctrl+d
+shot 07h-hotlist-entry
+keys l
+check "back in left by the hotlist letter" title_is "$left"
+shot 07i-hotlist-back
+keys ctrl+d Up Return  # Configure...
+shot 07j-hotlist-configure
+keys Escape
 keys ctrl+comma Tab space Escape
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 

@@ -54,7 +54,8 @@ actions!(
         ToggleMenu,
         MenuAlt,
         OpenFilesMenu,
-        OpenSettings
+        OpenSettings,
+        DirectoryHotlist
     ]
 );
 
@@ -79,6 +80,21 @@ pub mod viewer {
             ScrollRight
         ]
     );
+}
+
+/// Key context of the directory hotlist popup (Ctrl-D).
+pub const HOTLIST_CONTEXT: &str = "Hotlist";
+
+/// Hotlist popup actions; a module of their own because the names repeat.
+pub mod hotlist {
+    gpui_kit::actions!(hotlist, [Up, Down, Pick, Close]);
+}
+
+/// Key context of the hotlist Configure dialog's list.
+pub const HOTLIST_LIST_CONTEXT: &str = "HotlistList";
+
+pub mod hotlist_list {
+    gpui_kit::actions!(hotlist_list, [Up, Down, Remove, MoveUp, MoveDown]);
 }
 
 actions!(
@@ -142,6 +158,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-tab", NextTab, context),
         KeyBinding::new("ctrl-shift-tab", PrevTab, context),
         KeyBinding::new("ctrl-r", Reload, context),
+        KeyBinding::new("ctrl-d", DirectoryHotlist, context),
         KeyBinding::new("ctrl-.", ToggleHidden, context),
         KeyBinding::new("ctrl-,", OpenSettings, context),
         KeyBinding::new("escape", CancelSearch, context),
@@ -174,6 +191,22 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", TabPrev, row),
         KeyBinding::new("enter", PressButton, row),
         KeyBinding::new("space", PressButton, row),
+    ]);
+    // More specific than the file manager's Up/Down/Enter/Escape.
+    let popup = Some(HOTLIST_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", hotlist::Up, popup),
+        KeyBinding::new("down", hotlist::Down, popup),
+        KeyBinding::new("enter", hotlist::Pick, popup),
+        KeyBinding::new("escape", hotlist::Close, popup),
+    ]);
+    let list = Some(HOTLIST_LIST_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", hotlist_list::Up, list),
+        KeyBinding::new("down", hotlist_list::Down, list),
+        KeyBinding::new("delete", hotlist_list::Remove, list),
+        KeyBinding::new("alt-up", hotlist_list::MoveUp, list),
+        KeyBinding::new("alt-down", hotlist_list::MoveDown, list),
     ]);
     let ctx = Some(VIEWER_CONTEXT);
     cx.bind_keys([

@@ -418,6 +418,32 @@ impl Commander {
         true
     }
 
+    /// Ctrl-D: the active panel goes to `dir` (a hotlist entry) as a normal
+    /// navigation. Like a command, ignored while that panel is loading, and
+    /// ends the quick search. A failed read leaves the panel where it was
+    /// and sets [`Commander::error`].
+    pub fn go_to(&mut self, dir: PathBuf) {
+        let active = self.active;
+        if self.panel(active).loading().is_some() {
+            return;
+        }
+        self.error = None;
+        self.search.clear();
+        self.request(
+            active,
+            Navigation {
+                target: dir,
+                select: None,
+            },
+            LoadKind::Navigate,
+        );
+    }
+
+    /// The home folder (hotlist `~` paths, startup fallback).
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// Runs all pending reads on this thread (tests, and the app's tests).
     pub fn run_loads_now(&mut self) {
         loop {
@@ -2149,5 +2175,45 @@ mod tests {
         assert_eq!(c.panel(Side::Left).selection().count(), 0);
         let copy = c.tabs(Side::Left).get(1).unwrap();
         assert_eq!(copy.selection().count(), 1, "other tabs keep theirs");
+    }
+    #[test]
+    fn go_to_navigates_the_active_panel_only() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::SwitchPanel);
+        c.go_to(tmp.path().join("b"));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Right).path(), tmp.path().join("b"));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert_eq!(c.panel(Side::Right).cursor(), 0);
+    }
+
+    #[test]
+    fn go_to_a_missing_folder_keeps_the_panel_and_reports() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.go_to(tmp.path().join("gone"));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(c.error().unwrap().contains("gone"));
+    }
+
+    #[test]
+    fn go_to_ends_the_search_and_waits_for_a_loading_panel() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.search_type('a');
+        c.go_to(tmp.path().join("a"));
+        assert_eq!(c.search(), None);
+        // Still loading "a": a second go_to is ignored.
+        c.go_to(tmp.path().join("b"));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn home_is_the_one_given_at_start() {
+        let c = Commander::start("/".into(), "/".into(), false, "/home/me".into());
+        assert_eq!(c.home(), Path::new("/home/me"));
     }
 }

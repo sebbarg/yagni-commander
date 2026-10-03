@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::sort::SortKey;
 use crate::storage::{self, StorageError};
 
+pub use crate::hotlist::HotlistEntry;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -27,6 +29,8 @@ pub struct Config {
     pub show_permissions: bool,
     /// A Nerd Font icon in front of every name (see [`crate::icons`]).
     pub icons: bool,
+    /// Bookmarked folders (Ctrl-D), edited in the app.
+    pub hotlist: Vec<HotlistEntry>,
 }
 
 impl Default for Config {
@@ -40,6 +44,7 @@ impl Default for Config {
             show_owner: true,
             show_permissions: true,
             icons: true,
+            hotlist: Vec::new(),
         }
     }
 }
@@ -176,6 +181,39 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
     Ok(config)
 }
 
+/// Comment above the first `[[hotlist]]` table.
+const HOTLIST_COMMENT: &str = "\n# Directory hotlist (Ctrl-D), edited in the app.\n";
+
+/// Saves the whole hotlist, like [`save_setting`]: only the `hotlist`
+/// tables change (comments inside the old ones are lost), a broken file is
+/// left alone, and the config as now on disk is returned.
+pub fn save_hotlist(path: &Path, hotlist: &[HotlistEntry]) -> Result<Config, StorageError> {
+    Config::load_or_create(path)?;
+    let text = fs::read_to_string(path).map_err(|e| StorageError::Io(path.to_owned(), e))?;
+    let mut doc: toml_edit::DocumentMut = text
+        .parse()
+        .map_err(|e: toml_edit::TomlError| StorageError::Edit(path.to_owned(), e.to_string()))?;
+    doc.remove("hotlist");
+    if !hotlist.is_empty() {
+        let mut tables = toml_edit::ArrayOfTables::new();
+        for (ix, entry) in hotlist.iter().enumerate() {
+            let mut table = toml_edit::Table::new();
+            table["name"] = toml_edit::value(entry.name.as_str());
+            table["path"] = toml_edit::value(entry.path.as_str());
+            table
+                .decor_mut()
+                .set_prefix(if ix == 0 { HOTLIST_COMMENT } else { "\n" });
+            tables.push(table);
+        }
+        doc.insert("hotlist", toml_edit::Item::ArrayOfTables(tables));
+    }
+    let text = doc.to_string();
+    let config: Config =
+        toml::from_str(&text).map_err(|e| StorageError::Parse(path.to_owned(), e))?;
+    storage::write_atomic(path, &text)?;
+    Ok(config)
+}
+
 /// Removes `key`. toml_edit keeps the comments and blank lines above a key
 /// as part of it; they move to the next key, or to the end of the file.
 fn remove_keeping_comments(doc: &mut toml_edit::DocumentMut, key: &str) {
@@ -210,6 +248,110 @@ fn remove_keeping_comments(doc: &mut toml_edit::DocumentMut, key: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn entry(name: &str, path: &str) -> HotlistEntry {
+        HotlistEntry {
+            name: name.into(),
+            path: path.into(),
+        }
+    }
+
+    #[test]
+    fn a_hotlist_is_read_from_the_file() {
+        let text = "icons = false\n\n[[hotlist]]\nname = \"&Src\"\npath = \"~/src\"\n\n[[hotlist]]\nname = \"\"\npath = \"/etc\"\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.hotlist, [entry("&Src", "~/src"), entry("", "/etc")]);
+        assert!(!config.icons);
+        assert!(Config::default().hotlist.is_empty());
+    }
+
+    #[test]
+    fn a_hotlist_entry_without_a_name_has_an_empty_one() {
+        let config: Config = toml::from_str("[[hotlist]]\npath = \"/x\"\n").unwrap();
+        assert_eq!(config.hotlist, [entry("", "/x")]);
+    }
+
+    #[test]
+    fn an_unknown_key_in_a_hotlist_entry_is_a_parse_error() {
+        let text = "[[hotlist]]\nname = \"x\"\npth = \"/etc\"\n";
+        assert!(toml::from_str::<Config>(text).is_err());
+    }
+
+    #[test]
+    fn save_hotlist_replaces_only_the_hotlist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        let text =
+            "# mine\neditor = \"vim\" # inline\n\n[[hotlist]]\nname = \"old\"\npath = \"/old\"\n";
+        fs::write(&path, text).unwrap();
+
+        let list = [entry("&Src", "~/src"), entry("R&&D", "/rd")];
+        let config = save_hotlist(&path, &list).unwrap();
+        assert_eq!(config.hotlist, list);
+        assert_eq!(config.editor.as_deref(), Some("vim"));
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.starts_with("# mine\neditor = \"vim\" # inline\n"),
+            "{saved}"
+        );
+        assert!(!saved.contains("/old"), "{saved}");
+        assert!(saved.contains("# Directory hotlist (Ctrl-D), edited in the app."));
+        assert_eq!(toml::from_str::<Config>(&saved).unwrap(), config);
+    }
+
+    #[test]
+    fn save_hotlist_keeps_hand_edits_made_since_startup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        Config::load_or_create(&path).unwrap();
+        // Edited by hand while the app runs.
+        let edited = fs::read_to_string(&path)
+            .unwrap()
+            .replace("icons = true", "icons = false");
+        fs::write(&path, edited).unwrap();
+
+        let config = save_hotlist(&path, &[entry("a", "/a")]).unwrap();
+        assert!(!config.icons);
+        assert!(fs::read_to_string(&path).unwrap().contains("icons = false"));
+    }
+
+    #[test]
+    fn an_empty_hotlist_removes_the_tables() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(
+            &path,
+            "log = true\n\n[[hotlist]]\nname = \"a\"\npath = \"/a\"\n",
+        )
+        .unwrap();
+        let config = save_hotlist(&path, &[]).unwrap();
+        assert!(config.hotlist.is_empty());
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(!saved.contains("hotlist"), "{saved}");
+        assert!(saved.contains("log = true"));
+    }
+
+    #[test]
+    fn save_hotlist_creates_the_template_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("new/config.toml");
+        let config = save_hotlist(&path, &[entry("a", "/a")]).unwrap();
+        assert_eq!(config.hotlist.len(), 1);
+        assert!(
+            fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# yagni-commander settings")
+        );
+    }
+
+    #[test]
+    fn save_hotlist_never_writes_a_broken_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "log = maybe\n").unwrap();
+        assert!(save_hotlist(&path, &[entry("a", "/a")]).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "log = maybe\n");
+    }
 
     #[test]
     fn first_load_writes_template_and_returns_defaults() {
@@ -266,6 +408,7 @@ mod tests {
             show_owner: true,
             show_permissions: false,
             icons: false,
+            hotlist: vec![entry("&Src", "~/src")],
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);

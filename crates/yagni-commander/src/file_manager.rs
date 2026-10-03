@@ -2,9 +2,9 @@
 //! line, and the keyboard actions that drive the shared [`Commander`].
 
 use gpui_kit::{
-    App, Context, Entity, FocusHandle, Modifiers, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, SharedString, Subscription, Window, div, prelude::*, px,
-    relative,
+    App, Context, Entity, FocusHandle, Focusable, Modifiers, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, SharedString, Subscription, Window, anchored, deferred, div,
+    prelude::*, px, relative,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,13 +18,15 @@ mod watch;
 
 use crate::actions::{
     About, Activate, CancelSearch, CloseTab, Copy, CopyPath, CursorDown, CursorEnd, CursorHome,
-    CursorUp, Delete, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move,
-    NewTab, NextTab, OpenFilesMenu, OpenSettings, PageDown, PageUp, PrevTab, Reload, Rename,
-    SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
-    SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
+    CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp,
+    MakeDirectory, MenuAlt, Move, NewTab, NextTab, OpenFilesMenu, OpenSettings, PageDown, PageUp,
+    PrevTab, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
+    Trash, View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
+use crate::hotlist_popup::{self, HotlistEvent, HotlistPopup};
 use crate::menu_bar::{self, MenuBar};
 use crate::menus::{self, MenuState};
 use crate::panel_view::PanelView;
@@ -52,6 +54,13 @@ pub fn execute(commander: &Entity<Commander>, command: Command, cx: &mut App) {
 fn window_title(commander: &Commander) -> String {
     let path = commander.panel(commander.active()).path();
     format!("{} - yagni-commander", path.display())
+}
+
+/// The open hotlist popup and the side it belongs to.
+pub(crate) struct OpenHotlist {
+    pub side: Side,
+    pub popup: Entity<HotlistPopup>,
+    _subscriptions: Vec<Subscription>,
 }
 
 pub struct FileManager {
@@ -89,6 +98,10 @@ pub struct FileManager {
     pub(crate) log_dir: Option<PathBuf>,
     /// The in-window menu bar; `None` on macOS, which has the native one.
     menu_bar: Option<Entity<MenuBar>>,
+    /// The open Ctrl-D popup.
+    pub(crate) hotlist: Option<OpenHotlist>,
+    /// The open hotlist Configure dialog's view.
+    pub(crate) hotlist_dialog: Option<Entity<crate::hotlist_dialog::HotlistDialog>>,
     /// What the menus' check marks show; `None` before the first update.
     menu_state: Option<MenuState>,
     /// Alt went down alone and no mouse click or window switch followed (see
@@ -113,6 +126,7 @@ impl FileManager {
         let menu_bar = cfg!(not(target_os = "macos"))
             .then(|| cx.new(|_| MenuBar::new(Vec::new(), focus.clone())));
 
+        let this = cx.weak_entity();
         let subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
@@ -136,14 +150,23 @@ impl FileManager {
                     }
                 }
             }),
-            // While a menu is open, keys other than the menu's own are
-            // ignored. This runs before key bindings, which matters: the open
-            // menu has focus, but the file manager's bindings (F5, ...) are on
-            // the same dispatch path.
+            // While a menu or the hotlist popup is open, keys other than its
+            // own are ignored. This runs before key bindings, which matters:
+            // the open popup has focus, but the file manager's bindings (F5,
+            // ...) are on the same dispatch path.
             cx.intercept_keystrokes({
                 let bar = menu_bar.as_ref().map(Entity::downgrade);
+                let this = this.clone();
                 let handle = window.window_handle();
                 move |event, window, cx| {
+                    if window.window_handle() == handle
+                        && let Some(this) = this.upgrade()
+                        && this.read(cx).hotlist.is_some()
+                        && !hotlist_popup::passes(&event.keystroke)
+                    {
+                        cx.stop_propagation();
+                        return;
+                    }
                     let Some(bar) = bar.as_ref().and_then(|bar| bar.upgrade()) else {
                         return;
                     };
@@ -180,6 +203,8 @@ impl FileManager {
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
             menu_bar,
+            hotlist: None,
+            hotlist_dialog: None,
             menu_state: None,
             alt_armed: false,
             activated_at: None,
@@ -226,6 +251,84 @@ impl FileManager {
         }
     }
 
+    /// Ctrl-D: the hotlist popup over the active panel. Not while that
+    /// panel is loading.
+    fn directory_hotlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) || self.hotlist.is_some() {
+            return;
+        }
+        self.end_search(cx);
+        let side = self.commander.read(cx).active();
+        let entries = cx.global::<CurrentConfig>().config.hotlist.clone();
+        let popup = cx.new(|cx| HotlistPopup::new(entries, cx));
+        let picked = cx.subscribe_in(
+            &popup,
+            window,
+            |this, _, event: &HotlistEvent, window, cx| this.on_hotlist(event, window, cx),
+        );
+        let focus = popup.focus_handle(cx);
+        // Focus went elsewhere (e.g. a dialog opened): just drop the popup.
+        // Taking focus back would strand the dialog's keys behind it.
+        let blurred = cx.on_focus_out(&focus, window, |this, _, _, cx| {
+            if this.hotlist.take().is_some() {
+                cx.notify();
+            }
+        });
+        focus.focus(window, cx);
+        self.hotlist = Some(OpenHotlist {
+            side,
+            popup,
+            _subscriptions: vec![picked, blurred],
+        });
+        cx.notify();
+    }
+
+    /// Closes the popup; focus goes back to the panels.
+    fn close_hotlist(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.hotlist.take().is_some() {
+            self.focus.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn on_hotlist(&mut self, event: &HotlistEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_hotlist(window, cx);
+        match *event {
+            HotlistEvent::Pick(ix) => {
+                let config = &cx.global::<CurrentConfig>().config;
+                let Some(entry) = config.hotlist.get(ix) else {
+                    return;
+                };
+                let entry_path = entry.path.clone();
+                self.notice = None;
+                self.commander.update(cx, |c, cx| {
+                    let dir = yagni_commander_core::hotlist::expand(&entry_path, c.home());
+                    c.go_to(dir);
+                    cx.notify();
+                });
+            }
+            HotlistEvent::Add => self.add_current_folder(window, cx),
+            HotlistEvent::Configure => self.open_hotlist_dialog(window, cx),
+            HotlistEvent::Dismiss => {}
+        }
+    }
+
+    /// The popup, anchored at the top-left of `side`'s list.
+    fn hotlist_overlay(&self, side: Side) -> Option<impl IntoElement + use<>> {
+        let open = self.hotlist.as_ref().filter(|open| open.side == side)?;
+        Some(
+            div()
+                .absolute()
+                .top(px(crate::panel_view::LIST_TOP))
+                .left(px(4.0))
+                .child(deferred(
+                    anchored()
+                        .snap_to_window_with_margin(px(8.0))
+                        .child(open.popup.clone()),
+                )),
+        )
+    }
+
     /// A lone Alt (gpui's "alt" binding: pressed and released with no key in
     /// between). gpui doesn't count mouse clicks or window switches in
     /// between, so `alt_armed` covers those.
@@ -267,6 +370,61 @@ impl FileManager {
             None => {}
         }
         self.apply_config(config, cx);
+    }
+
+    /// While the config file is broken (or missing a folder), hotlist
+    /// changes are refused with the reason in an error box.
+    pub(crate) fn config_refused(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(problem) = cx.global::<CurrentConfig>().problem.clone() else {
+            return false;
+        };
+        commands::show_error(
+            "Hotlist not saved",
+            format!("{problem}. Fix the file, then press Ctrl-R."),
+            Some(self.focus.clone()),
+            window,
+            cx,
+        );
+        true
+    }
+
+    /// Saves the whole hotlist to the config file and applies it. A failed
+    /// save shows an error box (after any closing dialog); the list still
+    /// applies for this session.
+    pub(crate) fn save_hotlist(
+        &mut self,
+        hotlist: Vec<yagni_commander_core::config::HotlistEntry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = cx.global::<CurrentConfig>();
+        if current.problem.is_some() {
+            return;
+        }
+        let mut config = current.config.clone();
+        config.hotlist = hotlist;
+        match current
+            .path
+            .clone()
+            .map(|path| config::save_hotlist(&path, &config.hotlist))
+        {
+            Some(Ok(on_disk)) => config = on_disk,
+            Some(Err(e)) => {
+                let message = e.to_string();
+                window.defer(cx, move |window, cx| {
+                    commands::show_error("Hotlist not saved", message, None, window, cx)
+                });
+            }
+            None => {}
+        }
+        self.apply_config(config, cx);
+    }
+
+    /// The active panel's folder as "Add current folder" stores it.
+    pub(crate) fn current_folder_entry_path(&self, cx: &App) -> String {
+        let commander = self.commander.read(cx);
+        let path = commander.panel(commander.active()).path();
+        yagni_commander_core::hotlist::contract(path, commander.home())
     }
 
     /// Makes `config` the settings in use: sort, log, and the global the
@@ -539,6 +697,9 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &ToggleMenu, window, cx| this.toggle_menu(window, cx)))
             .on_action(cx.listener(|this, _: &MenuAlt, window, cx| this.menu_alt(window, cx)))
+            .on_action(cx.listener(|this, _: &DirectoryHotlist, window, cx| {
+                this.directory_hotlist(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenFilesMenu, window, cx| this.open_files_menu(window, cx)),
             )
@@ -578,13 +739,23 @@ impl Render for FileManager {
                     .p(px(PADDING))
                     .child(
                         div()
+                            .relative()
                             .w(relative(self.split_ratio))
                             .flex_none()
                             .h_full()
-                            .child(self.left.clone()),
+                            .child(self.left.clone())
+                            .children(self.hotlist_overlay(Side::Left)),
                     )
                     .child(divider)
-                    .child(div().flex_1().min_w_0().h_full().child(self.right.clone())),
+                    .child(
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .child(self.right.clone())
+                            .children(self.hotlist_overlay(Side::Right)),
+                    ),
             )
             .child(
                 status

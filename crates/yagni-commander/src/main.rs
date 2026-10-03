@@ -4,6 +4,8 @@ mod button_row;
 mod columns;
 mod config_state;
 mod file_manager;
+mod hotlist_dialog;
+mod hotlist_popup;
 mod icon_font;
 mod menu_bar;
 mod menus;
