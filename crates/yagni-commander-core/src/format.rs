@@ -34,11 +34,41 @@ fn format_modified_in(time: SystemTime, tz: TimeZone) -> String {
     }
 }
 
+/// A time in the system time zone with seconds, e.g. `2026-09-30 14:05:09`.
+pub fn format_time(time: SystemTime) -> String {
+    format_time_in(time, TimeZone::system())
+}
+
+fn format_time_in(time: SystemTime, tz: TimeZone) -> String {
+    match Timestamp::try_from(time) {
+        Ok(ts) => ts.to_zoned(tz).strftime("%Y-%m-%d %H:%M:%S").to_string(),
+        Err(_) => String::new(),
+    }
+}
+
+/// A count with thousands separators, e.g. `1,234,567`.
+pub fn format_count(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
 /// `ls -l` style permissions, e.g. `drwxr-xr-x`. Empty when the mode is unknown.
 pub fn format_permissions(entry: &Entry) -> String {
-    let Some(mode) = entry.mode else {
-        return String::new();
-    };
+    match entry.mode {
+        Some(mode) => permissions_text(mode, entry.kind == EntryKind::Dir),
+        None => String::new(),
+    }
+}
+
+/// [`format_permissions`] for a mode; `is_dir` when the mode has no type.
+pub(crate) fn permissions_text(mode: u32, is_dir: bool) -> String {
     let kind = match mode & 0o170000 {
         0o040000 => 'd',
         0o120000 => 'l',
@@ -46,7 +76,7 @@ pub fn format_permissions(entry: &Entry) -> String {
         0o140000 => 's',
         0o060000 => 'b',
         0o020000 => 'c',
-        _ if entry.kind == EntryKind::Dir => 'd',
+        _ if is_dir => 'd',
         _ => '-',
     };
     let bit = |mask: u32, c: char| if mode & mask != 0 { c } else { '-' };
@@ -80,6 +110,27 @@ pub fn format_permissions(entry: &Entry) -> String {
 mod tests {
     use super::*;
     use std::time::{Duration, UNIX_EPOCH};
+
+    #[test]
+    fn counts_get_thousands_separators() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(1000), "1,000");
+        assert_eq!(format_count(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn times_with_seconds() {
+        let t = UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        assert_eq!(format_time_in(t, TimeZone::UTC), "2001-09-09 01:46:40");
+        assert!(!format_time(t).is_empty());
+    }
+
+    #[test]
+    fn permissions_text_without_an_entry() {
+        assert_eq!(permissions_text(0o100644, false), "-rw-r--r--");
+        assert_eq!(permissions_text(0o755, true), "drwxr-xr-x");
+    }
 
     fn with_mode(mode: u32) -> Entry {
         Entry {

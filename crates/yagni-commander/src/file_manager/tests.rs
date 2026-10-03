@@ -4465,3 +4465,150 @@ mod archive_browsing {
         );
     }
 }
+
+mod properties {
+    use super::*;
+
+    fn done(cx: &mut VisualTestContext) -> bool {
+        dialog_open(cx)
+            && file_manager(cx).read_with(cx, |this, _| this.info.as_ref().is_none_or(|i| i.done()))
+    }
+
+    /// Opens Properties, waits for its details and count, returns its text.
+    fn properties(cx: &mut VisualTestContext) -> String {
+        cx.simulate_keystrokes("alt-enter");
+        wait_until(cx, done);
+        box_text(cx)
+    }
+
+    fn value<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+        text.lines()
+            .find_map(|l| l.strip_prefix(label)?.strip_prefix(": "))
+    }
+
+    #[gpui_kit::test]
+    fn alt_enter_on_a_file(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("f"), b"12345").unwrap();
+        cx.simulate_keystrokes("end");
+        let text = properties(cx);
+        assert!(text.starts_with("Properties\n"), "{text}");
+        assert_eq!(value(&text, "Name"), Some("f"));
+        assert_eq!(
+            value(&text, "Folder"),
+            Some(tmp.path().display().to_string().as_str())
+        );
+        assert_eq!(value(&text, "Type"), Some("File"));
+        assert_eq!(value(&text, "Size"), Some("5 bytes (5 B)"));
+        assert!(value(&text, "Contains").is_none());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(file_manager(cx).read_with(cx, |this, _| this.info.is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn alt_enter_on_a_folder_counts_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x"), b"123").unwrap();
+        std::fs::create_dir(tmp.path().join("a/sub")).unwrap();
+        cx.simulate_keystrokes("home down"); // a
+        let text = properties(cx);
+        assert_eq!(value(&text, "Type"), Some("Folder"));
+        assert_eq!(value(&text, "Contains"), Some("1 file, 1 folder"));
+        assert_eq!(value(&text, "Size"), Some("3 bytes (3 B)"));
+        cx.simulate_keystrokes("enter"); // OK
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_symlink_to_a_folder_counts_its_target(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x"), b"123").unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("a"), tmp.path().join("link")).unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("l");
+        cx.simulate_keystrokes("escape");
+        let text = properties(cx);
+        assert_eq!(value(&text, "Name"), Some("link"));
+        assert!(value(&text, "Type").is_some_and(|t| t.starts_with("Symbolic link to ")));
+        assert_eq!(value(&text, "Contains"), Some("1 file, 0 folders"));
+        assert_eq!(value(&text, "Size"), Some("3 bytes (3 B)"));
+    }
+
+    #[gpui_kit::test]
+    fn on_dot_dot_it_shows_the_current_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("home");
+        let text = properties(cx);
+        let name = tmp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(value(&text, "Name"), Some(name.as_str()));
+        let parent = tmp.path().parent().unwrap().display().to_string();
+        assert_eq!(value(&text, "Folder"), Some(parent.as_str()));
+        assert_eq!(
+            value(&text, "Contains"),
+            Some("2 files, 2 folders"),
+            "f, .dot, a, b"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn inside_an_archive_from_the_index(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = super::archive_browsing::inside_zip(cx);
+        cx.simulate_keystrokes("home down"); // src
+        let text = properties(cx);
+        assert_eq!(value(&text, "Contains"), Some("2 files, 1 folder"));
+        assert!(value(&text, "Accessed").is_none());
+        let zip = tmp.path().join("pkg.zip").display().to_string();
+        assert_eq!(value(&text, "Folder"), Some(zip.as_str()));
+        cx.simulate_keystrokes("escape home");
+        cx.run_until_parked();
+        let root = properties(cx); // ".." at the archive's root
+        assert_eq!(value(&root, "Name"), Some("pkg.zip"));
+        assert_eq!(value(&root, "Type"), Some("Folder"));
+        assert_eq!(value(&root, "Contains"), Some("3 files, 2 folders"));
+    }
+
+    #[gpui_kit::test]
+    fn the_menu_item_opens_it_too(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("end");
+        cx.dispatch_action(crate::actions::ShowProperties);
+        wait_until(cx, done);
+        assert!(box_text(cx).contains("Name: f"));
+    }
+
+    #[gpui_kit::test]
+    fn a_closed_box_stops_its_count_and_ignores_its_old_results(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("home down alt-enter");
+        let cancel = file_manager(cx).read_with(cx, |this, _| this.info.as_ref().unwrap().cancel());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed), "stopped");
+        assert!(file_manager(cx).read_with(cx, |this, _| this.info.is_none()));
+        std::fs::write(tmp.path().join("f"), b"1").unwrap();
+        cx.simulate_keystrokes("end");
+        let text = properties(cx);
+        assert_eq!(value(&text, "Name"), Some("f"), "the new box's own lines");
+        assert_eq!(value(&text, "Size"), Some("1 byte (1 B)"));
+    }
+
+    #[gpui_kit::test]
+    fn ignored_while_loading(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        enter_held_a(&tmp, cx);
+        assert!(loading(&commander, cx));
+        cx.simulate_keystrokes("alt-enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        release(&tmp);
+    }
+}

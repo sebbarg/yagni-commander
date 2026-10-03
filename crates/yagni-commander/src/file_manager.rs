@@ -14,15 +14,16 @@ use yagni_commander_core::{Command, Commander, Config, Setting, Side, SortKey, c
 pub(crate) mod commands;
 mod file_ops;
 mod loads;
+mod properties;
 mod watch;
 
 use crate::actions::{
     About, Activate, CancelSearch, CloseTab, CompareContents, Copy, CopyPath, CursorDown,
     CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, Extract,
     FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab, OpenFilesMenu,
-    OpenSettings, Pack, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, SortByModified,
-    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel,
-    SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
+    OpenSettings, Pack, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, ShowProperties,
+    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
+    SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -101,6 +102,10 @@ pub struct FileManager {
     pub(crate) log_dir: Option<PathBuf>,
     /// Where F3 inside an archive puts its private copies. Tests replace it.
     pub(crate) temp_dir: Option<PathBuf>,
+    /// The open Properties box.
+    pub(crate) info: Option<properties::RunningInfo>,
+    /// Id of the last Properties box opened.
+    next_info: u64,
     /// The in-window menu bar; `None` on macOS, which has the native one.
     menu_bar: Option<Entity<MenuBar>>,
     /// The open Ctrl-D popup.
@@ -211,6 +216,8 @@ impl FileManager {
             // This instance's own folder, so others' cleanup leaves it alone.
             temp_dir: yagni_commander_core::storage::viewer_temp_dir()
                 .map(|dir| dir.join(std::process::id().to_string())),
+            info: None,
+            next_info: 0,
             menu_bar,
             hotlist: None,
             hotlist_dialog: None,
@@ -680,6 +687,11 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &Extract, window, cx| this.extract(window, cx)))
             .on_action(
                 cx.listener(|this, _: &CompareContents, window, cx| this.compare(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowProperties, window, cx| {
+                    this.show_properties(window, cx)
+                }),
             )
             .on_action(cx.listener(|this, _: &Copy, window, cx| {
                 this.copy_or_move(file_ops::Kind::Copy, window, cx)

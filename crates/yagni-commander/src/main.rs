@@ -7,6 +7,7 @@ mod file_manager;
 mod hotlist_dialog;
 mod hotlist_popup;
 mod icon_font;
+mod info_dialog;
 mod menu_bar;
 mod menus;
 mod panel_view;

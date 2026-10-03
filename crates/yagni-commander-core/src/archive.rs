@@ -158,6 +158,36 @@ impl ArchiveIndex {
             .to_vec()
     }
 
+    /// The entry at `path` inside the archive (Properties), if any.
+    pub fn entry(&self, path: &[OsString]) -> Option<Entry> {
+        let (name, folder) = path.split_last()?;
+        self.folders
+            .get(folder)?
+            .iter()
+            .find(|e| &e.name == name)
+            .cloned()
+    }
+
+    /// What folder `inner` holds (Properties): instant, from the index.
+    pub fn totals(&self, inner: &[OsString]) -> crate::info::Totals {
+        let mut totals = crate::info::Totals::default();
+        let mut folders = vec![inner.to_vec()];
+        while let Some(folder) = folders.pop() {
+            for entry in self.folders.get(&folder).into_iter().flatten() {
+                if entry.kind == EntryKind::Dir {
+                    totals.folders += 1;
+                    let mut sub = folder.clone();
+                    sub.push(entry.name.clone());
+                    folders.push(sub);
+                } else {
+                    totals.files += 1;
+                    totals.bytes += entry.size.unwrap_or(0);
+                }
+            }
+        }
+        totals
+    }
+
     /// The entries of folder `inner`, with "..", or `None` if there is no
     /// such folder.
     pub(crate) fn entries(&self, inner: &[OsString]) -> Option<Vec<Entry>> {
@@ -364,6 +394,22 @@ mod tests {
         let index = read(&tar);
         assert_eq!(find(&index, &[], "a").kind, EntryKind::Dir);
         assert_eq!(names(&index, &["a"]), ["..", "b"]);
+    }
+
+    #[test]
+    fn totals_walk_the_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        make_zip(&zip, &[("s/a", "12"), ("s/t/b", "345"), ("c", "6")]);
+        let index = read(&zip);
+        let all = index.totals(&[]);
+        assert_eq!((all.files, all.folders, all.bytes), (3, 2, 6));
+        let s = index.totals(&parts(&["s"]));
+        assert_eq!((s.files, s.folders, s.bytes), (2, 1, 5));
+        assert_eq!(
+            index.totals(&parts(&["nope"])),
+            crate::info::Totals::default()
+        );
     }
 
     #[test]

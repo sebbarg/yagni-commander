@@ -295,6 +295,20 @@ keys Return
 typed cmp1
 keys Escape space space   # deselect
 
+echo "Alt-Enter shows a folder's properties"
+mkdir -p "$left/propdir/sub"
+printf 12345 >"$left/propdir/a.txt"
+printf 123 >"$left/propdir/sub/b.txt"
+keys ctrl+r
+typed propdir
+keys Escape alt+Return
+sleep 1
+shot 08h-properties
+keys ctrl+c
+check "properties counted the folder" bash -c 'xclip -o -selection clipboard | grep -qx "Contains: 2 files, 1 folder"'
+check "properties added up the sizes" bash -c 'xclip -o -selection clipboard | grep -qx "Size: 8 bytes (8 B)"'
+keys Escape
+
 echo "Ctrl-. hidden files"
 keys ctrl+period
 shot 07-hidden-shown

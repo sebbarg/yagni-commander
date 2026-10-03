@@ -148,6 +148,13 @@ fn unix_mode(_: &fs::Metadata) -> Option<u32> {
     None
 }
 
+/// `user:group` of `meta`'s owner (Properties).
+pub(crate) fn owner_text(meta: &fs::Metadata) -> Option<String> {
+    OwnerCache::default()
+        .get(meta)
+        .map(|owner| owner.to_string())
+}
+
 /// Resolves uid/gid to `user:group` once per distinct pair. A directory
 /// usually has one or two owners, so this avoids a passwd lookup per entry.
 #[derive(Default)]

@@ -38,6 +38,8 @@ actions!(
         Extract,
         /// Files menu only; no key by default.
         CompareContents,
+        /// Alt-Enter: the Properties box.
+        ShowProperties,
         SyncOtherPanel,
         SwapPanels,
         NewTab,
@@ -142,6 +144,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("backspace", GoUp, context),
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
+        KeyBinding::new("alt-enter", ShowProperties, context),
         // Only while a panel has focus: a text field's context is deeper, so
         // its own Ctrl-C/Ctrl-Ins win there. macOS also takes Cmd-C, shown
         // in its menu (the first binding there, the last on Linux).

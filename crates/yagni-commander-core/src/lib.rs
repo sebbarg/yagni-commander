@@ -12,6 +12,7 @@ mod format;
 mod fs_ops;
 pub mod hotlist;
 pub mod icons;
+pub mod info;
 pub mod launch;
 mod listing;
 pub mod oplog;

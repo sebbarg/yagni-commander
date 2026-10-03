@@ -17,7 +17,7 @@ use crate::button_row::{ButtonRow, OnPress};
 use crate::config_state::CurrentConfig;
 
 /// How often a started opener (Enter on a file) is checked for failure.
-const OPENER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+pub(super) const OPENER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Handles the name typed into a prompt. An error keeps the dialog open.
 type Submit =
