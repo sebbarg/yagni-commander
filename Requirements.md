@@ -121,6 +121,7 @@ Toolbar with e.g. drive icons.
 | Alt-F7 | Find files (v2). |
 
 - Archives later: creating password-protected zips, writing into an opened archive, F6 out of one, nested archives, Ctrl-PgDn, packing other formats (`.tar.gz` first), Alt-Shift-F5 (move into an archive).
+- Todo (owner, 2026-10-03, not designed yet): start a terminal in the current folder; Alt-Enter on a file or folder shows a dialog with information about it.
 
 ### Quick search
 

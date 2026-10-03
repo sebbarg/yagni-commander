@@ -6,7 +6,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::archive::{ArchiveIndex, Stamp};
 use crate::entry::{Entry, read_entries};
@@ -22,6 +22,9 @@ pub struct LoadRequest {
     pub fallback: Option<PathBuf>,
     /// Entries read so far, for the "Loading..." indicator.
     pub progress: Arc<AtomicUsize>,
+    /// Set when the panel no longer wants this read (Escape, a newer
+    /// read): an archive listing stops early.
+    pub cancel: Arc<AtomicBool>,
     /// `path` is inside this archive (Enter on an archive, or a re-read
     /// of a panel inside one).
     pub archive: Option<ArchiveRead>,
@@ -101,7 +104,11 @@ fn read_archive(request: &LoadRequest, archive: &ArchiveRead) -> io::Result<List
     let stamp = Stamp::read(&archive.file)?;
     let index = match &archive.known {
         Some(known) if known.stamp() == stamp => known.clone(),
-        _ => Arc::new(ArchiveIndex::read(&archive.file, &request.progress)?),
+        _ => Arc::new(ArchiveIndex::read(
+            &archive.file,
+            &request.progress,
+            &request.cancel,
+        )?),
     };
     Ok(crate::archive::listing(index, &request.path))
 }
@@ -118,6 +125,7 @@ mod tests {
             path: path.to_path_buf(),
             fallback: fallback.map(Path::to_path_buf),
             progress: Arc::default(),
+            cancel: Arc::default(),
             archive: None,
         }
     }
@@ -168,6 +176,29 @@ mod tests {
         let changed = read_listing(&archive_request(&zip, &zip, Some(first.clone()))).unwrap();
         assert!(!Arc::ptr_eq(&first, changed.archive.as_ref().unwrap()));
         assert_eq!(changed.entries.len(), 3);
+    }
+
+    #[test]
+    fn a_cancelled_archive_read_stops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        crate::test_archives::make_zip(&zip, &[("x", "1"), ("y", "2")]);
+        let req = archive_request(&zip, &zip, None);
+        req.cancel.store(true, Ordering::Relaxed);
+        let err = read_listing(&req).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        let tar = tmp.path().join("a.tar.gz");
+        crate::test_archives::make_tar(
+            &tar,
+            crate::file_ops::Format::TarGz,
+            &[crate::test_archives::T::File("x", "1", 0o644)],
+        );
+        let req = archive_request(&tar, &tar, None);
+        req.cancel.store(true, Ordering::Relaxed);
+        assert_eq!(
+            read_listing(&req).unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
     }
 
     #[test]

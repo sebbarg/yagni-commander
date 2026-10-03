@@ -208,7 +208,9 @@ impl FileManager {
             changes,
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
-            temp_dir: yagni_commander_core::storage::viewer_temp_dir(),
+            // This instance's own folder, so others' cleanup leaves it alone.
+            temp_dir: yagni_commander_core::storage::viewer_temp_dir()
+                .map(|dir| dir.join(std::process::id().to_string())),
             menu_bar,
             hotlist: None,
             hotlist_dialog: None,

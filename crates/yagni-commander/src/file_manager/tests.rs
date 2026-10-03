@@ -4418,6 +4418,23 @@ mod archive_browsing {
     }
 
     #[gpui_kit::test]
+    fn f3_inside_an_archive_writes_nothing_to_the_operation_log(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = inside_zip(cx);
+        let _temp = use_temp_dir(cx);
+        let logs = tempfile::tempdir().unwrap();
+        let log = yagni_commander_core::oplog::OperationLog::open(logs.path()).unwrap();
+        commander.update(cx, |c, _| c.set_log(Some(std::sync::Arc::new(log))));
+        cx.simulate_keystrokes("end f3");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(viewers(cx), 1);
+        let text: String = std::fs::read_dir(logs.path())
+            .unwrap()
+            .map(|f| std::fs::read_to_string(f.unwrap().path()).unwrap())
+            .collect();
+        assert!(!text.contains("viewer-tmp"), "{text}");
+    }
+
+    #[gpui_kit::test]
     fn f3_without_a_temp_folder_says_so(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = inside_zip(cx);
         file_manager(cx).update(cx, |this, _| this.temp_dir = None);

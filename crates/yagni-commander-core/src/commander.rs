@@ -2,13 +2,13 @@ use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use crate::entry::{Entry, EntryKind};
 use crate::fs_ops;
 use crate::listing::{ArchiveRead, Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
-use crate::panel::{Enter, Loading, Navigation, Panel, Refresh};
+use crate::panel::{Cancel, Enter, Loading, Navigation, Panel, Refresh};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 use crate::tabs::Tabs;
@@ -237,13 +237,14 @@ impl Commander {
         // be dropped as stale.
         self.panel_mut(side).take_refresh();
         let fallback = (kind == LoadKind::Startup).then(|| self.home.clone());
-        let (id, progress) = self.push_request(nav.target.clone(), fallback, nav.archive);
+        let (id, progress, cancel) = self.push_request(nav.target.clone(), fallback, nav.archive);
         self.panel_mut(side).set_loading(Loading {
             id,
             path: nav.target,
             select: nav.select,
             progress,
             visible: false,
+            _cancel: Cancel(cancel),
         });
     }
 
@@ -253,18 +254,20 @@ impl Commander {
         path: PathBuf,
         fallback: Option<PathBuf>,
         archive: Option<ArchiveRead>,
-    ) -> (u64, Arc<AtomicUsize>) {
+    ) -> (u64, Arc<AtomicUsize>, Arc<AtomicBool>) {
         self.next_load += 1;
         let id = self.next_load;
         let progress = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
         self.requests.push(LoadRequest {
             id,
             path,
             fallback,
             progress: progress.clone(),
+            cancel: cancel.clone(),
             archive,
         });
-        (id, progress)
+        (id, progress, cancel)
     }
 
     /// The directory watcher saw a change in `side`'s folder: re-read it
@@ -291,8 +294,12 @@ impl Commander {
             None => (panel.path().to_path_buf(), panel.archive_read(true)),
         };
         let fallback = gone.is_some().then(|| self.home.clone());
-        let (id, _) = self.push_request(path, fallback, archive);
-        self.panel_at_mut(at).set_refresh(Refresh { id, gone });
+        let (id, _, cancel) = self.push_request(path, fallback, archive);
+        self.panel_at_mut(at).set_refresh(Refresh {
+            id,
+            gone,
+            _cancel: Cancel(cancel),
+        });
     }
 
     /// A tab came to the front: re-read it quietly, or read it for the
@@ -2562,6 +2569,41 @@ mod archive_fix_tests {
         assert!(c.panel(Side::Right).loading().is_none(), "replaced");
         c.run_loads_now();
         assert_eq!(c.panel(Side::Right).path(), zip, "the read of d is dropped");
+    }
+
+    #[test]
+    fn escape_and_newer_reads_cancel_the_old_read() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let (_tmp, _zip, mut c) = inside();
+        c.execute(Command::GoUp); // back to the folder: a read, pending
+        let escaped = c.take_requests().pop().unwrap();
+        c.cancel_load(Side::Left);
+        assert!(escaped.cancel.load(Relaxed), "Escape");
+
+        // The right panel reads `d`; Alt-Z from the left replaces that read.
+        c.execute(Command::SwitchPanel);
+        put_cursor(&mut c, "d");
+        c.execute(Command::Activate);
+        let replaced = c.take_requests().pop().unwrap();
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::SyncOtherPanel);
+        assert!(replaced.cancel.load(Relaxed), "replaced");
+        assert!(c.panel(Side::Right).loading().is_none());
+
+        // A read that is still wanted is not cancelled.
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::GoUp);
+        let wanted = c.take_requests().pop().unwrap();
+        assert!(!wanted.cancel.load(Relaxed));
+    }
+
+    #[test]
+    fn a_replaced_quiet_reread_is_cancelled() {
+        let (_tmp, _zip, mut c) = inside();
+        c.watch_reload(Side::Left);
+        let quiet = c.take_requests().pop().unwrap();
+        c.execute(Command::Reload);
+        assert!(quiet.cancel.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

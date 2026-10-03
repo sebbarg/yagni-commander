@@ -461,7 +461,7 @@ sleep 0.5
 shot 08g-archive-viewer
 keys Escape
 check "entry viewer closed" bash -c '! xdotool search --name "^readme.txt - yagni-commander\$"'
-check "its private copy deleted" bash -c '[[ -z $(ls -A "$1") ]]' _ "$work/state/yagni-commander/viewer-tmp"
+check "its private copy deleted" bash -c '[[ -z $(find "$1" -mindepth 2) ]]' _ "$work/state/yagni-commander/viewer-tmp"
 xdotool windowfocus "$window"
 sleep 0.5
 keys ctrl+a F5

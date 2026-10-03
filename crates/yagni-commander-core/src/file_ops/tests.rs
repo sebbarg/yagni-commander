@@ -2818,14 +2818,18 @@ fn tar_listing_is_strict_and_carries_owners() {
         &[T::Dir("d/"), T::File("d/x", "xy", 0o644)],
     );
     let mut seen = 0;
-    let listed = extract::read_tar_list(&path, Format::Tar, || seen += 1).unwrap();
+    let listed = extract::read_tar_list(&path, Format::Tar, || {
+        seen += 1;
+        true
+    })
+    .unwrap();
     assert_eq!(seen, 2);
     assert_eq!(listed[1].size, 2);
     assert_eq!(listed[1].owner.as_deref(), Some("me:staff"));
 
     let bad = tmp.path().join("bad.tar.gz");
     fs::write(&bad, b"not gzip").unwrap();
-    assert!(extract::read_tar_list(&bad, Format::TarGz, || {}).is_err());
+    assert!(extract::read_tar_list(&bad, Format::TarGz, || true).is_err());
 }
 
 #[test]
@@ -2835,7 +2839,11 @@ fn zip_listing_counts_entries() {
     make_zip(&path, &[("d/", ""), ("d/x", "xy")]);
     let mut zip = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
     let mut seen = 0;
-    let listed = extract::list_zip(&mut zip, || seen += 1).unwrap();
+    let listed = extract::list_zip(&mut zip, || {
+        seen += 1;
+        true
+    })
+    .unwrap();
     assert_eq!((seen, listed.len()), (2, 2));
     assert!(listed[0].owner.is_none());
 }
@@ -3022,4 +3030,51 @@ fn unsafe_names_are_never_picked() {
     assert!(report.failures.is_empty(), "{report:?}");
     assert_eq!(names(&out), ["ok"]);
     assert!(!tmp.path().join("x").exists());
+}
+
+#[test]
+fn a_picked_name_no_longer_in_the_archive_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = source_zip(tmp.path());
+    let out = tmp.path().join("out");
+    let op = entries_op(
+        &zip,
+        &["src"],
+        &["gone.rs", "main.rs"],
+        Destination::Into(out.clone()),
+    );
+    let report = run_script(&op, &mut Script::default());
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert!(
+        report.failures[0]
+            .message
+            .contains("no longer in the archive")
+    );
+    assert!(
+        report.failures[0]
+            .path
+            .display()
+            .to_string()
+            .ends_with("src/gone.rs")
+    );
+    assert_eq!(names(&out), ["main.rs"], "the rest still copied");
+}
+
+#[test]
+fn a_picked_entry_stored_twice_arrives_once_as_the_last_copy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tar = tmp.path().join("twice.tar");
+    make_tar(
+        &tar,
+        Format::Tar,
+        &[T::File("x", "old", 0o644), T::File("x", "new", 0o644)],
+    );
+    let target = tmp.path().join("copy/x");
+    let op = entries_op(&tar, &[], &["x"], Destination::As(target.clone()));
+    let mut script = Script::default(); // no conflict answers: none asked
+    let report = run_script(&op, &mut script);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert!(script.conflicts.is_empty());
+    assert_eq!(read(&target), "new");
+    assert_eq!(script.last.files_total, 1);
 }

@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{self, BufReader, Read};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -66,6 +66,9 @@ pub(super) struct Sink<'d> {
     written: HashSet<Vec<OsString>>,
     /// Only these entries, without smart extraction.
     pick: Option<&'d Pick>,
+    /// With a pick: entries (by their place in the listing) that a later
+    /// entry of the same name replaces, as the panel shows only the last.
+    superseded: HashSet<usize>,
 }
 
 impl<'d> Sink<'d> {
@@ -87,14 +90,26 @@ impl<'d> Sink<'d> {
         } else {
             vec![stem(archive.file_name().unwrap_or_default())]
         };
-        Self {
+        let mut sink = Self {
             dir,
             archive,
             prefix,
             folders: Vec::new(),
             written: HashSet::new(),
             pick,
+            superseded: HashSet::new(),
+        };
+        if pick.is_some() {
+            let mut last = std::collections::HashMap::new();
+            for (i, item) in listed.iter().enumerate() {
+                if let Some(parts) = item.parts.as_ref().ok().and_then(|p| sink.parts(p))
+                    && let Some(earlier) = last.insert(parts, i)
+                {
+                    sink.superseded.insert(earlier);
+                }
+            }
         }
+        sink
     }
 
     /// Where an entry goes below the extraction folder, or `None` when
@@ -112,13 +127,35 @@ impl<'d> Sink<'d> {
         Some(std::iter::once(top).chain(below.iter().cloned()).collect())
     }
 
-    /// Whether this extraction takes `item`. An unsafe name is taken only
-    /// without a pick, so that it is reported.
-    pub(super) fn takes(&self, item: &Listed) -> bool {
+    /// Whether this extraction takes `item`, the `i`th entry listed. An
+    /// unsafe name is taken only without a pick, so that it is reported.
+    pub(super) fn takes(&self, i: usize, item: &Listed) -> bool {
         match &item.parts {
-            Ok(parts) => self.parts(parts).is_some(),
+            Ok(parts) => self.parts(parts).is_some() && !self.superseded.contains(&i),
             Err(_) => self.pick.is_none(),
         }
+    }
+
+    /// Picked names that no entry has (the panel's index is out of date).
+    fn missing(&self, listed: &[Listed]) -> Vec<Vec<u8>> {
+        let Some(pick) = self.pick else {
+            return Vec::new();
+        };
+        let found: HashSet<&OsString> = listed
+            .iter()
+            .filter_map(|item| item.parts.as_ref().ok())
+            .filter_map(|parts| parts.strip_prefix(pick.inner.as_slice())?.first())
+            .collect();
+        pick.names
+            .iter()
+            .filter(|name| !found.contains(name))
+            .map(|name| {
+                let mut path = PathBuf::new();
+                path.extend(&pick.inner);
+                path.push(name);
+                path.into_os_string().into_vec()
+            })
+            .collect()
     }
 }
 
@@ -281,7 +318,7 @@ impl Engine<'_> {
             Ok(zip) => zip,
             Err(e) => return self.fail(archive, e),
         };
-        let listed = match list_zip(&mut zip, || {}) {
+        let listed = match list_zip(&mut zip, || true) {
             Ok(listed) => listed,
             Err(e) => return self.fail(archive, e),
         };
@@ -293,7 +330,7 @@ impl Engine<'_> {
             if self.observer.is_cancelled() {
                 return self.end_archive(&mut sink, Step::Cancelled);
             }
-            if !sink.takes(item) {
+            if !sink.takes(i, item) {
                 continue;
             }
             let needs_data = item.parts.is_ok() && matches!(item.what, What::File | What::Symlink);
@@ -411,6 +448,8 @@ impl Engine<'_> {
             Err(e) => return self.fail(archive, e),
         };
         let mut step = Step::Done;
+        // The place of each entry in `listed` (metadata entries skipped).
+        let mut i = 0;
         for entry in entries {
             if self.observer.is_cancelled() {
                 return self.end_archive(&mut sink, Step::Cancelled);
@@ -426,7 +465,8 @@ impl Engine<'_> {
                 continue;
             }
             let item = listed_tar(&entry);
-            if !sink.takes(&item) {
+            i += 1;
+            if !sink.takes(i - 1, &item) {
                 continue;
             }
             let link_target = entry.link_name_bytes().map(|bytes| bytes.into_owned());
@@ -441,9 +481,14 @@ impl Engine<'_> {
 
     /// Adds an archive's files and bytes to the progress totals.
     pub(super) fn count(&mut self, listed: &[Listed], sink: &Sink) {
+        for name in sink.missing(listed) {
+            self.fail(&inside(sink.archive, &name), "no longer in the archive");
+        }
         let files = listed
             .iter()
-            .filter(|item| matches!(item.what, What::File) && sink.takes(item));
+            .enumerate()
+            .filter(|(i, item)| matches!(item.what, What::File) && sink.takes(*i, item))
+            .map(|(_, item)| item);
         for item in files {
             self.progress.files_total += 1;
             self.progress.bytes_total += item.size;
@@ -749,15 +794,18 @@ fn tar_reader(path: &Path, format: Format) -> io::Result<Box<dyn Read>> {
     })
 }
 
-/// A zip's entries from its central directory; `each` runs once per entry.
+/// A zip's entries from its central directory; `each` runs once per entry
+/// and stops the listing (`Interrupted`) by returning false.
 pub(crate) fn list_zip<R: Read + io::Seek>(
     zip: &mut zip::ZipArchive<R>,
-    mut each: impl FnMut(),
+    mut each: impl FnMut() -> bool,
 ) -> zip::result::ZipResult<Vec<Listed>> {
     let mut listed = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
         let entry = zip.by_index_raw(i)?;
-        each();
+        if !each() {
+            return Err(io::Error::from(io::ErrorKind::Interrupted).into());
+        }
         let name = entry.name().as_bytes().to_vec();
         let what = if entry.is_dir() {
             What::Dir
@@ -781,10 +829,11 @@ pub(crate) fn list_zip<R: Read + io::Seek>(
 }
 
 /// A tar's entries for browsing: the first read error is the result.
+/// `each` runs once per entry and stops the listing by returning false.
 pub(crate) fn read_tar_list(
     path: &Path,
     format: Format,
-    mut each: impl FnMut(),
+    mut each: impl FnMut() -> bool,
 ) -> io::Result<Vec<Listed>> {
     let mut tar = tar::Archive::new(tar_reader(path, format)?);
     let mut listed = Vec::new();
@@ -793,7 +842,9 @@ pub(crate) fn read_tar_list(
         if is_tar_metadata(&entry) {
             continue;
         }
-        each();
+        if !each() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
         listed.push(listed_tar(&entry));
     }
     Ok(listed)

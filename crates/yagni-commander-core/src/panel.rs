@@ -3,7 +3,7 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::archive::ArchiveIndex;
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
@@ -95,6 +95,19 @@ pub struct Loading {
     pub progress: Arc<AtomicUsize>,
     /// Set once the load took long enough to show the indicator.
     pub visible: bool,
+    /// The read's cancel flag, set when this is dropped (see [`Cancel`]).
+    pub(crate) _cancel: Cancel,
+}
+
+/// Tells a read it is no longer wanted when the panel lets go of it:
+/// finished (harmless), cancelled with Escape, or replaced by a newer read.
+#[derive(Debug, Default)]
+pub(crate) struct Cancel(pub Arc<AtomicBool>);
+
+impl Drop for Cancel {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Loading {
@@ -110,6 +123,8 @@ pub(crate) struct Refresh {
     /// The panel's folder, if it vanished: this read looks for its nearest
     /// existing parent.
     pub gone: Option<PathBuf>,
+    /// Set when this is dropped (see [`Cancel`]).
+    pub _cancel: Cancel,
 }
 
 /// What happened when the entry under the cursor was activated (the tests'
@@ -558,6 +573,7 @@ impl Panel {
             path: nav.target.clone(),
             fallback: None,
             progress: Arc::default(),
+            cancel: Arc::default(),
             archive: nav.archive.clone(),
         })?;
         self.apply(listing, nav.select.as_deref());
@@ -1166,6 +1182,7 @@ mod tests {
             select: None,
             progress,
             visible: false,
+            _cancel: Cancel::default(),
         });
         assert_eq!(panel.loading().unwrap().entries_read(), 7);
         panel.loading_mut().unwrap().visible = true;

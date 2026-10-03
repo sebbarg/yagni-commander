@@ -37,9 +37,10 @@ fn main() {
             std::process::exit(1);
         }
     }
-    // Private copies of archive entries a crashed run left behind.
+    // Private copies of archive entries a crashed run left behind (other
+    // running instances keep theirs).
     if let Some(dir) = storage::viewer_temp_dir() {
-        let _ = storage::clear_dir(&dir);
+        storage::clear_stale_temp(&dir);
     }
     let home = storage::home_dir();
     let (left, right) = app_state.state.startup_tabs(&args, &home);

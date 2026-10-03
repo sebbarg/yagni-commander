@@ -523,7 +523,10 @@ impl FileManager {
     ) -> io::Result<()> {
         let settings = Settings {
             trash: self.trash,
-            log: self.commander.read(cx).log().cloned(),
+            // A viewer's private copy is not a change worth logging.
+            log: (kind != Kind::View)
+                .then(|| self.commander.read(cx).log().cloned())
+                .flatten(),
         };
         let job = Job::spawn(operation, settings)?;
         let commander = self.commander.read(cx);
@@ -1169,6 +1172,9 @@ fn zip_path(dir: &Path, typed: &str) -> io::Result<PathBuf> {
         return Err(invalid("give a name for the archive".into()));
     }
     let mut path = dir.join(typed);
+    if inside_archive(&path) {
+        return Err(invalid("Can't pack into an archive".into()));
+    }
     if typed.ends_with('/') || path.is_dir() {
         return Err(invalid(format!("“{typed}” is a folder")));
     }
@@ -1298,6 +1304,9 @@ fn extract_folder(dir: &Path, typed: &str) -> io::Result<PathBuf> {
         return Err(invalid("give a folder".into()));
     }
     let into = dir.join(typed);
+    if is_or_inside_archive(&into) {
+        return Err(invalid("Can't extract into an archive".into()));
+    }
     if into.exists() && !into.is_dir() {
         return Err(invalid(format!("“{typed}” is not a folder")));
     }
@@ -1341,6 +1350,9 @@ fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Desti
             Destination::As(to)
         });
     }
+    if is_or_inside_archive(&to) {
+        return Err(invalid("Can't copy into an archive".into()));
+    }
     if to.exists() && !to.is_dir() {
         return Err(invalid(format!("“{typed}” is not a directory")));
     }
@@ -1379,6 +1391,12 @@ pub(super) fn inside_archive(path: &Path) -> bool {
     path.ancestors()
         .skip(1)
         .any(|p| is_archive(p) && p.is_file())
+}
+
+/// Whether `path` is an archive file or below one: the target of a panel
+/// at an archive's root, or inside it.
+fn is_or_inside_archive(path: &Path) -> bool {
+    inside_archive(path) || (is_archive(path) && path.is_file())
 }
 
 /// One line per failure, at most [`MAX_LISTED_FAILURES`].
@@ -1772,6 +1790,36 @@ mod tests {
             text(&comparison, None).ends_with("different: u\ncould not read: /l/x/v: denied"),
             "no limit lists all"
         );
+    }
+
+    #[test]
+    fn nothing_is_packed_extracted_or_copied_into_an_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let zip = dir.join("a.zip");
+        std::fs::write(&zip, b"").unwrap();
+        let message = |r: io::Result<PathBuf>| r.unwrap_err().to_string();
+        assert_eq!(
+            message(zip_path(dir, "a.zip/out.zip")),
+            "Can't pack into an archive"
+        );
+        assert_eq!(
+            message(extract_folder(dir, "a.zip/sub")),
+            "Can't extract into an archive"
+        );
+        assert_eq!(
+            message(extract_folder(dir, "a.zip")),
+            "Can't extract into an archive"
+        );
+        let two = [dir.join("x"), dir.join("y")];
+        let err = destination(dir, "a.zip", &two).unwrap_err();
+        assert_eq!(err.to_string(), "Can't copy into an archive");
+        // One entry onto an existing zip replaces it (after Overwrite?).
+        let one = [dir.join("x")];
+        assert!(matches!(
+            destination(dir, "a.zip", &one),
+            Ok(Destination::As(_))
+        ));
     }
 
     #[test]

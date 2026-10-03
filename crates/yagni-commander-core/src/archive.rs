@@ -8,7 +8,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::SystemTime;
 
 use crate::entry::{Entry, EntryKind};
@@ -71,7 +71,12 @@ impl ArchiveIndex {
     }
 
     /// Lists `file` (any [`Format`]); `progress` counts the entries read.
-    pub(crate) fn read(file: &Path, progress: &AtomicUsize) -> io::Result<Self> {
+    /// Setting `cancel` stops it (`Interrupted`): Escape, or a newer read.
+    pub(crate) fn read(
+        file: &Path,
+        progress: &AtomicUsize,
+        cancel: &AtomicBool,
+    ) -> io::Result<Self> {
         let stamp = Stamp::read(file)?;
         let format = file
             .file_name()
@@ -79,12 +84,13 @@ impl ArchiveIndex {
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not an archive"))?;
         let count = || {
             progress.fetch_add(1, Ordering::Relaxed);
+            !cancel.load(Ordering::Relaxed)
         };
         let listed = match format {
             Format::Zip => {
                 let mut zip = zip::ZipArchive::new(BufReader::new(File::open(file)?))
                     .map_err(io::Error::other)?;
-                list_zip(&mut zip, count).map_err(io::Error::other)?
+                list_zip(&mut zip, count).map_err(io::Error::from)?
             }
             format => read_tar_list(file, format, count)?,
         };
@@ -164,8 +170,8 @@ impl ArchiveIndex {
     }
 }
 
-/// Adds every folder on the way to `parent` that has no entry of its own
-/// (a zip may hold `a/b/c` without `a/` or `a/b/`).
+/// Adds every folder on the way to `parent` that is not one yet (a zip may
+/// hold `a/b/c` without `a/` or `a/b/`).
 fn add_folders(folders: &mut Building, parent: &[OsString]) {
     for depth in 1..=parent.len() {
         if folders.contains_key(&parent[..depth]) {
@@ -182,11 +188,11 @@ fn add_folders(folders: &mut Building, parent: &[OsString]) {
             Some(DIR | 0o755),
             None,
         );
+        // A file of this name listed earlier gives way: later entries win.
         folders
             .get_mut(&parent[..depth - 1])
             .expect("the root, or added on the previous turn")
-            .entry(name)
-            .or_insert(implied);
+            .insert(name, implied);
     }
 }
 
@@ -240,7 +246,7 @@ mod tests {
     }
 
     fn read(path: &Path) -> ArchiveIndex {
-        ArchiveIndex::read(path, &AtomicUsize::new(0)).unwrap()
+        ArchiveIndex::read(path, &AtomicUsize::new(0), &AtomicBool::new(false)).unwrap()
     }
 
     fn find(index: &ArchiveIndex, inner: &[&str], label: &str) -> Entry {
@@ -347,6 +353,20 @@ mod tests {
     }
 
     #[test]
+    fn a_later_entry_inside_a_file_makes_it_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let tar = tmp.path().join("a.tar");
+        make_tar(
+            &tar,
+            Format::Tar,
+            &[T::File("a", "1", 0o644), T::File("a/b", "2", 0o644)],
+        );
+        let index = read(&tar);
+        assert_eq!(find(&index, &[], "a").kind, EntryKind::Dir);
+        assert_eq!(names(&index, &["a"]), ["..", "b"]);
+    }
+
+    #[test]
     fn nearest_walks_up_to_an_existing_folder() {
         let tmp = tempfile::tempdir().unwrap();
         let zip = tmp.path().join("a.zip");
@@ -366,15 +386,20 @@ mod tests {
             let path = tmp.path().join(name);
             std::fs::write(&path, data).unwrap();
             assert!(
-                ArchiveIndex::read(&path, &AtomicUsize::new(0)).is_err(),
+                ArchiveIndex::read(&path, &AtomicUsize::new(0), &AtomicBool::new(false)).is_err(),
                 "{name}"
             );
         }
         let plain = tmp.path().join("plain.txt");
         std::fs::write(&plain, b"").unwrap();
-        let err = ArchiveIndex::read(&plain, &AtomicUsize::new(0)).unwrap_err();
+        let err =
+            ArchiveIndex::read(&plain, &AtomicUsize::new(0), &AtomicBool::new(false)).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        let err = ArchiveIndex::read(&tmp.path().join("gone.zip"), &AtomicUsize::new(0));
+        let err = ArchiveIndex::read(
+            &tmp.path().join("gone.zip"),
+            &AtomicUsize::new(0),
+            &AtomicBool::new(false),
+        );
         assert_eq!(err.unwrap_err().kind(), io::ErrorKind::NotFound);
         let folder = tmp.path().join("folder.zip");
         std::fs::create_dir(&folder).unwrap();
@@ -387,7 +412,7 @@ mod tests {
         let zip = tmp.path().join("a.zip");
         make_zip(&zip, &[("x", "1"), ("y", "2")]);
         let progress = AtomicUsize::new(0);
-        let index = ArchiveIndex::read(&zip, &progress).unwrap();
+        let index = ArchiveIndex::read(&zip, &progress, &AtomicBool::new(false)).unwrap();
         assert_eq!(progress.load(Ordering::Relaxed), 2);
         assert_eq!(index.stamp(), Stamp::read(&zip).unwrap());
         make_zip(&zip, &[("x", "1"), ("y", "2"), ("z", "3")]);

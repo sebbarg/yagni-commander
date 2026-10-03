@@ -50,6 +50,39 @@ pub fn private_dir(dir: &Path) -> io::Result<()> {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
 }
 
+/// Startup: removes what earlier runs left in `base` (viewer copies after
+/// a crash). Each running instance has its own folder named after its
+/// process id (`base/<pid>`); those of instances still running stay.
+pub fn clear_stale_temp(base: &Path) {
+    let Ok(entries) = fs::read_dir(base) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let running = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+            .is_some_and(is_running);
+        if running {
+            continue;
+        }
+        let path = entry.path();
+        let _ = if path.is_dir() {
+            clear_dir(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+    }
+}
+
+/// Whether a process with this id exists (signal 0 checks without sending).
+fn is_running(pid: i32) -> bool {
+    use nix::errno::Errno;
+    use nix::sys::signal::kill;
+    use nix::unistd::Pid;
+    pid > 0 && matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
+}
+
 /// Removes `dir` with everything in it; a missing one is fine.
 pub fn clear_dir(dir: &Path) -> io::Result<()> {
     match fs::remove_dir_all(dir) {
@@ -120,6 +153,25 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), StorageError> {
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn only_folders_of_running_instances_survive_the_cleanup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("viewer-tmp");
+        let mine = std::process::id().to_string();
+        for name in [mine.as_str(), "999999999", "junk"] {
+            fs::create_dir_all(base.join(name).join("view-x")).unwrap();
+        }
+        fs::write(base.join("file"), b"").unwrap();
+        clear_stale_temp(&base);
+        let mut left: Vec<_> = fs::read_dir(&base)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, [mine]);
+        clear_stale_temp(&tmp.path().join("missing")); // nothing to do
+    }
 
     #[test]
     fn private_dir_is_owner_only_and_clear_dir_removes_leftovers() {
