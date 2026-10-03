@@ -22,6 +22,8 @@ pub enum Wrap {
     Columns(u32),
     /// One row per line (cut at [`MAX_ROW_CHARS`]).
     Off,
+    /// Hex mode: 16 bytes per row (see `hex`).
+    Hex,
 }
 
 /// One display row: the bytes `start..end` of the file.
@@ -36,8 +38,9 @@ pub struct Row {
     pub dim: Vec<Range<usize>>,
     /// Width of `text` in columns.
     pub width: u32,
-    /// The range of `text` that shows the marked bytes (the current match).
-    pub mark: Option<Range<usize>>,
+    /// The ranges of `text` that show the marked bytes (the current match):
+    /// at most one in text mode, two in hex (the codes and the characters).
+    pub marks: Vec<Range<usize>>,
 }
 
 impl Row {
@@ -48,7 +51,8 @@ impl Row {
         let to_col = from_col.saturating_add(cols);
         let mut text = String::new();
         let mut dim = Vec::new();
-        let mut mark: Option<Range<usize>> = None;
+        // One slot per mark of the row, filled as its characters show.
+        let mut marks: Vec<Option<Range<usize>>> = vec![None; self.marks.len()];
         let mut col = 0;
         // `self.dim` is sorted, so one pass over it keeps this linear.
         let mut dims = self.dim.iter().map(|r| r.start).peekable();
@@ -73,18 +77,19 @@ impl Row {
                     dim.push(at..text.len());
                 }
             }
-            if self.mark.as_ref().is_some_and(|m| m.contains(&ix)) {
-                mark.get_or_insert(at..at).end = text.len();
+            if let Some(k) = self.marks.iter().position(|m| m.contains(&ix)) {
+                marks[k].get_or_insert(at..at).end = text.len();
             }
         }
-        Visible { text, dim, mark }
+        let marks = marks.into_iter().flatten().collect();
+        Visible { text, dim, marks }
     }
 }
 
 impl Row {
-    /// The columns [`Self::mark`] takes.
+    /// The columns the first of [`Self::marks`] takes.
     pub fn mark_columns(&self) -> Option<Range<u32>> {
-        let mark = self.mark.as_ref()?;
+        let mark = self.marks.first()?;
         let width = |s: &str| {
             s.chars()
                 .map(|c| c.width().unwrap_or(1) as u32)
@@ -100,7 +105,7 @@ impl Row {
 pub struct Visible {
     pub text: String,
     pub dim: Vec<Range<usize>>,
-    pub mark: Option<Range<usize>>,
+    pub marks: Vec<Range<usize>>,
 }
 
 /// Decodes one unit at the start of `bytes`: a valid UTF-8 character and its
@@ -122,7 +127,7 @@ pub(crate) fn decode(bytes: &[u8]) -> (Option<char>, usize) {
 /// Lays out the row starting at file offset `start`. `bytes` begins there;
 /// the row never extends past `limit` bytes (a forced break or the end of
 /// the file) and, wrapping, never past `cols` columns. `mark`: file bytes
-/// whose characters get [`Row::mark`].
+/// whose characters get [`Row::marks`].
 pub(crate) fn layout_row(
     bytes: &[u8],
     start: u64,
@@ -189,16 +194,18 @@ pub(crate) fn layout_row(
         }
     }
     // A word-wrap break may have cut the marked text off.
-    let mark = marked
+    let marks = marked
         .map(|m| m.start..m.end.min(text.len()))
-        .filter(|m| m.start < m.end);
+        .filter(|m| m.start < m.end)
+        .into_iter()
+        .collect();
     Row {
         start,
         end: start + i as u64,
         text,
         dim,
         width: col,
-        mark,
+        marks,
     }
 }
 
@@ -330,7 +337,7 @@ mod tests {
                 Some(&mark),
             );
             pos = row.end as usize;
-            rows.push(row.mark.map(|m| row.text[m].to_owned()));
+            rows.push(row.marks.first().map(|m| row.text[m.clone()].to_owned()));
         }
         rows
     }
@@ -384,11 +391,13 @@ mod tests {
     fn visible_clips_the_mark() {
         let row = layout_row(b"abcdef", 0, 6, Wrap::Off, Some(&(1..5)));
         let shown = row.visible(2, 2);
-        assert_eq!((shown.text.as_str(), shown.mark), ("cd", Some(0..2)));
-        assert_eq!(row.visible(5, 3).mark, None);
+        assert_eq!(shown.text, "cd");
+        assert_eq!(shown.marks, std::iter::once(0..2).collect::<Vec<_>>());
+        assert!(row.visible(5, 3).marks.is_empty());
         let wide = layout_row("a日b".as_bytes(), 0, 5, Wrap::Off, Some(&(1..4)));
         let shown = wide.visible(2, 3);
-        assert_eq!((shown.text.as_str(), shown.mark), (" b", Some(0..1)));
+        assert_eq!(shown.text, " b");
+        assert_eq!(shown.marks, std::iter::once(0..1).collect::<Vec<_>>());
     }
 
     #[test]

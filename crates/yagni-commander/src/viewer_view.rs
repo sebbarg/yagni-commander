@@ -22,7 +22,7 @@ use yagni_commander_core::viewer::{
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown, PageUp, ScrollLeft,
-    ScrollRight, Start, ToggleWrap,
+    ScrollRight, Start, ToggleHex, ToggleWrap,
 };
 use crate::app_state::AppState;
 use crate::theme::Theme;
@@ -82,6 +82,8 @@ pub struct ViewerView {
     doc: Document<FileSource>,
     focus: FocusHandle,
     wrap: bool,
+    /// Hex mode (`H`); `wrap` is kept for the way back.
+    hex: bool,
     /// Byte position of the top row (always a row start).
     top: u64,
     /// Columns per row in wrap mode, from the last layout.
@@ -100,7 +102,7 @@ pub struct ViewerView {
     /// Texts of the rows last drawn, and their marked parts (tests read
     /// them).
     shown: Vec<String>,
-    shown_marks: Vec<Option<String>>,
+    shown_marks: Vec<Vec<String>>,
     /// Bytes shown, for the scrollbar thumb and the percentage.
     shown_end: u64,
     dragging_thumb: bool,
@@ -149,6 +151,7 @@ impl ViewerView {
             doc: Document::new(source),
             focus,
             wrap: true,
+            hex: false,
             top: 0,
             cols: 80,
             screen_rows: FALLBACK_ROWS,
@@ -169,7 +172,9 @@ impl ViewerView {
     }
 
     fn layout(&self) -> Wrap {
-        if self.wrap {
+        if self.hex {
+            Wrap::Hex
+        } else if self.wrap {
             Wrap::Columns(self.cols)
         } else {
             Wrap::Off
@@ -202,15 +207,34 @@ impl ViewerView {
         self.set_top(top, cx);
     }
 
+    /// Whether rows are cut to the window (wrap mode) rather than scrolled
+    /// sideways (no wrap, hex).
+    fn wraps_rows(&self) -> bool {
+        self.layout() == Wrap::Columns(self.cols)
+    }
+
     fn toggle_wrap(&mut self, cx: &mut Context<Self>) {
+        if self.hex {
+            return;
+        }
         self.wrap = !self.wrap;
+        self.relayout(cx);
+    }
+
+    fn toggle_hex(&mut self, cx: &mut Context<Self>) {
+        self.hex = !self.hex;
+        self.relayout(cx);
+    }
+
+    /// After a mode change: the row holding the top byte goes on top.
+    fn relayout(&mut self, cx: &mut Context<Self>) {
         self.h_offset = 0;
         let top = self.doc.row_start_at(self.top, self.layout());
         self.set_top(top, cx);
     }
 
     fn scroll_h(&mut self, right: bool, cx: &mut Context<Self>) {
-        if self.wrap {
+        if self.wraps_rows() {
             return;
         }
         let max = self.widest.saturating_sub(self.cols);
@@ -261,6 +285,13 @@ impl ViewerView {
         if let Some(searching) = self.searching_text() {
             return format!("{name} · {} · {searching}", format_size(len));
         }
+        if self.hex {
+            return format!(
+                "{name} · {} · {percent}% · hex · offset {:X}",
+                format_size(len),
+                self.top
+            );
+        }
         let mode = if self.wrap { "wrap" } else { "no wrap" };
         let line = match &self.lines {
             None => "counting lines...".to_owned(),
@@ -295,6 +326,11 @@ impl ViewerView {
         self.wrap
     }
     #[cfg(test)]
+    pub(crate) fn hex(&self) -> bool {
+        self.hex
+    }
+
+    #[cfg(test)]
     pub(crate) fn h_offset(&self) -> u32 {
         self.h_offset
     }
@@ -308,7 +344,7 @@ impl ViewerView {
     }
 
     #[cfg(test)]
-    pub(crate) fn shown_marks(&self) -> &[Option<String>] {
+    pub(crate) fn shown_marks(&self) -> &[Vec<String>] {
         &self.shown_marks
     }
 
@@ -412,7 +448,7 @@ impl Render for ViewerView {
         self.screen_rows = rows;
         if cols != self.cols {
             self.cols = cols;
-            if self.wrap {
+            if self.wraps_rows() {
                 self.top = self.doc.row_start_at(self.top, self.layout());
             }
         }
@@ -439,26 +475,26 @@ impl Render for ViewerView {
             let Visible {
                 text,
                 dim: dims,
-                mark,
-            } = if self.wrap {
+                marks,
+            } = if self.wraps_rows() {
                 Visible {
                     text: row.text.clone(),
                     dim: row.dim.clone(),
-                    mark: row.mark.clone(),
+                    marks: row.marks.clone(),
                 }
             } else {
                 row.visible(self.h_offset, self.cols)
             };
             self.shown.push(text.clone());
             self.shown_marks
-                .push(mark.clone().map(|m| text[m].to_owned()));
-            // The mark wins over the placeholders inside it; gpui wants the
+                .push(marks.iter().map(|m| text[m.clone()].to_owned()).collect());
+            // The marks win over the placeholders inside them; gpui wants the
             // ranges in order.
             let mut highlights: Vec<_> = dims
                 .into_iter()
-                .filter(|d| !mark.as_ref().is_some_and(|m| m.contains(&d.start)))
+                .filter(|d| !marks.iter().any(|m| m.contains(&d.start)))
                 .map(|r| (r, dim))
-                .chain(mark.clone().map(|m| (m, marked)))
+                .chain(marks.iter().map(|m| (m.clone(), marked)))
                 .collect();
             highlights.sort_by_key(|(r, _)| r.start);
             let styled = StyledText::new(SharedString::from(text)).with_highlights(highlights);
@@ -501,6 +537,7 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &Start, _, cx| this.set_top(0, cx)))
             .on_action(cx.listener(|this, _: &End, _, cx| this.end(cx)))
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
+            .on_action(cx.listener(|this, _: &ToggleHex, _, cx| this.toggle_hex(cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollRight, _, cx| this.scroll_h(true, cx)))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))

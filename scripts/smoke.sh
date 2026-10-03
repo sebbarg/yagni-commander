@@ -518,6 +518,10 @@ sleep 1
 shot 10b-viewer-not-found
 keys Escape
 check "Escape closed only the not-found box" xdotool search --name "big.txt - yagni-commander"
+echo "H: hex mode, the match marked in both columns"
+keys h
+shot 10c-viewer-hex
+keys h
 keys Escape
 check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
 xdotool windowfocus "$window"

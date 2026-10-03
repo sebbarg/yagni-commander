@@ -350,7 +350,7 @@ impl ViewerView {
             let last = self.doc.last_top(self.screen_rows, wrap);
             self.top = top.min(last);
         }
-        if !self.wrap {
+        if !self.wraps_rows() {
             let row = self.doc.marked_rows(row_start, 1, wrap, Some(&found));
             if let Some(cols) = row.first().and_then(|r| r.mark_columns()) {
                 let shown = self.h_offset..self.h_offset + self.cols;

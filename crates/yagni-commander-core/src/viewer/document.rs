@@ -11,6 +11,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
+use super::hex::{HEX_ROW, hex_row, offset_digits};
 use super::layout::{BLOCK, ROW_WINDOW, Row, Wrap, decode, layout_row};
 use super::source::Source;
 
@@ -207,6 +208,9 @@ impl<S: Source> Document<S> {
         mark: Option<&Range<u64>>,
     ) -> Vec<Row> {
         self.check_shrunk();
+        if wrap == Wrap::Hex {
+            return self.hex_rows(top, n, mark);
+        }
         let mut rows = Vec::new();
         let mut pos = top;
         while rows.len() < n && pos < self.len {
@@ -218,6 +222,27 @@ impl<S: Source> Document<S> {
             rows.push(row);
         }
         rows
+    }
+
+    fn hex_rows(&mut self, top: u64, n: usize, mark: Option<&Range<u64>>) -> Vec<Row> {
+        let digits = offset_digits(self.len);
+        let mut rows = Vec::new();
+        let mut pos = top;
+        while rows.len() < n && pos < self.len {
+            let bytes = self.bytes(pos, HEX_ROW as usize);
+            if bytes.is_empty() {
+                break; // the file shrank under us
+            }
+            let row = hex_row(&bytes, pos, digits, mark);
+            pos = row.end;
+            rows.push(row);
+        }
+        rows
+    }
+
+    /// Hex rows in the file.
+    fn hex_row_count(&self) -> u64 {
+        self.len.div_ceil(HEX_ROW)
     }
 
     /// Row starts in `from..to`, laying out from the row start `from`.
@@ -268,6 +293,9 @@ impl<S: Source> Document<S> {
             return 0;
         }
         let pos = pos.min(self.len - 1);
+        if wrap == Wrap::Hex {
+            return pos / HEX_ROW * HEX_ROW;
+        }
         let seg = self.segment_start(pos);
         *self.row_starts(seg, pos + 1, wrap).last().unwrap_or(&seg)
     }
@@ -280,6 +308,11 @@ impl<S: Source> Document<S> {
             // The file shrank below the top row: show its end.
             return self.last_top(screen, wrap);
         }
+        if wrap == Wrap::Hex {
+            let last = self.last_top(screen, wrap);
+            let target = top.saturating_add((by as u64).saturating_mul(HEX_ROW));
+            return target.min(last.max(top));
+        }
         let rows = self.rows(top, by.saturating_add(screen), wrap);
         let index = by.min(rows.len().saturating_sub(screen));
         rows.get(index).map_or(top, |r| r.start)
@@ -289,6 +322,14 @@ impl<S: Source> Document<S> {
     pub fn scroll_up(&mut self, top: u64, by: usize, wrap: Wrap) -> u64 {
         self.check_shrunk();
         let mut top = top.min(self.len);
+        if wrap == Wrap::Hex {
+            let row = if top >= self.len {
+                self.hex_row_count()
+            } else {
+                top / HEX_ROW
+            };
+            return row.saturating_sub(by as u64) * HEX_ROW;
+        }
         let mut left = by;
         while left > 0 && top > 0 {
             let seg = self.segment_start(top - 1);
@@ -528,5 +569,73 @@ mod tests {
         // Short reads end the count too.
         let mut d = doc("a\nb\n");
         assert_eq!(d.count_newlines(0, 100), 2);
+    }
+
+    /// A huge file of zeros that counts its reads.
+    struct Huge {
+        len: u64,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl Source for Huge {
+        fn len(&self) -> u64 {
+            self.len
+        }
+
+        fn read_at(&self, buf: &mut [u8], pos: u64) -> std::io::Result<usize> {
+            self.reads.set(self.reads.get() + 1);
+            let n = (self.len.saturating_sub(pos) as usize).min(buf.len());
+            buf[..n].fill(0);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn hex_rows_are_16_bytes_at_multiples_of_16() {
+        let mut d = doc((0..40u8).collect::<Vec<u8>>());
+        let rows = d.rows(0, 10, Wrap::Hex);
+        let spans: Vec<(u64, u64)> = rows.iter().map(|r| (r.start, r.end)).collect();
+        assert_eq!(spans, [(0, 16), (16, 32), (32, 40)]);
+        assert!(rows[2].text.starts_with("00000020  20 21 "));
+        assert_eq!(d.row_start_at(37, Wrap::Hex), 32);
+        assert_eq!(d.row_start_at(100, Wrap::Hex), 32, "clamped");
+        let marked = d.marked_rows(0, 3, Wrap::Hex, Some(&(15..17)));
+        assert_eq!((marked[0].marks.len(), marked[1].marks.len()), (2, 2));
+        assert!(doc(Vec::new()).rows(0, 3, Wrap::Hex).is_empty());
+        assert_eq!(doc(Vec::new()).row_start_at(5, Wrap::Hex), 0);
+    }
+
+    #[test]
+    fn hex_scrolling_is_arithmetic() {
+        let mut d = doc(vec![b'x'; 100]); // rows at 0, 16, ..., 96
+        assert_eq!(d.scroll_down(0, 2, 3, Wrap::Hex), 32);
+        assert_eq!(d.scroll_down(32, 10, 3, Wrap::Hex), 64, "the last screen");
+        assert_eq!(d.last_top(3, Wrap::Hex), 64);
+        assert_eq!(d.scroll_up(64, 1, Wrap::Hex), 48);
+        assert_eq!(d.scroll_up(16, 5, Wrap::Hex), 0);
+        assert_eq!(d.scroll_up(100, 1, Wrap::Hex), 96, "from the end");
+        assert_eq!(d.scroll_down(200, 1, 3, Wrap::Hex), 64, "past the end");
+        assert_eq!(doc(vec![b'x'; 5]).last_top(3, Wrap::Hex), 0);
+    }
+
+    #[test]
+    fn hex_navigation_never_reads_a_huge_file() {
+        let len = 5 << 30;
+        let mut d = Document::new(Huge {
+            len,
+            reads: Default::default(),
+        });
+        let last = d.last_top(10, Wrap::Hex);
+        assert_eq!(last, len - 10 * HEX_ROW);
+        assert_eq!(d.scroll_up(last, 3, Wrap::Hex), last - 48);
+        assert_eq!(d.row_start_at(len / 2 + 7, Wrap::Hex), len / 2);
+        assert_eq!(d.source().reads.get(), 0);
+        let rows = d.rows(last, 10, Wrap::Hex);
+        assert_eq!(rows.len(), 10);
+        assert!(
+            rows[0].text.starts_with("13FFFFF60  00 "),
+            "{}",
+            rows[0].text
+        );
     }
 }

@@ -335,7 +335,7 @@ mod search {
             v.shown_marks()
                 .iter()
                 .enumerate()
-                .filter_map(|(ix, m)| m.clone().map(|m| (ix, m)))
+                .flat_map(|(ix, m)| m.iter().map(move |m| (ix, m.clone())))
                 .collect()
         })
     }
@@ -575,5 +575,98 @@ mod search {
         assert_eq!(marks(&viewer, &mut vcx), [(screen / 3, "line 700".into())]);
         let last = cx.update(|cx| cx.global::<LastSearch>().0.pattern.clone());
         assert_eq!(last, "LINE 700");
+    }
+}
+
+mod hex {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn h_toggles_hex_and_keeps_the_top_byte(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        cx.simulate_keystrokes("down down down down down"); // "line 6" at 35
+        let top = viewer.read_with(&cx, |v, _| v.top());
+        assert_eq!(top, 35);
+        cx.simulate_keystrokes("h");
+        assert!(viewer.read_with(&cx, |v, _| v.hex()));
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 32);
+        let rows = shown(&viewer, &mut cx);
+        assert!(
+            rows[0].starts_with("00000020  20 35 0A 6C 69 6E 65 20  36 0A "),
+            "{}",
+            rows[0]
+        );
+        assert!(rows[0].ends_with("   5.line 6.line 7"), "{}", rows[0]);
+        cx.simulate_keystrokes("down");
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 48);
+        // Back to text: the line holding byte 48 ("line 7" starts at 42).
+        cx.simulate_keystrokes("h");
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 42);
+        assert_eq!(shown(&viewer, &mut cx)[0], "line 7");
+    }
+
+    #[gpui_kit::test]
+    fn w_does_nothing_in_hex_and_the_wrap_mode_comes_back(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
+        cx.simulate_keystrokes("w h w");
+        assert!(viewer.read_with(&cx, |v, _| v.hex() && !v.wraps()));
+        cx.simulate_keystrokes("h");
+        assert!(
+            viewer.read_with(&cx, |v, _| !v.hex() && !v.wraps()),
+            "still no wrap"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_status_line_shows_the_offset(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
+        cx.simulate_keystrokes("h down down");
+        cx.run_until_parked();
+        let status = viewer.update(&mut cx, |v, _| v.status_text());
+        assert!(status.ends_with(" · hex · offset 20"), "{status}");
+    }
+
+    #[gpui_kit::test]
+    fn ends_and_pages_work_in_hex(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx); // 8,893 bytes
+        cx.simulate_keystrokes("h end");
+        let rows = shown(&viewer, &mut cx);
+        assert!(rows.last().unwrap().starts_with("000022B0  "), "{rows:?}");
+        cx.simulate_keystrokes("home pagedown");
+        let screen = viewer.read_with(&cx, |v, _| v.screen_rows()) as u64;
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), (screen - 1) * 16);
+    }
+
+    #[gpui_kit::test]
+    fn left_and_right_scroll_a_narrow_hex_view(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
+        cx.simulate_resize(gpui_kit::size(px(300.0), px(400.0)));
+        cx.simulate_keystrokes("h");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("right");
+        assert_eq!(viewer.read_with(&cx, |v, _| v.h_offset()), 8);
+        // Past the offset's 8 digits.
+        assert!(shown(&viewer, &mut cx)[0].starts_with("  6C 69 6E "));
+    }
+
+    #[gpui_kit::test]
+    fn a_match_shows_in_both_columns(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"abc needle xyz\n", cx);
+        cx.simulate_keystrokes("h ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("needle");
+        cx.simulate_keystrokes("enter");
+        for _ in 0..50 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+            if !viewer.read_with(&cx, |v, _| v.searching()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let marks = viewer.read_with(&cx, |v, _| v.shown_marks()[0].clone());
+        // Across the gap after the 8th byte.
+        assert_eq!(marks, ["6E 65 65 64  6C 65", "needle"]);
     }
 }
