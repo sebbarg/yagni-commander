@@ -17,7 +17,7 @@ use crate::button_row::{ButtonRow, OnPress};
 use crate::config_state::CurrentConfig;
 
 /// How often a started opener (Enter on a file) is checked for failure.
-pub(super) const OPENER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+pub(crate) const OPENER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Handles the name typed into a prompt. An error keeps the dialog open.
 type Submit =
@@ -58,12 +58,31 @@ impl FileManager {
         true
     }
 
+    /// In search results, a command that makes a name shows why it can't
+    /// run (a name there is a relative path). Returns true when refused.
+    pub(super) fn refuse_in_results(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.active_panel(cx).in_results() {
+            return false;
+        }
+        show_error(
+            "In search results",
+            yagni_commander_core::find::IN_RESULTS,
+            Some(self.focus.clone()),
+            window,
+            cx,
+        );
+        true
+    }
+
     /// F2: rename the entry under the cursor.
     pub(super) fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
             return;
         }
         if self.refuse_in_archive(window, cx) {
+            return;
+        }
+        if self.refuse_in_results(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -103,6 +122,9 @@ impl FileManager {
             return;
         }
         if self.refuse_in_archive(window, cx) {
+            return;
+        }
+        if self.refuse_in_results(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -254,6 +276,9 @@ impl FileManager {
             return;
         }
         if self.refuse_in_archive(window, cx) {
+            return;
+        }
+        if self.refuse_in_results(window, cx) {
             return;
         }
         self.end_search(cx);

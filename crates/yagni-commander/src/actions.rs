@@ -40,6 +40,8 @@ actions!(
         CompareContents,
         /// Alt-Enter: the Properties box.
         ShowProperties,
+        /// Alt-F7: the find dialog.
+        FindFiles,
         SyncOtherPanel,
         SwapPanels,
         NewTab,
@@ -103,6 +105,30 @@ pub mod hotlist_list {
     gpui_kit::actions!(hotlist_list, [Up, Down, Remove, MoveUp, MoveDown]);
 }
 
+/// Key context of the find dialog's results list.
+pub const FIND_RESULTS_CONTEXT: &str = "FindResults";
+
+/// Key context of the whole find dialog: its view and its footer.
+pub const FIND_DIALOG_CONTEXT: &str = "FindDialog";
+
+/// Key context of the find dialog's "Skip folders" control, and of its
+/// popup.
+pub const FIND_SKIP_BUTTON_CONTEXT: &str = "FindSkipButton";
+pub const FIND_SKIP_CONTEXT: &str = "FindSkip";
+
+/// Key context of the find dialog's option boxes.
+pub const FIND_OPTION_CONTEXT: &str = "FindOption";
+
+pub mod find_results {
+    gpui_kit::actions!(
+        find_results,
+        [
+            Up, Down, PageUp, PageDown, Home, End, Open, View, Toggle, Feed, SkipOpen, SkipUp,
+            SkipDown, SkipToggle, SkipClose
+        ]
+    );
+}
+
 actions!(
     button_row,
     [
@@ -145,6 +171,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
         KeyBinding::new("alt-enter", ShowProperties, context),
+        KeyBinding::new("alt-f7", FindFiles, context),
         // Only while a panel has focus: a text field's context is deeper, so
         // its own Ctrl-C/Ctrl-Ins win there. macOS also takes Cmd-C, shown
         // in its menu (the first binding there, the last on Linux).
@@ -233,6 +260,35 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("delete", hotlist_list::Remove, list),
         KeyBinding::new("alt-up", hotlist_list::MoveUp, list),
         KeyBinding::new("alt-down", hotlist_list::MoveDown, list),
+    ]);
+    let results = Some(FIND_RESULTS_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", find_results::Up, results),
+        KeyBinding::new("down", find_results::Down, results),
+        KeyBinding::new("pageup", find_results::PageUp, results),
+        KeyBinding::new("pagedown", find_results::PageDown, results),
+        KeyBinding::new("home", find_results::Home, results),
+        KeyBinding::new("end", find_results::End, results),
+        KeyBinding::new("enter", find_results::Open, results),
+        KeyBinding::new("f3", find_results::View, results),
+        KeyBinding::new("space", find_results::Toggle, Some(FIND_OPTION_CONTEXT)),
+        KeyBinding::new(
+            "space",
+            find_results::SkipOpen,
+            Some(FIND_SKIP_BUTTON_CONTEXT),
+        ),
+        KeyBinding::new(
+            "enter",
+            find_results::SkipOpen,
+            Some(FIND_SKIP_BUTTON_CONTEXT),
+        ),
+        KeyBinding::new("up", find_results::SkipUp, Some(FIND_SKIP_CONTEXT)),
+        KeyBinding::new("down", find_results::SkipDown, Some(FIND_SKIP_CONTEXT)),
+        KeyBinding::new("space", find_results::SkipToggle, Some(FIND_SKIP_CONTEXT)),
+        KeyBinding::new("enter", find_results::SkipClose, Some(FIND_SKIP_CONTEXT)),
+        KeyBinding::new("escape", find_results::SkipClose, Some(FIND_SKIP_CONTEXT)),
+        // TC's "Feed to listbox" key.
+        KeyBinding::new("alt-l", find_results::Feed, Some(FIND_DIALOG_CONTEXT)),
     ]);
     let ctx = Some(VIEWER_CONTEXT);
     cx.bind_keys([

@@ -16,6 +16,7 @@ jiff.workspace = true
 liblzma.workspace = true
 notify.workspace = true
 pbkdf2.workspace = true
+regex.workspace = true
 serde.workspace = true
 sha1.workspace = true
 shlex.workspace = true

@@ -102,6 +102,7 @@ typed() {
 }
 shot() { import -window root "$shots/$1.png"; }
 has() { [[ $(cat "$1") == "$2" ]]; }
+title_is() { [[ $(xdotool getwindowname "$window") == "$1 - yagni-commander" ]]; }
 # The app id: WM_CLASS on X11 (the Wayland app_id is the same string).
 app_id() { xprop -id "$1" WM_CLASS | grep -q '= "yagni-commander", "yagni-commander"$'; }
 
@@ -309,6 +310,55 @@ check "properties counted the folder" bash -c 'xclip -o -selection clipboard | g
 check "properties added up the sizes" bash -c 'xclip -o -selection clipboard | grep -qx "Size: 8 bytes (8 B)"'
 keys Escape
 
+echo "Alt-F7 finds files: by name with an exclude, feed to panel, F5; by content, go to file"
+mkdir -p "$left/findme/deep" "$left/findme/target"
+printf 'fn a' >"$left/findme/a.rs"
+printf 'a needle' >"$left/findme/deep/b.rs"
+printf needle >"$left/findme/target/c.rs"
+keys ctrl+r
+typed findme
+keys Escape Return alt+F7
+typed '*.rs | target/'
+keys Return
+sleep 1
+shot 08i-find-dialog
+# The Skip folders popup must paint over the dialog (only a screenshot
+# shows that): Shift-Tab from the list reaches the control.
+keys shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab space
+shot 08i1-find-skip-popup
+keys Escape
+xdotool key --clearmodifiers Tab Tab Tab Tab Tab Tab
+sleep "$delay"
+# The results list has focus: Tab reaches the buttons (ringed, the list's
+# cursor muted), Right selects Feed.
+keys Tab
+shot 08i2-find-buttons-focused
+keys Right Return
+shot 08j-find-results-panel
+# Fed into the right side, now active; the left one stays in findme.
+check "results fed to the right side" title_is "$left/findme"
+keys ctrl+a F5 ctrl+a
+typed "$right"
+keys Return
+check "found a.rs copied" has "$right/a.rs" "fn a"
+check "found deep/b.rs copied flat" has "$right/b.rs" "a needle"
+check "target/ excluded" test ! -e "$right/c.rs"
+keys BackSpace alt+F7 Tab Tab Tab Tab
+typed needle
+keys Return
+sleep 1
+shot 08k-find-content
+keys Return
+check "go to file opened its folder" title_is "$left/findme/deep"
+# Put the panels back: right on $right, left on $left.
+keys BackSpace BackSpace BackSpace
+typed right
+keys Return Tab BackSpace
+check "back in left after find" title_is "$left"
+keys Tab
+check "right back on right" title_is "$right"
+keys Tab
+
 echo "Ctrl-. hidden files"
 keys ctrl+period
 shot 07-hidden-shown
@@ -359,7 +409,6 @@ check "hotlist path saved" grep -q "^path = \"$left\"" "$cfg"
 check "config comment kept after the hotlist save" grep -q "^# smoke config" "$cfg"
 typed docs
 keys Escape Return     # into docs
-title_is() { [[ $(xdotool getwindowname "$window") == "$1 - yagni-commander" ]]; }
 check "in docs" title_is "$left/docs"
 keys ctrl+d
 shot 07h-hotlist-entry

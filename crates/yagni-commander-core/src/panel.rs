@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use crate::archive::ArchiveIndex;
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
 use crate::file_ops::Format;
+use crate::find::Results;
 use crate::listing::{ArchiveRead, Listing};
 use crate::sort::{Sort, SortKey, sort_entries};
 
@@ -43,6 +44,10 @@ pub struct Panel {
     /// The archive `path` is inside, if any. `path` then runs through the
     /// archive file (`/x/a.zip/src`), so it never names a real folder.
     archive: Option<Arc<ArchiveIndex>>,
+    /// The search results shown instead of the folder's entries ("Feed to
+    /// panel"). `path` is then the search's root, and every entry's name
+    /// is its path relative to it.
+    results: Option<Arc<Results>>,
 }
 
 /// Counts and sizes for the panel footer. Directory sizes are unknown, so
@@ -75,6 +80,11 @@ pub(crate) struct Navigation {
     pub select: Option<OsString>,
     /// `target` is inside this archive.
     pub archive: Option<ArchiveRead>,
+    /// Show these search results (at `target`, their root), or re-check
+    /// them on a reload.
+    pub results: Option<Arc<Results>>,
+    /// A missing `target` falls back to its nearest existing parent.
+    pub up_if_missing: bool,
 }
 
 /// What Enter on the cursor entry leads to.
@@ -156,6 +166,7 @@ impl Panel {
             loaded: false,
             stale: false,
             archive: None,
+            results: None,
         }
     }
 
@@ -175,6 +186,7 @@ impl Panel {
             loaded: self.loaded,
             stale: false,
             archive: self.archive.clone(),
+            results: self.results.clone(),
         }
     }
 
@@ -188,6 +200,7 @@ impl Panel {
                 path,
                 entries,
                 archive: None,
+                results: None,
             },
             None,
         );
@@ -243,6 +256,8 @@ impl Panel {
                 target: self.path.join(&entry.name),
                 select: None,
                 archive: self.archive_read(true),
+                results: None,
+                up_if_missing: false,
             }),
             // No archives in archives, nothing runs from one.
             EntryKind::File if self.in_archive() => Enter::None,
@@ -252,6 +267,8 @@ impl Panel {
                     target: file.clone(),
                     select: None,
                     archive: Some(ArchiveRead { file, known: None }),
+                    results: None,
+                    up_if_missing: false,
                 })
             }
             EntryKind::File => Enter::File(self.path.join(&entry.name)),
@@ -260,6 +277,17 @@ impl Panel {
 
     /// Going up: the parent, with the cursor on the folder we came from.
     pub(crate) fn parent_target(&self) -> Option<Navigation> {
+        // Out of search results: their root folder.
+        if self.results.is_some() {
+            return Some(Navigation {
+                target: self.path.clone(),
+                select: None,
+                archive: None,
+                results: None,
+                // The folder searched may be gone by now.
+                up_if_missing: true,
+            });
+        }
         // At an archive's root, up leaves the archive.
         if let Some(index) = &self.archive
             && self.path == index.file()
@@ -268,6 +296,8 @@ impl Panel {
                 target: index.file().parent()?.to_path_buf(),
                 select: index.file().file_name().map(|n| n.to_os_string()),
                 archive: None,
+                results: None,
+                up_if_missing: false,
             });
         }
         let parent = self.path.parent()?.to_path_buf();
@@ -275,6 +305,8 @@ impl Panel {
             target: parent,
             select: self.path.file_name().map(|n| n.to_os_string()),
             archive: self.archive_read(true),
+            results: None,
+            up_if_missing: false,
         })
     }
 
@@ -286,11 +318,22 @@ impl Panel {
             select: select.map(OsStr::to_os_string).or(keep),
             // An archive is read again only if it changed.
             archive: self.archive_read(true),
+            // Search results are re-checked, never searched again.
+            results: self.results.clone(),
+            up_if_missing: false,
         }
     }
 
     pub fn archive(&self) -> Option<&Arc<ArchiveIndex>> {
         self.archive.as_ref()
+    }
+
+    pub fn results(&self) -> Option<&Arc<Results>> {
+        self.results.as_ref()
+    }
+
+    pub fn in_results(&self) -> bool {
+        self.results.is_some()
     }
 
     pub fn in_archive(&self) -> bool {
@@ -320,16 +363,26 @@ impl Panel {
         self.apply(listing, nav.select.as_deref());
     }
 
+    /// Shows search results: no read.
+    pub(crate) fn show_results(&mut self, results: Arc<Results>, select: Option<&OsStr>) {
+        self.apply(results.listing(), select);
+    }
+
     /// Shows a finished read, with the cursor on `select` if it is there.
     pub(crate) fn apply(&mut self, listing: Listing, select: Option<&OsStr>) {
         let Listing {
             path: target,
             entries,
             archive,
+            results,
         } = listing;
-        let (mut entries, hidden) = split_hidden(entries, self.show_hidden);
+        // The search decided what to show: nothing is hidden there.
+        let (mut entries, hidden) = split_hidden(entries, self.show_hidden || results.is_some());
         sort_entries(&mut entries, self.sort);
-        let same_dir = target == self.path && self.loaded;
+        // Into or out of search results is a new listing, even at the
+        // same path: cursor at the top, nothing selected.
+        let same_dir =
+            target == self.path && self.loaded && results.is_some() == self.results.is_some();
         let cursor = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(if same_dir {
@@ -345,6 +398,7 @@ impl Panel {
         }
         self.path = target;
         self.archive = archive;
+        self.results = results;
         self.entries = entries;
         self.hidden = hidden;
         self.cursor = cursor;
@@ -362,6 +416,9 @@ impl Panel {
             return;
         }
         self.show_hidden = show;
+        if self.results.is_some() {
+            return; // every result shows; leaving them applies the setting
+        }
         if show {
             self.entries.append(&mut self.hidden);
             self.resort(self.sort);
@@ -508,9 +565,9 @@ impl Panel {
     /// `prefix`, ignoring case.
     pub fn find_prefix(&self, prefix: &str) -> Option<usize> {
         let prefix = prefix.to_lowercase();
-        self.entries
-            .iter()
-            .position(|e| e.kind != EntryKind::Parent && e.sort_name.starts_with(&prefix))
+        self.entries.iter().position(|e| {
+            e.kind != EntryKind::Parent && file_name(&e.sort_name).starts_with(&prefix)
+        })
     }
 
     /// The next (or previous) entry after `from` whose name starts with
@@ -528,7 +585,7 @@ impl Panel {
             })
             .find(|&ix| {
                 let e = &self.entries[ix];
-                e.kind != EntryKind::Parent && e.sort_name.starts_with(&prefix)
+                e.kind != EntryKind::Parent && file_name(&e.sort_name).starts_with(&prefix)
             })
     }
 
@@ -556,6 +613,12 @@ impl Panel {
     }
 }
 
+/// A name's last component: a search result's file name (its name is a
+/// relative path); any other name as it is.
+fn file_name(name: &str) -> &str {
+    name.rsplit('/').next().unwrap_or(name)
+}
+
 fn split_hidden(entries: Vec<Entry>, show_hidden: bool) -> (Vec<Entry>, Vec<Entry>) {
     if show_hidden {
         (entries, Vec::new())
@@ -575,6 +638,8 @@ impl Panel {
             progress: Arc::default(),
             cancel: Arc::default(),
             archive: nav.archive.clone(),
+            results: nav.results.clone(),
+            up_if_missing: false,
         })?;
         self.apply(listing, nav.select.as_deref());
         Ok(())
@@ -605,6 +670,8 @@ impl Panel {
             target: path,
             select: select.map(OsStr::to_os_string),
             archive: None,
+            results: None,
+            up_if_missing: false,
         })
     }
 }
@@ -1164,6 +1231,7 @@ mod tests {
                 path: tmp.path().to_path_buf(),
                 entries,
                 archive: None,
+                results: None,
             },
             Some(OsStr::new("beta")),
         );

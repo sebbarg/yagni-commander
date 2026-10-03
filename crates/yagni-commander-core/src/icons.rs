@@ -49,7 +49,7 @@ use crate::{Entry, EntryKind};
 pub fn icon(entry: &Entry) -> char {
     match entry.kind {
         EntryKind::Parent => PARENT,
-        EntryKind::Dir => find(SPECIAL_FOLDERS, &entry.label).unwrap_or(FOLDER),
+        EntryKind::Dir => find(SPECIAL_FOLDERS, file_name(&entry.label)).unwrap_or(FOLDER),
         EntryKind::File => file_icon(entry),
     }
 }
@@ -59,13 +59,18 @@ fn file_icon(entry: &Entry) -> char {
     if entry.is_symlink && entry.size.is_none() && entry.modified.is_none() {
         return FILE;
     }
-    let name = entry.label.as_str();
+    let name = file_name(&entry.label);
     let lower = name.to_lowercase();
     find(table::FILE_NAMES, name)
         .or_else(|| find(table::FILE_NAMES, &lower))
         .or_else(|| extensions(&lower).find_map(|ext| find(table::EXTENSIONS, ext)))
         .or_else(|| is_executable(entry).then_some(EXECUTABLE))
         .unwrap_or(FILE)
+}
+
+/// A search result's name is a relative path: its last component.
+fn file_name(label: &str) -> &str {
+    label.rsplit('/').next().unwrap_or(label)
 }
 
 /// "a.d.ts" gives "d.ts", then "ts". A leading dot doesn't start one.
@@ -178,6 +183,16 @@ mod tests {
 
     fn in_table(table: &[(&str, char)], key: &str) -> char {
         table[table.binary_search_by(|(k, _)| k.cmp(&key)).unwrap()].1
+    }
+
+    #[test]
+    fn a_search_result_is_iconed_by_its_file_name() {
+        assert_eq!(icon(&file("src/Cargo.toml")), icon(&file("Cargo.toml")));
+        assert_eq!(icon(&file("a.b/main.rs")), icon(&file("main.rs")));
+        assert_eq!(
+            icon(&entry("x/.git", EntryKind::Dir)),
+            in_table(SPECIAL_FOLDERS, ".git")
+        );
     }
 
     #[test]

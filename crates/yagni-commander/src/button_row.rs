@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
     App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
@@ -26,6 +27,8 @@ pub type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
 pub struct ButtonRow {
     focus: FocusHandle,
     buttons: Vec<(SharedString, OnPress)>,
+    /// Indices of buttons that are drawn disabled and do nothing.
+    disabled: Vec<usize>,
     selected: usize,
     /// What Ctrl-C copies while the row has focus (a message box's text).
     copy_text: Option<SharedString>,
@@ -42,6 +45,7 @@ impl ButtonRow {
             focus: cx.focus_handle().tab_stop(true),
             selected: selected.min(buttons.len().saturating_sub(1)),
             buttons,
+            disabled: Vec::new(),
             copy_text: None,
         }
     }
@@ -66,6 +70,21 @@ impl ButtonRow {
         self.copy_text = Some(text.into());
     }
 
+    /// Renames the button at `index` (Search becomes Stop).
+    pub fn set_label(&mut self, index: usize, label: impl Into<SharedString>) {
+        if let Some(button) = self.buttons.get_mut(index) {
+            button.0 = label.into();
+        }
+    }
+
+    /// A disabled button is drawn so and does nothing when pressed.
+    pub fn set_enabled(&mut self, index: usize, enabled: bool) {
+        self.disabled.retain(|&ix| ix != index);
+        if !enabled {
+            self.disabled.push(index);
+        }
+    }
+
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
         self.selected = index;
         cx.notify();
@@ -75,9 +94,28 @@ impl ButtonRow {
     /// it may close the dialog (which re-renders this row).
     fn press(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.select(index, cx);
+        if self.disabled.contains(&index) {
+            return;
+        }
         let on_press = self.buttons[index].1.clone();
         window.defer(cx, move |window, cx| on_press(window, cx));
     }
+}
+
+/// The ring drawn around the control that has keyboard focus: the same
+/// accent band for buttons, the find dialog's option boxes and lists, so
+/// one look says "the keys go here". Its parent must be `relative()`.
+pub fn focus_ring(accent: gpui_kit::Rgba, what: &'static str) -> gpui_kit::Div {
+    div()
+        .debug_selector(move || format!("focus-ring-{what}"))
+        .absolute()
+        .top(px(-3.0))
+        .left(px(-3.0))
+        .right(px(-3.0))
+        .bottom(px(-3.0))
+        .border_2()
+        .border_color(accent)
+        .rounded(px(8.0))
 }
 
 impl Focusable for ButtonRow {
@@ -87,8 +125,12 @@ impl Focusable for ButtonRow {
 }
 
 impl Render for ButtonRow {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let last = self.buttons.len().saturating_sub(1);
+        // The selected button is the default (Enter in a text field); the
+        // ring says the row itself has the keys.
+        let focused = self.focus.is_focused(window);
+        let accent = crate::theme::Theme::get(cx).colors.accent;
         div()
             .key_context(BUTTON_ROW_CONTEXT)
             .track_focus(&self.focus)
@@ -127,11 +169,23 @@ impl Render for ButtonRow {
                 }),
             )
             .children(self.buttons.iter().enumerate().map(|(ix, (label, _))| {
-                Button::new(("button", ix))
-                    .label(label.clone())
-                    .tab_stop(false)
-                    .when(ix == self.selected, |b| b.primary())
-                    .on_click(cx.listener(move |this, _, window, cx| this.press(ix, window, cx)))
+                let selector = format!("button-{label}");
+                div()
+                    .relative()
+                    .debug_selector(move || selector)
+                    .when(focused && ix == self.selected, |d| {
+                        d.child(focus_ring(accent, "button"))
+                    })
+                    .child(
+                        Button::new(("button", ix))
+                            .label(label.clone())
+                            .tab_stop(false)
+                            .disabled(self.disabled.contains(&ix))
+                            .when(ix == self.selected, |b| b.primary())
+                            .on_click(
+                                cx.listener(move |this, _, window, cx| this.press(ix, window, cx)),
+                            ),
+                    )
             }))
     }
 }

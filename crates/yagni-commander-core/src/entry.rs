@@ -80,9 +80,12 @@ impl Entry {
     }
 }
 
-/// True for names starting with `.`. Callers exclude "..".
+/// True for names starting with `.`; for a search result (named by its
+/// relative path), its file name. Callers exclude "..".
 pub(crate) fn is_hidden_name(name: &OsStr) -> bool {
-    name.as_encoded_bytes().first() == Some(&b'.')
+    let bytes = name.as_encoded_bytes();
+    let file = bytes.rsplit(|&b| b == b'/').next().unwrap_or(bytes);
+    file.first() == Some(&b'.')
 }
 
 /// Reads `dir` and returns its entries, unsorted (see [`crate::sort::sort_entries`]).
@@ -102,39 +105,55 @@ pub(crate) fn read_entries(dir: &Path, progress: &AtomicUsize) -> io::Result<Vec
     for dirent in fs::read_dir(dir)? {
         let Ok(dirent) = dirent else { continue };
         progress.fetch_add(1, Ordering::Relaxed);
-        let name = dirent.file_name();
-        let label = name.to_string_lossy().into_owned();
         let link_meta = dirent.metadata().ok();
-        let is_symlink = link_meta
-            .as_ref()
-            .is_some_and(|m| m.file_type().is_symlink());
-        let mode = link_meta.as_ref().and_then(unix_mode);
-        let owner = link_meta.as_ref().and_then(|m| owners.get(m));
-        // Follow symlinks so a link to a directory behaves like a directory.
-        let meta = if is_symlink {
-            fs::metadata(dirent.path()).ok()
-        } else {
-            link_meta
-        };
-        let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
-        entries.push(Entry {
-            name,
-            sort_name: label.to_lowercase(),
-            label,
-            kind: if is_dir {
-                EntryKind::Dir
-            } else {
-                EntryKind::File
-            },
-            is_symlink,
-            size: meta.as_ref().filter(|m| !m.is_dir()).map(|m| m.len()),
-            modified: meta.and_then(|m| m.modified().ok()),
-            mode,
-            owner,
-        });
+        entries.push(stat_entry(
+            dirent.file_name(),
+            &dirent.path(),
+            link_meta,
+            &mut owners,
+        ));
     }
 
     Ok(entries)
+}
+
+/// The entry for `path`, listed as `name`, from its own metadata
+/// (`link_meta`, not following a symlink). Symlinks take kind, size and
+/// modification time from their target; mode and owner are the link's own.
+pub(crate) fn stat_entry(
+    name: OsString,
+    path: &Path,
+    link_meta: Option<fs::Metadata>,
+    owners: &mut OwnerCache,
+) -> Entry {
+    let label = name.to_string_lossy().into_owned();
+    let is_symlink = link_meta
+        .as_ref()
+        .is_some_and(|m| m.file_type().is_symlink());
+    let mode = link_meta.as_ref().and_then(unix_mode);
+    let owner = link_meta.as_ref().and_then(|m| owners.get(m));
+    // Follow symlinks so a link to a directory behaves like a directory.
+    let meta = if is_symlink {
+        fs::metadata(path).ok()
+    } else {
+        link_meta
+    };
+    let is_dir = meta.as_ref().is_some_and(|m| m.is_dir());
+    Entry {
+        name,
+        sort_name: label.to_lowercase(),
+        label,
+        kind: if is_dir {
+            EntryKind::Dir
+        } else {
+            EntryKind::File
+        },
+        is_symlink,
+        size: meta.as_ref().filter(|m| !m.is_dir()).map(|m| m.len()),
+        modified: meta.and_then(|m| m.modified().ok()),
+        mode,
+        owner,
+    }
 }
 
 #[cfg(unix)]
@@ -158,7 +177,7 @@ pub(crate) fn owner_text(meta: &fs::Metadata) -> Option<String> {
 /// Resolves uid/gid to `user:group` once per distinct pair. A directory
 /// usually has one or two owners, so this avoids a passwd lookup per entry.
 #[derive(Default)]
-struct OwnerCache(HashMap<(u32, u32), Arc<str>>);
+pub(crate) struct OwnerCache(HashMap<(u32, u32), Arc<str>>);
 
 impl OwnerCache {
     #[cfg(unix)]
@@ -203,6 +222,15 @@ mod tests {
         assert!(hidden(".dot"));
         assert!(!hidden("plain.txt"));
         assert!(!hidden(".."));
+    }
+
+    #[test]
+    fn a_search_result_is_hidden_by_its_file_name() {
+        let entry = |name: &str| {
+            Entry::archived(name.into(), EntryKind::File, false, None, None, None, None)
+        };
+        assert!(entry("src/.env").is_hidden());
+        assert!(!entry(".git/config").is_hidden());
     }
 
     #[test]

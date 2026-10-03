@@ -28,6 +28,8 @@ notify = "7.0.0"
 nix = { version = "0.31", default-features = false, features = ["user", "fs", "dir", "signal"] }
 trash = "5"
 unicode-width = "0.2"
+# Alt-F7 text search. Already in the tree: same version, no new crate.
+regex = "1.13"
 tempfile = "3"
 # Archives (Alt-F5, Alt-F6). zip without its default codecs: Deflate (zlib-rs
 # through flate2) and Deflate64, which Windows uses for big zips;

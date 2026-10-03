@@ -9034,6 +9034,7 @@ dependencies = [
  "nix",
  "notify",
  "pbkdf2 0.13.0",
+ "regex",
  "serde",
  "sha1",
  "shlex 2.0.1",

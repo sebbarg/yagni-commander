@@ -162,7 +162,7 @@ impl PanelView {
                             .overflow_hidden()
                             .whitespace_nowrap()
                             .text_ellipsis()
-                            .child(label(panel.path())),
+                            .child(tab_label(panel)),
                     )
                     .on_mouse_down(
                         MouseButton::Left,
@@ -264,11 +264,30 @@ impl Render for PanelView {
                     .whitespace_nowrap()
                     .text_ellipsis_start()
                     .child(text.clone()),
-                None => div()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_ellipsis_start()
-                    .child(panel.path().display().to_string()),
+                None => {
+                    let (prefix, path) = header_parts(panel);
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .whitespace_nowrap()
+                        .when_some(prefix, |d, prefix| {
+                            d.child(
+                                div()
+                                    .debug_selector(|| {
+                                        format!("results-prefix-{}", side_name(self.side))
+                                    })
+                                    .flex_none()
+                                    .child(prefix),
+                            )
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis_start()
+                                .child(path),
+                        )
+                }
             });
 
         // The quick search box sits in the active panel's footer while open.
@@ -462,6 +481,23 @@ fn name_color(entry: &Entry, colors: &Colors) -> Rgba {
         EntryKind::Parent | EntryKind::Dir if entry.is_symlink => colors.symlink,
         EntryKind::Parent | EntryKind::Dir => colors.directory,
         EntryKind::File => colors.text,
+    }
+}
+
+/// The path header: for search results, a prefix ("Results: *.rs in ")
+/// that is never cut, then the path, which a narrow panel shortens from the
+/// left.
+pub(crate) fn header_parts(panel: &yagni_commander_core::Panel) -> (Option<String>, String) {
+    let prefix = panel.results().map(|r| r.header_prefix());
+    (prefix, panel.path().display().to_string())
+}
+
+/// A tab's label.
+pub(crate) fn tab_label(panel: &yagni_commander_core::Panel) -> String {
+    if panel.in_results() {
+        "Results".into()
+    } else {
+        label(panel.path())
     }
 }
 

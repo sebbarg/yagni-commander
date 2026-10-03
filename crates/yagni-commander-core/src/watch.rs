@@ -427,6 +427,8 @@ mod tests {
             progress: Arc::default(),
             cancel: Arc::default(),
             archive: None,
+            results: None,
+            up_if_missing: false,
         };
         crate::read_listing(&request).unwrap();
         std::fs::read(tmp.path().join("f")).unwrap(); // F3 opens files too

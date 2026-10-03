@@ -2483,6 +2483,21 @@ fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
 }
 
 // The menu bar: Linux only (macOS has the native one, no F10 or lone Alt).
+#[gpui_kit::test]
+fn a_button_row_rings_its_button_only_while_it_has_focus(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("f7");
+    cx.run_until_parked();
+    assert!(dialog_open(cx));
+    assert!(
+        bounds(cx, "focus-ring-button".into()).is_none(),
+        "the field has focus"
+    );
+    cx.simulate_keystrokes("tab");
+    assert!(bounds(cx, "focus-ring-button".into()).is_some());
+    cx.simulate_keystrokes("escape");
+}
+
 #[cfg(not(target_os = "macos"))]
 mod menu_bar {
     use super::*;
@@ -4610,5 +4625,728 @@ mod properties {
         cx.run_until_parked();
         assert!(!dialog_open(cx));
         release(&tmp);
+    }
+}
+
+mod results_panel {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use yagni_commander_core::find::{self, Query, masks::Masks};
+
+    /// `open`'s folder with `src/main.rs` and `src/sub/lib.rs`, the left
+    /// panel showing the `*.rs` results.
+    fn fed(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::create_dir_all(tmp.path().join("src/sub")).unwrap();
+        std::fs::write(tmp.path().join("src/main.rs"), b"x").unwrap();
+        std::fs::write(tmp.path().join("src/sub/lib.rs"), b"y").unwrap();
+        let query = Query {
+            root: tmp.path().into(),
+            masks: Masks::parse("*.rs"),
+            skip: Vec::new(),
+            text: None,
+        };
+        let mut found = Vec::new();
+        find::search(
+            &query,
+            &AtomicBool::new(false),
+            &find::Progress::default(),
+            &mut |f| found.push(f),
+        );
+        let results =
+            find::Results::new(tmp.path().into(), "*.rs".into(), std::sync::Arc::new(found));
+        commander.update(cx, |c, cx| {
+            // Fed from the right: the left side shows them, active.
+            c.set_active(Side::Right);
+            c.feed(results);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        (tmp, commander, cx)
+    }
+
+    fn labels(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> Vec<String> {
+        commander.read_with(cx, |c, _| {
+            c.panel(side)
+                .entries()
+                .iter()
+                .map(|e| e.label.clone())
+                .collect()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn f2_f7_and_shift_f4_are_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = fed(cx);
+        for key in ["down f2", "f7", "shift-f4"] {
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert!(dialog_open(cx), "{key}");
+            let text = box_text(cx);
+            assert!(text.contains(find::IN_RESULTS), "{key}: {text}");
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            assert!(!dialog_open(cx), "{key}");
+        }
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 5);
+    }
+
+    #[gpui_kit::test]
+    fn f5_on_one_result_targets_its_file_name(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = fed(cx);
+        // The right panel into `a`; the left cursor on src/main.rs.
+        cx.simulate_keystrokes("tab down enter tab down");
+        cx.simulate_keystrokes("f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("a/main.rs").is_file());
+        assert_eq!(
+            labels(&commander, Side::Left, cx),
+            ["..", "src/main.rs", "src/sub/lib.rs"],
+            "still the results after the reload"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn f8_drops_the_trashed_result(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = fed(cx);
+        use_fake_trash(cx);
+        cx.simulate_keystrokes("down f8");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!tmp.path().join("src/main.rs").exists());
+        assert_eq!(labels(&commander, Side::Left, cx), ["..", "src/sub/lib.rs"]);
+    }
+
+    #[gpui_kit::test]
+    fn the_header_and_tab_say_results(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = fed(cx);
+        commander.read_with(cx, |c, _| {
+            let panel = c.panel(Side::Left);
+            assert_eq!(
+                crate::panel_view::header_parts(panel),
+                (
+                    Some("Results: *.rs in ".to_owned()),
+                    tmp.path().display().to_string()
+                )
+            );
+            assert_eq!(crate::panel_view::tab_label(panel), "Results");
+            assert_eq!(
+                crate::panel_view::header_parts(c.panel(Side::Right)),
+                (None, tmp.path().display().to_string())
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn a_narrow_header_shortens_the_path_not_the_results_prefix(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = fed(cx);
+        let prefix = bounds(cx, "results-prefix-left".into()).unwrap().size.width;
+        // The divider far left: the left header gets very narrow.
+        let start = center(cx, "divider");
+        let target = gpui_kit::point(gpui_kit::px(40.0), start.y);
+        let left = gpui_kit::MouseButton::Left;
+        let modifiers = gpui_kit::Modifiers::default();
+        cx.simulate_mouse_down(start, left, modifiers);
+        cx.simulate_mouse_move(target, left, modifiers);
+        cx.simulate_mouse_up(target, left, modifiers);
+        assert_eq!(
+            bounds(cx, "results-prefix-left".into()).unwrap().size.width,
+            prefix
+        );
+    }
+}
+
+mod find_files {
+    use super::*;
+    use crate::find_dialog::{Field, FindDialog, Status, status_text};
+    use yagni_commander_core::find::SearchSummary;
+
+    /// `open`'s folder plus `a/x.rs` and `b/y.txt` (containing "needle").
+    fn opened(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x.rs"), b"fn main").unwrap();
+        std::fs::write(tmp.path().join("b/y.txt"), b"a needle here").unwrap();
+        activate(cx);
+        (tmp, commander, cx)
+    }
+
+    fn dialog(cx: &mut VisualTestContext) -> Entity<FindDialog> {
+        file_manager(cx).read_with(cx, |this, _| this.find.clone().expect("find dialog"))
+    }
+
+    fn running(cx: &mut VisualTestContext) -> bool {
+        let view = dialog(cx);
+        view.read_with(cx, |v, _| v.running())
+    }
+
+    fn results(cx: &mut VisualTestContext) -> Vec<String> {
+        let view = dialog(cx);
+        view.read_with(cx, |v, _| v.result_labels())
+    }
+
+    fn set(cx: &mut VisualTestContext, field: Field, text: &str) {
+        let view = dialog(cx);
+        view.update_in(cx, |v, window, cx| v.set_field(field, text, window, cx));
+    }
+
+    /// Alt-F7, the masks typed, Enter; waits for the search to end.
+    fn search(cx: &mut VisualTestContext, masks: &str) {
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Masks, masks);
+        run_search(cx);
+    }
+
+    fn run_search(cx: &mut VisualTestContext) {
+        let view = dialog(cx);
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        wait_until(cx, |cx| !running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn alt_f7_and_the_menu_action_open_the_dialog(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        let view = dialog(cx);
+        let search_in = view.read_with(cx, |v, cx| v.field(Field::SearchIn, cx));
+        assert_eq!(search_in, tmp.path().display().to_string());
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        cx.dispatch_action(crate::actions::FindFiles);
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_name_search_lists_results_and_enter_goes_to_the_file(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = opened(cx);
+        search(cx, "*.rs");
+        assert_eq!(results(cx), ["a/x.rs"]);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        let at = commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        });
+        assert_eq!(at, "x.rs");
+        // The panel has the keys again.
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_results_list_takes_arrow_keys(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = opened(cx);
+        search(cx, "*.rs *.txt");
+        assert_eq!(results(cx), ["a/x.rs", "b/y.txt"]);
+        cx.simulate_keystrokes("down down up end home pagedown enter");
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    fn drawn(cx: &mut VisualTestContext, selector: &str) -> bool {
+        bounds(cx, selector.to_owned()).is_some()
+    }
+
+    #[gpui_kit::test]
+    fn focus_shows_on_one_control_at_a_time(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.rs *.txt");
+        // The list has focus after a search: a bright cursor, no rings.
+        assert!(drawn(cx, "find-cursor-focused"));
+        assert!(!drawn(cx, "focus-ring-button"));
+        // The buttons: a ring on the selected one, the cursor muted.
+        cx.simulate_keystrokes("tab");
+        assert!(drawn(cx, "focus-ring-button"));
+        assert!(!drawn(cx, "find-cursor-focused"));
+        assert!(drawn(cx, "find-cursor"), "still shown, muted");
+        cx.simulate_keystrokes("shift-tab");
+        assert!(drawn(cx, "find-cursor-focused"));
+        assert!(!drawn(cx, "focus-ring-button"));
+        // Back again: the last option box, which Space toggles.
+        cx.simulate_keystrokes("shift-tab");
+        assert!(drawn(cx, "focus-ring-find-not"));
+        assert!(!drawn(cx, "find-cursor-focused"));
+        let view = dialog(cx);
+        assert!(!view.read_with(cx, |v, _| v.options()[4]));
+        cx.simulate_keystrokes("space");
+        assert!(view.read_with(cx, |v, _| v.options()[4]));
+        cx.simulate_keystrokes("space");
+        assert!(!view.read_with(cx, |v, _| v.options()[4]));
+        // A text field: its own ring, none of ours.
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        assert!(!drawn(cx, "focus-ring-find-not"));
+        assert!(!drawn(cx, "focus-ring-button"));
+        assert!(!drawn(cx, "find-cursor-focused"));
+    }
+
+    #[gpui_kit::test]
+    fn the_grip_sits_square_in_the_dialogs_corner(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        let dialog = bounds(cx, "dialog-0".into()).unwrap();
+        let grip = bounds(cx, "find-grip-dots".into()).unwrap();
+        let right = dialog.right() - grip.right();
+        let bottom = dialog.bottom() - grip.bottom();
+        assert_eq!(right, bottom, "the same inset from both edges");
+        assert!(
+            right >= gpui_kit::px(4.0) && right <= gpui_kit::px(8.0),
+            "{right:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_dialog_resizes_from_its_corner_but_not_below_its_size(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.rs");
+        let list = |cx: &mut VisualTestContext| bounds(cx, "find-list".into()).unwrap().size;
+        let before = list(cx);
+        let grip = center(cx, "find-grip");
+        let drag = |cx: &mut VisualTestContext, dx: f32, dy: f32| {
+            let left = gpui_kit::MouseButton::Left;
+            let modifiers = gpui_kit::Modifiers::default();
+            let to = gpui_kit::point(grip.x + gpui_kit::px(dx), grip.y + gpui_kit::px(dy));
+            cx.simulate_mouse_down(grip, left, modifiers);
+            cx.simulate_mouse_move(to, left, modifiers);
+            cx.simulate_mouse_up(to, left, modifiers);
+            cx.run_until_parked();
+        };
+        drag(cx, 50.0, 80.0);
+        let bigger = list(cx);
+        // Centered: the corner follows the mouse, so the width grows twice.
+        assert_eq!(bigger.width, before.width + gpui_kit::px(100.0));
+        assert_eq!(bigger.height, before.height + gpui_kit::px(80.0));
+        // Released: moving on changes nothing.
+        cx.simulate_mouse_move(grip, None, gpui_kit::Modifiers::default());
+        assert_eq!(list(cx), bigger);
+        // Never smaller than it opened.
+        let grip_now = center(cx, "find-grip");
+        let left = gpui_kit::MouseButton::Left;
+        let modifiers = gpui_kit::Modifiers::default();
+        let far = gpui_kit::point(gpui_kit::px(1.0), gpui_kit::px(1.0));
+        cx.simulate_mouse_down(grip_now, left, modifiers);
+        cx.simulate_mouse_move(far, left, modifiers);
+        cx.simulate_mouse_up(far, left, modifiers);
+        assert_eq!(list(cx), before);
+        // The size stays for the next Alt-F7.
+        drag(cx, 50.0, 80.0);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        assert_eq!(list(cx), bigger);
+    }
+
+    #[gpui_kit::test]
+    fn double_click_goes_to_the_file(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = opened(cx);
+        search(cx, "y.txt");
+        click(cx, "find-result-0", 2);
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    #[gpui_kit::test]
+    fn a_content_search_and_its_options(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Text, "NEEDLE");
+        run_search(cx);
+        assert_eq!(results(cx), ["b/y.txt"]);
+        click(cx, "find-case", 1);
+        run_search(cx);
+        assert!(results(cx).is_empty(), "case-sensitive");
+        click(cx, "find-case", 1);
+        click(cx, "find-not", 1);
+        set(cx, Field::Masks, "*.rs *.txt");
+        run_search(cx);
+        assert_eq!(results(cx), ["a/x.rs"], "not containing");
+        click(cx, "find-not", 1);
+        click(cx, "find-regex", 1);
+        click(cx, "find-words", 1);
+        set(cx, Field::Text, "ne+dle|fn");
+        run_search(cx);
+        assert_eq!(results(cx), ["a/x.rs", "b/y.txt"]);
+    }
+
+    /// `opened`'s folder plus `.git/g.rs`, `node_modules/n.rs`, `bin/b.rs`.
+    fn with_tooling(tmp: &tempfile::TempDir) {
+        for dir in [".git", "node_modules", "bin"] {
+            std::fs::create_dir(tmp.path().join(dir)).unwrap();
+            std::fs::write(tmp.path().join(dir).join("x.rs"), b"").unwrap();
+        }
+    }
+
+    #[gpui_kit::test]
+    fn git_and_node_modules_are_skipped_by_default(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        with_tooling(&tmp);
+        search(cx, "*.rs");
+        assert_eq!(results(cx), ["a/x.rs", "bin/x.rs"]);
+        let status = dialog(cx).read_with(cx, |v, _| v.status());
+        assert_eq!(status, "2 found, 2 folders skipped");
+        assert_eq!(
+            dialog(cx).read_with(cx, |v, _| v.skip_text()),
+            ".git, node_modules"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_skip_popup_toggles_folders_and_remembers_them(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        with_tooling(&tmp);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        click(cx, "find-skip", 1);
+        assert!(drawn(cx, "find-skip-popup"));
+        // .git, node_modules, bin: Space turns bin on, then .git off.
+        cx.simulate_keystrokes("down down space up up space");
+        // Enter closes the popup, not the dialog, and searches nothing.
+        cx.simulate_keystrokes("enter");
+        assert!(!drawn(cx, "find-skip-popup"));
+        assert!(dialog_open(cx));
+        assert!(!running(cx) && results(cx).is_empty());
+        assert_eq!(
+            dialog(cx).read_with(cx, |v, _| v.skip_text()),
+            "node_modules, bin"
+        );
+        set(cx, Field::Masks, "*.rs");
+        run_search(cx);
+        assert_eq!(results(cx), [".git/x.rs", "a/x.rs"]);
+        // Saved in the state file's data, for the next start.
+        let saved = cx.update(|_, cx| cx.global::<AppState>().state.find_skip.clone());
+        assert_eq!(
+            saved,
+            Some(vec!["node_modules".to_owned(), "bin".to_owned()])
+        );
+        // Escape closes the popup only, too.
+        click(cx, "find-skip", 1);
+        cx.simulate_keystrokes("escape");
+        assert!(!drawn(cx, "find-skip-popup"));
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_on_a_skip_popup_row_toggles_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        click(cx, "find-skip", 1);
+        click(cx, "find-skip-row-3", 1); // obj
+        assert_eq!(
+            dialog(cx).read_with(cx, |v, _| v.skip_text()),
+            ".git, node_modules, obj"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_saved_skip_list_is_used_on_the_next_start(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        with_tooling(&tmp);
+        cx.update(|_, cx| {
+            cx.global_mut::<AppState>().state.find_skip = Some(vec!["bin".to_owned()]);
+        });
+        search(cx, "*.rs");
+        assert_eq!(results(cx), [".git/x.rs", "a/x.rs", "node_modules/x.rs"]);
+    }
+
+    #[test]
+    fn skip_texts() {
+        use crate::find_dialog::skip_text;
+        let on = |names: &[&str]| -> Vec<bool> {
+            yagni_commander_core::find::SKIP_FOLDERS
+                .iter()
+                .map(|f| names.contains(f))
+                .collect()
+        };
+        assert_eq!(skip_text(&on(&[])), "none");
+        assert_eq!(skip_text(&on(&[".git", "bin", "obj"])), ".git, bin, obj");
+        assert_eq!(
+            skip_text(&on(&[".git", "node_modules", "bin", "obj", "target"])),
+            ".git, node_modules +3"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn names_and_text_each_have_a_case_box(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        std::fs::write(tmp.path().join("README"), b"").unwrap();
+        std::fs::write(tmp.path().join("readme.md"), b"").unwrap();
+        search(cx, "README");
+        assert_eq!(results(cx), ["README", "readme.md"]);
+        // The text box leaves names alone.
+        click(cx, "find-case", 1);
+        run_search(cx);
+        assert_eq!(results(cx), ["README", "readme.md"]);
+        click(cx, "find-case", 1);
+        click(cx, "find-case-names", 1);
+        run_search(cx);
+        assert_eq!(results(cx), ["README"]);
+    }
+
+    #[gpui_kit::test]
+    fn case_sensitive_text_keeps_names_case_insensitive(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        std::fs::write(tmp.path().join("UserService.cs"), b"var client = 1;").unwrap();
+        std::fs::write(tmp.path().join("other-service.txt"), b"Client only").unwrap();
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Text, "client");
+        click(cx, "find-case", 1);
+        set(cx, Field::Masks, "*service*");
+        run_search(cx);
+        assert_eq!(results(cx), ["UserService.cs"]);
+    }
+
+    #[gpui_kit::test]
+    fn the_dialog_remembers_fields_and_results_and_resets_search_in(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        cx.simulate_keystrokes("down enter"); // into a
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let view = dialog(cx);
+        let (masks, search_in) = view.read_with(cx, |v, cx| {
+            (v.field(Field::Masks, cx), v.field(Field::SearchIn, cx))
+        });
+        assert_eq!(masks, "*.rs");
+        assert_eq!(search_in, tmp.path().join("a").display().to_string());
+        assert_eq!(results(cx), ["a/x.rs"]);
+    }
+
+    #[gpui_kit::test]
+    fn escape_stops_a_search_then_closes(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        let view = dialog_with_hold(cx);
+        set(cx, Field::Masks, "*");
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(running(cx));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "the first Escape stops");
+        assert!(!running(cx));
+        let status = view.read_with(cx, |v, _| v.status());
+        assert!(status.ends_with(", stopped"), "{status}");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+    }
+
+    /// Opens the dialog with its next search held before the walk.
+    fn dialog_with_hold(cx: &mut VisualTestContext) -> Entity<FindDialog> {
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let view = dialog(cx);
+        view.update(cx, |v, _| v.hold = true);
+        view
+    }
+
+    #[gpui_kit::test]
+    fn a_closed_search_never_adds_to_the_next_one(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        let view = dialog_with_hold(cx);
+        set(cx, Field::Masks, "*.txt");
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let first = view.read_with(cx, |v, _| v.held().unwrap());
+        // Close stops it; a new search starts while the first is held.
+        click(cx, "button-Close", 1);
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        search(cx, "*.rs");
+        first.store(false, std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..5 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(200));
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(results(cx), ["a/x.rs"]);
+    }
+
+    #[gpui_kit::test]
+    fn feed_to_panel_fills_the_other_side_and_activates_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = opened(cx);
+        search(cx, "*.rs *.txt");
+        click(cx, "button-Feed to panel", 1);
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(commander.read_with(cx, |c, _| c.active()), Side::Right);
+        assert!(!commander.read_with(cx, |c, _| c.panel(Side::Left).in_results()));
+        let (in_results, labels) = commander.read_with(cx, |c, _| {
+            let panel = c.panel(Side::Right);
+            (
+                panel.in_results(),
+                panel
+                    .entries()
+                    .iter()
+                    .map(|e| e.label.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert!(in_results);
+        assert_eq!(labels, ["..", "a/x.rs", "b/y.txt"]);
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path());
+        // The keys go to the results.
+        cx.simulate_keystrokes("end");
+        assert_eq!(cursor(&commander, Side::Right, cx), 2);
+    }
+
+    #[gpui_kit::test]
+    fn feed_shares_the_dialogs_results_instead_of_copying_them(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = opened(cx);
+        search(cx, "*.rs *.txt");
+        let view = dialog(cx);
+        let found = view.read_with(cx, |v, _| v.found_entries());
+        click(cx, "button-Feed to panel", 1);
+        cx.run_until_parked();
+        let shared = commander.read_with(cx, |c, _| {
+            std::sync::Arc::ptr_eq(&c.panel(c.active()).results().unwrap().entries, &found)
+        });
+        assert!(shared);
+    }
+
+    #[gpui_kit::test]
+    fn alt_l_feeds_to_the_panel_from_anywhere_in_the_dialog(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = opened(cx);
+        let fed = |cx: &mut VisualTestContext| {
+            commander.read_with(cx, |c, _| c.panel(c.active()).in_results())
+        };
+        // From the results list (focused after a search).
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("alt-l");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && fed(cx), "from the list");
+        // From a text field: nothing typed into it.
+        cx.simulate_keystrokes("backspace");
+        search(cx, "*.rs");
+        let view = dialog(cx);
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.simulate_keystrokes("alt-l");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && fed(cx), "from a field");
+        assert_eq!(
+            view.read_with(cx, |v, cx| v.field(Field::Masks, cx)),
+            "*.rs"
+        );
+        // From the buttons.
+        cx.simulate_keystrokes("backspace");
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("tab alt-l");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && fed(cx), "from the buttons");
+    }
+
+    #[gpui_kit::test]
+    fn feed_does_nothing_without_results(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = opened(cx);
+        search(cx, "*.none");
+        click(cx, "button-Feed to panel", 1);
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert!(!commander.read_with(cx, |c, _| c.panel(Side::Left).in_results()));
+    }
+
+    #[gpui_kit::test]
+    fn f3_on_a_result_opens_a_viewer_and_the_dialog_stays(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.txt");
+        cx.simulate_keystrokes("f3");
+        cx.run_until_parked();
+        assert_eq!(viewers(cx), 1);
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn bad_input_shows_an_error_and_keeps_the_dialog(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let gone = tmp.path().join("gone").display().to_string();
+        let cases = [
+            (Field::SearchIn, gone.as_str(), "is not a folder"),
+            (Field::Text, "(", "Invalid regular expression"),
+        ];
+        click(cx, "find-regex", 1);
+        for (field, text, message) in cases {
+            set(cx, field, text);
+            let view = dialog(cx);
+            view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
+            let shown = box_text(cx);
+            assert!(shown.contains(message), "{shown}");
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            assert!(dialog_open(cx), "the find dialog stays");
+            assert!(!running(cx));
+            // Put it right for the next case.
+            let fixed = match field {
+                Field::SearchIn => tmp.path().display().to_string(),
+                _ => String::new(),
+            };
+            set(cx, field, &fixed);
+        }
+    }
+
+    #[test]
+    fn status_lines() {
+        assert_eq!(status_text(&Status::Idle), "");
+        assert_eq!(
+            status_text(&Status::Running {
+                seen: 12345,
+                found: 12
+            }),
+            "Searching... 12,345 files, 12 found"
+        );
+        let done = SearchSummary {
+            found: 12,
+            unreadable: 3,
+            other_filesystems: 1,
+            stopped: true,
+            ..SearchSummary::default()
+        };
+        assert_eq!(
+            status_text(&Status::Done(done)),
+            "12 found, 3 unreadable, 1 other filesystem skipped, stopped"
+        );
+        let two = SearchSummary {
+            other_filesystems: 2,
+            ..SearchSummary::default()
+        };
+        assert_eq!(
+            status_text(&Status::Done(two)),
+            "0 found, 2 other filesystems skipped"
+        );
+        let skipped = SearchSummary {
+            skipped: 1,
+            ..SearchSummary::default()
+        };
+        assert_eq!(
+            status_text(&Status::Done(skipped)),
+            "0 found, 1 folder skipped"
+        );
     }
 }

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 use crate::entry::{Entry, EntryKind};
+use crate::find::Results;
 use crate::fs_ops;
 use crate::listing::{ArchiveRead, Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
@@ -183,6 +184,8 @@ impl Commander {
                     target,
                     select: None,
                     archive: None,
+                    results: None,
+                    up_if_missing: false,
                 },
                 LoadKind::Startup,
             );
@@ -210,6 +213,17 @@ impl Commander {
     }
 
     fn request(&mut self, side: Side, nav: Navigation, kind: LoadKind) {
+        // Search results are shown at once ("Feed to panel", Alt-Z).
+        if kind == LoadKind::Navigate
+            && let Some(results) = nav.results.clone()
+        {
+            let panel = self.panel_mut(side);
+            panel.take_loading();
+            panel.take_refresh();
+            panel.stale = false;
+            panel.show_results(results, nav.select.as_deref());
+            return;
+        }
         // Moving inside an archive whose index is at hand needs no read.
         if kind == LoadKind::Navigate
             && let Some(index) = nav.archive.as_ref().and_then(|a| a.known.clone())
@@ -237,7 +251,13 @@ impl Commander {
         // be dropped as stale.
         self.panel_mut(side).take_refresh();
         let fallback = (kind == LoadKind::Startup).then(|| self.home.clone());
-        let (id, progress, cancel) = self.push_request(nav.target.clone(), fallback, nav.archive);
+        let (id, progress, cancel) = self.push_request(
+            nav.target.clone(),
+            fallback,
+            nav.archive,
+            nav.results,
+            nav.up_if_missing,
+        );
         self.panel_mut(side).set_loading(Loading {
             id,
             path: nav.target,
@@ -254,6 +274,8 @@ impl Commander {
         path: PathBuf,
         fallback: Option<PathBuf>,
         archive: Option<ArchiveRead>,
+        results: Option<Arc<Results>>,
+        up_if_missing: bool,
     ) -> (u64, Arc<AtomicUsize>, Arc<AtomicBool>) {
         self.next_load += 1;
         let id = self.next_load;
@@ -266,6 +288,8 @@ impl Commander {
             progress: progress.clone(),
             cancel: cancel.clone(),
             archive,
+            results,
+            up_if_missing,
         });
         (id, progress, cancel)
     }
@@ -273,6 +297,9 @@ impl Commander {
     /// The directory watcher saw a change in `side`'s folder: re-read it
     /// quietly. Not a [`Command`]: the quick search and the error stay.
     pub fn watch_reload(&mut self, side: Side) {
+        if self.panel(side).in_results() {
+            return; // not watched: Ctrl-R re-checks them
+        }
         self.refresh(self.visible(side), None);
     }
 
@@ -289,12 +316,16 @@ impl Commander {
             return;
         }
         // A vanished folder (or archive) is looked for from its real folder up.
-        let (path, archive) = match &gone {
-            Some(dir) => (dir.clone(), None),
-            None => (panel.path().to_path_buf(), panel.archive_read(true)),
+        let (path, archive, results) = match &gone {
+            Some(dir) => (dir.clone(), None, None),
+            None => (
+                panel.path().to_path_buf(),
+                panel.archive_read(true),
+                panel.results().cloned(),
+            ),
         };
         let fallback = gone.is_some().then(|| self.home.clone());
-        let (id, _, cancel) = self.push_request(path, fallback, archive);
+        let (id, _, cancel) = self.push_request(path, fallback, archive, results, false);
         self.panel_at_mut(at).set_refresh(Refresh {
             id,
             gone,
@@ -317,6 +348,8 @@ impl Commander {
                 target,
                 select: None,
                 archive: None,
+                results: None,
+                up_if_missing: false,
             };
             self.request(side, nav, LoadKind::Startup);
         }
@@ -443,6 +476,8 @@ impl Commander {
                     target,
                     select: None,
                     archive: None,
+                    results: None,
+                    up_if_missing: false,
                 },
                 LoadKind::Startup,
             );
@@ -468,9 +503,54 @@ impl Commander {
                 target: dir,
                 select: None,
                 archive: None,
+                results: None,
+                up_if_missing: false,
             },
             LoadKind::Navigate,
         );
+    }
+
+    /// Alt-F7's "Feed to panel": the other side shows `results` and
+    /// becomes the active one, so the side searched from keeps its folder.
+    /// Like a command, ignored while that side is loading, and ends the
+    /// quick search.
+    pub fn feed(&mut self, results: Results) {
+        let target = self.active.other();
+        if self.panel(target).loading().is_some() {
+            return;
+        }
+        self.error = None;
+        self.search.clear();
+        let nav = Navigation {
+            target: results.root.clone(),
+            select: None,
+            archive: None,
+            results: Some(Arc::new(results)),
+            up_if_missing: false,
+        };
+        self.request(target, nav, LoadKind::Navigate);
+        self.active = target;
+    }
+
+    /// Alt-F7's "go to file": the active panel shows `path`'s folder with
+    /// the cursor on it. A folder that is gone falls back to its nearest
+    /// existing parent; an unreadable one is an error.
+    pub fn go_to_file(&mut self, path: &Path) {
+        let active = self.active;
+        if self.panel(active).loading().is_some() {
+            return;
+        }
+        let Some(dir) = path.parent() else { return };
+        self.error = None;
+        self.search.clear();
+        let nav = Navigation {
+            target: dir.to_path_buf(),
+            select: path.file_name().map(OsStr::to_os_string),
+            archive: None,
+            results: None,
+            up_if_missing: true,
+        };
+        self.request(active, nav, LoadKind::Navigate);
     }
 
     /// The home folder (hotlist `~` paths, startup fallback).
@@ -649,10 +729,15 @@ impl Commander {
         Ok(())
     }
 
-    /// Nothing is written inside an archive.
+    /// Nothing is written inside an archive, and no name is made in
+    /// search results (a name there is a relative path).
     fn refuse_in_archive(&self) -> io::Result<()> {
-        if self.panel(self.active).in_archive() {
+        let panel = self.panel(self.active);
+        if panel.in_archive() {
             return Err(io::Error::other(crate::archive::IN_ARCHIVE));
+        }
+        if panel.in_results() {
+            return Err(io::Error::other(crate::find::IN_RESULTS));
         }
         Ok(())
     }
@@ -904,6 +989,8 @@ impl Commander {
                     target: panel.path().to_path_buf(),
                     select: panel.cursor_entry().map(|e| e.name.clone()),
                     archive: panel.archive_read(true),
+                    results: panel.results().cloned(),
+                    up_if_missing: false,
                 };
                 self.request(active.other(), nav, LoadKind::Navigate);
                 Ok(())
@@ -2261,6 +2348,342 @@ mod tests {
     fn home_is_the_one_given_at_start() {
         let c = Commander::start("/".into(), "/".into(), false, "/home/me".into());
         assert_eq!(c.home(), Path::new("/home/me"));
+    }
+}
+
+#[cfg(test)]
+mod results_tests {
+    use super::*;
+    use crate::find::masks::Masks;
+    use crate::find::{Query, Results, search};
+    use std::fs;
+
+    fn tree() -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path();
+        fs::create_dir_all(p.join("src/sub")).unwrap();
+        fs::create_dir(p.join(".git")).unwrap();
+        fs::write(p.join("src/main.rs"), b"x").unwrap();
+        fs::write(p.join("src/sub/lib.rs"), b"yy").unwrap();
+        fs::write(p.join(".git/conf.rs"), b"z").unwrap();
+        tmp
+    }
+
+    fn results(root: &Path, masks: &str) -> Results {
+        let query = Query {
+            root: root.into(),
+            masks: Masks::parse(masks),
+            skip: Vec::new(),
+            text: None,
+        };
+        let mut found = Vec::new();
+        search(
+            &query,
+            &AtomicBool::new(false),
+            &crate::find::Progress::default(),
+            &mut |f| found.push(f),
+        );
+        Results::new(root.into(), masks.into(), Arc::new(found))
+    }
+
+    fn labels(c: &Commander, side: Side) -> Vec<String> {
+        c.panel(side)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    /// The left panel shows the `*.rs` results (fed from the right side).
+    fn fed(tmp: &tempfile::TempDir) -> Commander {
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.set_active(Side::Right);
+        c.feed(results(tmp.path(), "*.rs"));
+        c
+    }
+
+    #[test]
+    fn feed_goes_to_the_other_side_and_makes_it_active() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.feed(results(tmp.path(), "*.rs"));
+        assert!(c.panel(Side::Right).in_results());
+        assert!(
+            !c.panel(Side::Left).in_results(),
+            "the side searched from stays"
+        );
+        assert_eq!(c.active(), Side::Right);
+    }
+
+    #[test]
+    fn feed_is_ignored_while_the_other_side_loads() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::Reload); // both sides
+        c.set_active(Side::Left);
+        c.feed(results(tmp.path(), "*.rs"));
+        c.run_loads_now();
+        assert!(!c.panel(Side::Right).in_results());
+        assert_eq!(c.active(), Side::Left);
+    }
+
+    #[test]
+    fn feed_shows_relative_paths_hidden_ones_included() {
+        let tmp = tree();
+        let c = fed(&tmp);
+        let panel = c.panel(Side::Left);
+        assert!(panel.in_results());
+        assert_eq!(panel.path(), tmp.path());
+        assert_eq!(
+            labels(&c, Side::Left),
+            ["..", ".git/conf.rs", "src/main.rs", "src/sub/lib.rs"]
+        );
+        assert_eq!(
+            panel.results().unwrap().header(),
+            format!("Results: *.rs in {}", tmp.path().display())
+        );
+        assert_eq!(panel.real_dir(), tmp.path());
+        assert!(!c.panel(Side::Right).in_results());
+    }
+
+    #[test]
+    fn feeding_and_leaving_start_fresh() {
+        let tmp = tree();
+        fs::write(tmp.path().join("a.rs"), b"").unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        let a = labels(&c, Side::Left)
+            .iter()
+            .position(|l| l == "a.rs")
+            .unwrap();
+        c.execute(Command::CursorTo(Side::Left, a));
+        c.execute(Command::ToggleSelection);
+        c.execute(Command::CursorEnd);
+        c.execute(Command::SwitchPanel); // feeds the other side: left
+        c.feed(results(tmp.path(), "*.rs"));
+        let panel = c.panel(Side::Left);
+        assert_eq!(panel.cursor(), 0, "fed: cursor at the top");
+        assert_eq!(panel.selection().count(), 0, "fed: nothing selected");
+        c.execute(Command::CursorTo(Side::Left, 1));
+        c.execute(Command::ToggleSelection);
+        c.execute(Command::CursorEnd);
+        c.execute(Command::GoUp);
+        c.run_loads_now();
+        let panel = c.panel(Side::Left);
+        assert!(!panel.in_results());
+        assert_eq!(panel.cursor(), 0, "left: cursor at the top");
+        assert_eq!(panel.selection().count(), 0, "left: nothing selected");
+    }
+
+    #[test]
+    fn the_header_without_masks() {
+        let tmp = tree();
+        let r = results(tmp.path(), " ");
+        assert_eq!(r.header(), format!("Results in {}", tmp.path().display()));
+    }
+
+    #[test]
+    fn hidden_toggle_leaves_results_alone_and_applies_after_leaving() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::ToggleHidden);
+        c.execute(Command::ToggleHidden);
+        assert_eq!(labels(&c, Side::Left).len(), 4);
+        c.execute(Command::GoUp);
+        c.run_loads_now();
+        assert!(!c.panel(Side::Left).in_results());
+        assert!(!labels(&c, Side::Left).contains(&".git".to_owned()));
+    }
+
+    #[test]
+    fn parent_and_backspace_go_to_the_root_folder() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::CursorHome);
+        c.execute(Command::Activate);
+        c.run_loads_now();
+        assert!(!c.panel(Side::Left).in_results());
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert_eq!(labels(&c, Side::Left), ["..", "src"]);
+    }
+
+    #[test]
+    fn enter_on_a_folder_result_enters_the_real_folder() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.set_active(Side::Right);
+        c.feed(results(tmp.path(), "sub"));
+        c.execute(Command::CursorDown);
+        assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "src/sub");
+        c.execute(Command::Activate);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("src/sub"));
+        assert!(!c.panel(Side::Left).in_results());
+    }
+
+    #[test]
+    fn enter_on_a_file_result_opens_its_real_path() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::CursorEnd);
+        assert_eq!(
+            c.execute(Command::Activate),
+            Outcome::OpenFile(tmp.path().join("src/sub/lib.rs"))
+        );
+    }
+
+    #[test]
+    fn reload_drops_gone_entries_and_keeps_the_rest() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::CursorEnd);
+        fs::remove_file(tmp.path().join("src/main.rs")).unwrap();
+        fs::write(tmp.path().join("src/sub/lib.rs"), b"longer").unwrap();
+        c.execute(Command::Reload);
+        c.run_loads_now();
+        let panel = c.panel(Side::Left);
+        assert!(panel.in_results());
+        assert_eq!(
+            labels(&c, Side::Left),
+            ["..", ".git/conf.rs", "src/sub/lib.rs"]
+        );
+        assert_eq!(panel.cursor_entry().unwrap().label, "src/sub/lib.rs");
+        assert_eq!(panel.cursor_entry().unwrap().size, Some(6), "re-stat'ed");
+        assert_eq!(panel.results().unwrap().entries.len(), 2);
+    }
+
+    #[test]
+    fn the_watcher_leaves_results_alone() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.watch_reload(Side::Left);
+        assert!(c.take_requests().is_empty());
+    }
+
+    #[test]
+    fn a_tab_coming_to_the_front_rechecks_its_results() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::NewTab);
+        c.run_loads_now();
+        assert!(c.panel(Side::Left).in_results(), "Ctrl-T copies them");
+        fs::remove_file(tmp.path().join("src/main.rs")).unwrap();
+        c.execute(Command::PrevTab);
+        c.run_loads_now();
+        assert!(c.panel(Side::Left).in_results());
+        assert_eq!(labels(&c, Side::Left).len(), 3);
+    }
+
+    #[test]
+    fn alt_z_and_ctrl_u_carry_results() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::CursorDown);
+        c.execute(Command::SyncOtherPanel);
+        assert!(c.take_requests().is_empty(), "no read");
+        let right = c.panel(Side::Right);
+        assert!(right.in_results());
+        assert_eq!(right.cursor_entry().unwrap().label, ".git/conf.rs");
+        c.execute(Command::GoUp);
+        c.run_loads_now();
+        c.execute(Command::SwapPanels);
+        assert!(c.panel(Side::Left).in_results());
+        assert!(!c.panel(Side::Right).in_results());
+    }
+
+    #[test]
+    fn writing_names_is_refused() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.execute(Command::CursorDown);
+        for result in [
+            c.rename(OsStr::new("src/main.rs"), "x"),
+            c.make_directory("new"),
+            c.create_file("new.txt").map(|_| ()),
+        ] {
+            assert_eq!(result.unwrap_err().to_string(), crate::find::IN_RESULTS);
+        }
+        assert!(!tmp.path().join("new").exists());
+        assert!(!tmp.path().join("new.txt").exists());
+        assert!(tmp.path().join("src/main.rs").exists());
+    }
+
+    #[test]
+    fn quick_search_matches_the_file_name() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        assert!(c.search_type('l'));
+        assert_eq!(
+            c.panel(Side::Left).cursor_entry().unwrap().label,
+            "src/sub/lib.rs"
+        );
+        assert!(c.search_step(true));
+        assert_eq!(
+            c.panel(Side::Left).cursor_entry().unwrap().label,
+            "src/sub/lib.rs",
+            "the only match"
+        );
+        c.search_cancel();
+        assert!(!c.search_type('s'), "src/ is a folder, not the name");
+    }
+
+    #[test]
+    fn go_to_file_shows_its_folder_with_the_cursor_on_it() {
+        let tmp = tree();
+        let mut c = fed(&tmp);
+        c.go_to_file(&tmp.path().join("src/sub/lib.rs"));
+        c.run_loads_now();
+        let panel = c.panel(Side::Left);
+        assert!(!panel.in_results());
+        assert_eq!(panel.path(), tmp.path().join("src/sub"));
+        assert_eq!(panel.cursor_entry().unwrap().label, "lib.rs");
+        // Gone, its folder too: the nearest existing parent.
+        c.go_to_file(&tmp.path().join("gone/x.rs"));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(c.error().is_none());
+    }
+
+    #[test]
+    fn go_to_file_in_an_unreadable_folder_says_so() {
+        if nix::unistd::geteuid().is_root() {
+            return;
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tree();
+        let locked = tmp.path().join("src/sub");
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        let mut c = fed(&tmp);
+        c.go_to_file(&locked.join("lib.rs"));
+        c.run_loads_now();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(c.error().is_some(), "an error, not a silent parent");
+        assert!(c.panel(Side::Left).in_results(), "the panel stays");
+    }
+
+    #[test]
+    fn leaving_results_whose_folder_is_gone_walks_up() {
+        let tmp = tree();
+        let root = tmp.path().join("src");
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.set_active(Side::Right);
+        c.feed(results(&root, "*.rs"));
+        fs::remove_dir_all(&root).unwrap();
+        c.execute(Command::GoUp);
+        c.run_loads_now();
+        assert!(c.error().is_none(), "{:?}", c.error());
+        assert!(!c.panel(Side::Left).in_results());
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+    }
+
+    #[test]
+    fn the_state_path_is_the_root() {
+        let tmp = tree();
+        let c = fed(&tmp);
+        assert_eq!(
+            c.tabs(Side::Left).iter().next().unwrap().real_dir(),
+            tmp.path()
+        );
     }
 }
 

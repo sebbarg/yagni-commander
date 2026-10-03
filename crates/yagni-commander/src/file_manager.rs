@@ -13,6 +13,7 @@ use yagni_commander_core::{Command, Commander, Config, Setting, Side, SortKey, c
 
 pub(crate) mod commands;
 mod file_ops;
+mod find;
 mod loads;
 mod properties;
 mod watch;
@@ -20,10 +21,11 @@ mod watch;
 use crate::actions::{
     About, Activate, CancelSearch, CloseTab, CompareContents, Copy, CopyPath, CursorDown,
     CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, Extract,
-    FILE_MANAGER_CONTEXT, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab, OpenFilesMenu,
-    OpenSettings, Pack, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, ShowProperties,
-    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
-    SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View,
+    FILE_MANAGER_CONTEXT, FindFiles, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab,
+    OpenFilesMenu, OpenSettings, Pack, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll,
+    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
+    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
+    View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -108,6 +110,9 @@ pub struct FileManager {
     next_info: u64,
     /// The in-window menu bar; `None` on macOS, which has the native one.
     menu_bar: Option<Entity<MenuBar>>,
+    /// The find dialog's view, kept after it closes (Alt-F7 reopens it
+    /// with the last search).
+    pub(crate) find: Option<Entity<crate::find_dialog::FindDialog>>,
     /// The open Ctrl-D popup.
     pub(crate) hotlist: Option<OpenHotlist>,
     /// The open hotlist Configure dialog's view.
@@ -219,6 +224,7 @@ impl FileManager {
             info: None,
             next_info: 0,
             menu_bar,
+            find: None,
             hotlist: None,
             hotlist_dialog: None,
             menu_state: None,
@@ -688,6 +694,7 @@ impl Render for FileManager {
             .on_action(
                 cx.listener(|this, _: &CompareContents, window, cx| this.compare(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &FindFiles, window, cx| this.find_files(window, cx)))
             .on_action(
                 cx.listener(|this, _: &ShowProperties, window, cx| {
                     this.show_properties(window, cx)

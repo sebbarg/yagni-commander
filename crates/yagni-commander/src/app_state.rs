@@ -38,6 +38,8 @@ pub struct State {
     pub right_tab: usize,
     /// The active side at the last quit.
     pub active: Option<Side>,
+    /// The find dialog's "Skip folders" choice; `None` for the defaults.
+    pub find_skip: Option<Vec<String>>,
     /// One folder per side, from state files written before tabs; read
     /// when the tab lists are missing, never written.
     #[serde(skip_serializing)]
@@ -267,6 +269,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("state.toml");
         let state = State {
+            find_skip: Some(vec!["bin".into()]),
             window: Some(saved(10.0, 20.0)),
             show_hidden: true,
             viewer: Some(saved(30.0, 40.0)),

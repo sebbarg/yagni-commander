@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::archive::{ArchiveIndex, Stamp};
 use crate::entry::{Entry, read_entries};
+use crate::find::Results;
 
 /// A directory read the UI must run.
 #[derive(Debug, Clone)]
@@ -28,6 +29,11 @@ pub struct LoadRequest {
     /// `path` is inside this archive (Enter on an archive, or a re-read
     /// of a panel inside one).
     pub archive: Option<ArchiveRead>,
+    /// A search's results to re-check (a re-read of a results panel).
+    pub results: Option<Arc<Results>>,
+    /// A missing `path` (not an unreadable one) is replaced by its nearest
+    /// existing parent: go to file, leaving search results.
+    pub up_if_missing: bool,
 }
 
 /// An archive to list for a [`LoadRequest`].
@@ -61,11 +67,16 @@ pub struct Listing {
     pub entries: Vec<Entry>,
     /// The archive's index, when `path` is inside one.
     pub archive: Option<Arc<ArchiveIndex>>,
+    /// The search results shown instead of the folder's entries.
+    pub results: Option<Arc<Results>>,
 }
 
 /// Reads the requested directory, or with a fallback, the first readable
 /// one of it, its parents and the fallback folder.
 pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
+    if let Some(results) = &request.results {
+        return Ok(Arc::new(results.recheck()).listing());
+    }
     if let Some(archive) = &request.archive {
         return read_archive(request, archive);
     }
@@ -75,8 +86,12 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
             path: path.to_path_buf(),
             entries,
             archive: None,
+            results: None,
         })
     };
+    if request.up_if_missing {
+        return read_nearest(&request.path, read);
+    }
     let Some(home) = &request.fallback else {
         return read(&request.path);
     };
@@ -95,6 +110,27 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
         }
     }
     Err(first_error.expect("the fallback folder is always tried"))
+}
+
+/// `path`, or its nearest parent where `path` is missing. Any other error
+/// (no permission) is reported, never skipped.
+fn read_nearest(path: &Path, read: impl Fn(&Path) -> io::Result<Listing>) -> io::Result<Listing> {
+    let mut first_error = None;
+    for candidate in path.ancestors().filter(|p| !p.as_os_str().is_empty()) {
+        match read(candidate) {
+            Ok(listing) => return Ok(listing),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) =>
+            {
+                first_error.get_or_insert(e);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(first_error.unwrap_or_else(|| io::ErrorKind::NotFound.into()))
 }
 
 /// The archive's index (read again only if the file changed) and the
@@ -127,6 +163,8 @@ mod tests {
             progress: Arc::default(),
             cancel: Arc::default(),
             archive: None,
+            results: None,
+            up_if_missing: false,
         }
     }
 

@@ -251,6 +251,7 @@ pub(crate) fn listing(index: Arc<ArchiveIndex>, target: &Path) -> Listing {
         path,
         entries,
         archive: Some(index),
+        results: None,
     }
 }
 
