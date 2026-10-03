@@ -1778,6 +1778,13 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         Some("shift-f8")
     );
     assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    let copy = if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    };
+    assert_eq!(key(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
+    assert_eq!(first(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
     for (action, keys) in [
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
         (&crate::actions::CloseTab, "ctrl-w"),
@@ -1815,6 +1822,70 @@ fn menu_checks_follow_ctrl_dot_sorting_and_the_active_panel(cx: &mut TestAppCont
     // The right panel still sorts by name.
     cx.simulate_keystrokes("tab");
     assert!(native_check(cx, "Sort by name"));
+}
+
+fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .map(|text| text.to_string())
+}
+
+#[gpui_kit::test]
+fn ctrl_c_and_ctrl_ins_copy_the_full_path_under_the_cursor(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    let path = |name: &str| tmp.path().join(name).display().to_string();
+    // On "..", the panel's own folder.
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
+    cx.simulate_keystrokes("down ctrl-c");
+    assert_eq!(clipboard_text(cx), Some(path("a")));
+    cx.simulate_keystrokes("end ctrl-insert");
+    assert_eq!(clipboard_text(cx), Some(path("f")));
+    // Only the cursor entry, never the selection.
+    cx.simulate_keystrokes("home down space ctrl-c");
+    assert_eq!(clipboard_text(cx), Some(path("b")));
+    if cfg!(target_os = "macos") {
+        cx.simulate_keystrokes("end cmd-c");
+        assert_eq!(clipboard_text(cx), Some(path("f")));
+    }
+}
+
+#[gpui_kit::test]
+fn ctrl_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("f ctrl-c");
+    assert_eq!(search(&commander, cx), None);
+    assert_eq!(
+        clipboard_text(cx),
+        Some(tmp.path().join("f").display().to_string())
+    );
+}
+
+#[gpui_kit::test]
+fn ctrl_c_in_a_text_field_copies_its_text_not_the_path(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    cx.simulate_keystrokes("down f2");
+    cx.run_until_parked();
+    // F2 preselects the name.
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
+    cx.simulate_keystrokes("end ctrl-a ctrl-insert");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!dialog_open(cx));
+    assert!(tmp.path().join("a").is_dir());
+}
+
+#[gpui_kit::test]
+fn ctrl_c_does_nothing_while_the_panel_loads(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+    enter_held_a(&tmp, cx);
+    assert!(loading(&commander, cx));
+    cx.simulate_keystrokes("ctrl-c");
+    assert_eq!(clipboard_text(cx).as_deref(), Some("before"));
+    release(&tmp);
 }
 
 #[gpui_kit::test]

@@ -28,6 +28,7 @@ actions!(
         Rename,
         Edit,
         EditNewFile,
+        CopyPath,
         MakeDirectory,
         Copy,
         Move,
@@ -94,6 +95,11 @@ pub fn bind_default_keys(cx: &mut App) {
     } else {
         "alt-f4"
     };
+    let copy_path = if cfg!(target_os = "macos") {
+        "cmd-c"
+    } else {
+        "ctrl-c"
+    };
     cx.bind_keys([
         KeyBinding::new(quit, Quit, None),
         KeyBinding::new("tab", SwitchPanel, context),
@@ -107,6 +113,13 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("backspace", GoUp, context),
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
+        // Only while a panel has focus: a text field's context is deeper, so
+        // its own Ctrl-C/Ctrl-Ins win there. macOS also takes Cmd-C, shown
+        // in its menu (the first binding there, the last on Linux).
+        KeyBinding::new(copy_path, CopyPath, context),
+        KeyBinding::new("ctrl-c", CopyPath, context),
+        KeyBinding::new("ctrl-insert", CopyPath, context),
+        KeyBinding::new(copy_path, CopyPath, context),
         KeyBinding::new("f2", Rename, context),
         KeyBinding::new("f3", View, context),
         KeyBinding::new("f4", Edit, context),

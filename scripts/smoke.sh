@@ -20,7 +20,7 @@ delay=${SMOKE_DELAY:-0.4}
 display=${SMOKE_DISPLAY:-:99}
 cargo=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
 
-for tool in Xvfb xdotool xprop import; do
+for tool in Xvfb xdotool xprop import xclip; do
     command -v "$tool" >/dev/null || { echo "smoke: $tool is not installed" >&2; exit 2; }
 done
 
@@ -180,6 +180,21 @@ shot 05-delete-confirm
 keys Return
 check "doomed.txt deleted" test ! -e "$left/doomed.txt"
 check "doomed.txt not in the trash" test ! -e "$work/data/Trash/files/doomed.txt"
+
+echo "Ctrl-C and Ctrl-Ins copy the full path under the cursor"
+clipboard() { [[ $(xclip -o -selection clipboard) == "$1" ]]; }
+typed notes
+keys Escape ctrl+c
+check "Ctrl-C copied the path" clipboard "$left/notes.txt"
+typed docs
+keys Escape ctrl+Insert
+check "Ctrl-Ins copied the path" clipboard "$left/docs"
+echo "Ctrl-C in a text field copies its text"
+keys F7
+typed typed-text
+keys ctrl+a ctrl+c
+check "the field's text copied" clipboard typed-text
+keys Escape
 
 echo "Ctrl-. hidden files"
 keys ctrl+period

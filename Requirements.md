@@ -16,7 +16,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 - Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
 - Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
-  - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8); Select all (Ctrl-A); Quit (Linux only, Alt-F4).
+  - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS); Quit (Linux only, Alt-F4).
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
@@ -92,6 +92,7 @@ Toolbar with e.g. drive icons.
 |---|---|
 | Space | Toggle selection of the entry under the cursor and move the cursor down. Selected entries are orange. ".." can't be selected. Changing directory clears the selection. |
 | Ctrl-A | Select all files and directories in the panel. |
+| Ctrl-C, Ctrl-Ins (also Cmd-C on macOS) | Copy the full path of the entry under the cursor (the panel's folder on "..") to the clipboard as text. Only while a panel has focus: in a text field these keys copy its text. Ignores the selection. Decided by the owner 2026-10-03. |
 | F2 | Rename the file or directory under the cursor, in a dialog with the name preselected up to the last extension (like TC). Never overwrites an existing entry; a case-only rename (`foo` to `Foo`) is allowed. |
 | F3 | Built-in viewer (see below). |
 | F4 | Open the file or directory in the configured external editor (the panel's own directory when the cursor is on ".."). The `editor` setting is split like a shell command, e.g. `code --wait`. |

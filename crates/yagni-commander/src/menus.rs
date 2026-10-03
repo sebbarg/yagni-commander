@@ -8,8 +8,8 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, CloseTab, Copy, Delete, Edit, EditNewFile, MakeDirectory, Move, NewTab, NextTab,
-    OpenSettings, PrevTab, Quit, Reload, Rename, SelectAll, SortByModified, SortByName,
+    About, CloseTab, Copy, CopyPath, Delete, Edit, EditNewFile, MakeDirectory, Move, NewTab,
+    NextTab, OpenSettings, PrevTab, Quit, Reload, Rename, SelectAll, SortByModified, SortByName,
     SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
     View,
 };
@@ -110,6 +110,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         item("Delete permanently", Delete),
         MenuEntry::Separator,
         item("Select all", SelectAll),
+        item("Copy path", CopyPath),
     ];
     if !mac {
         files.extend([
@@ -294,6 +295,7 @@ mod tests {
                 "Delete permanently",
                 "-",
                 "Select all",
+                "Copy path",
                 "-",
                 "Settings...",
                 "-",

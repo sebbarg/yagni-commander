@@ -7,8 +7,8 @@ use std::rc::Rc;
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
-    App, AppContext, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement, SharedString,
-    Window,
+    App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
+    SharedString, Window,
 };
 use yagni_commander_core::{Commander, EntryKind, launch};
 
@@ -118,6 +118,17 @@ impl FileManager {
         if let Err(e) = launch::open_in_editor(&editor, &path) {
             show_error("Cannot open editor", e.to_string(), None, window, cx);
         }
+    }
+
+    /// Ctrl-C/Ctrl-Ins (also Cmd-C on macOS): copy the full path of the
+    /// entry under the cursor (or the directory, on "..") as text.
+    pub(super) fn copy_path(&mut self, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        self.end_search(cx);
+        let path = self.active_panel(cx).cursor_path();
+        cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
     }
 
     /// Shift-F4: create a file (or pick an existing one) and open it in the
