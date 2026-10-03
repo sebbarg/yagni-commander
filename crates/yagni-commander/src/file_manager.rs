@@ -22,10 +22,10 @@ use crate::actions::{
     About, Activate, CancelSearch, CloseTab, CompareContents, Copy, CopyPath, CursorDown,
     CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, Extract,
     FILE_MANAGER_CONTEXT, FindFiles, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab,
-    OpenFilesMenu, OpenSettings, Pack, PageDown, PageUp, PrevTab, Reload, Rename, SelectAll,
-    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
-    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
-    View,
+    OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
+    SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
+    Trash, View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -81,6 +81,9 @@ pub struct FileManager {
     job: Option<file_ops::RunningJob>,
     /// What F8 uses. Tests replace it so they never touch the real trash.
     trash: yagni_commander_core::file_ops::TrashFn,
+    /// The terminal Ctrl-Shift-T starts; `None` finds the default one.
+    /// Tests replace it so they never start a real terminal.
+    pub(crate) terminal: Option<String>,
     /// The program Enter on a file runs with its path (xdg-open, open).
     /// Tests replace it so they never start a real application.
     pub(crate) opener: String,
@@ -209,6 +212,7 @@ impl FileManager {
             job: None,
             trash: yagni_commander_core::file_ops::system_trash,
             opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
+            terminal: None,
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
@@ -695,6 +699,9 @@ impl Render for FileManager {
                 cx.listener(|this, _: &CompareContents, window, cx| this.compare(window, cx)),
             )
             .on_action(cx.listener(|this, _: &FindFiles, window, cx| this.find_files(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenTerminal, window, cx| this.open_terminal(window, cx)),
+            )
             .on_action(
                 cx.listener(|this, _: &ShowProperties, window, cx| {
                     this.show_properties(window, cx)

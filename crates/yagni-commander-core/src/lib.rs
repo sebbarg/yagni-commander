@@ -22,6 +22,7 @@ mod quick_search;
 mod sort;
 pub mod storage;
 mod tabs;
+pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_archives;
 pub mod viewer;

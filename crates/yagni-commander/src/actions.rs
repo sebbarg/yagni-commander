@@ -42,6 +42,8 @@ actions!(
         ShowProperties,
         /// Alt-F7: the find dialog.
         FindFiles,
+        /// Ctrl-Shift-T: a terminal in the active panel's folder.
+        OpenTerminal,
         SyncOtherPanel,
         SwapPanels,
         NewTab,
@@ -172,6 +174,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-a", SelectAll, context),
         KeyBinding::new("alt-enter", ShowProperties, context),
         KeyBinding::new("alt-f7", FindFiles, context),
+        KeyBinding::new("ctrl-shift-t", OpenTerminal, context),
         // Only while a panel has focus: a text field's context is deeper, so
         // its own Ctrl-C/Ctrl-Ins win there. macOS also takes Cmd-C, shown
         // in its menu (the first binding there, the last on Linux).

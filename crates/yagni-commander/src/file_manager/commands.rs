@@ -23,6 +23,31 @@ pub(crate) const OPENER_POLL: std::time::Duration = std::time::Duration::from_mi
 type Submit =
     dyn Fn(&mut FileManager, &str, &mut Window, &mut Context<FileManager>) -> std::io::Result<()>;
 
+/// Shows the first failure a launch thread sends, in an error box. Polled:
+/// a wake-up from another thread panics gpui's test scheduler.
+fn report_failure(
+    failure: std::sync::mpsc::Receiver<String>,
+    title: &'static str,
+    refocus: Option<FocusHandle>,
+    window: &mut Window,
+    cx: &mut Context<FileManager>,
+) {
+    cx.spawn_in(window, async move |_, cx| {
+        loop {
+            cx.background_executor().timer(OPENER_POLL).await;
+            match failure.try_recv() {
+                Ok(message) => {
+                    let _ = cx.update(|window, cx| show_error(title, message, refocus, window, cx));
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+    })
+    .detach();
+}
+
 /// Text of a name prompt.
 pub(super) struct Prompt<'a> {
     pub title: &'a str,
@@ -251,22 +276,28 @@ impl FileManager {
                 let _ = failed.send(e.to_string());
             }
         });
-        cx.spawn_in(window, async move |_, cx| {
-            loop {
-                cx.background_executor().timer(OPENER_POLL).await;
-                match failure.try_recv() {
-                    Ok(message) => {
-                        let _ = cx.update(|window, cx| {
-                            show_error("Cannot open file", message, refocus, window, cx)
-                        });
-                        break;
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                }
+        report_failure(failure, "Cannot open file", refocus, window, cx);
+    }
+
+    /// Ctrl-Shift-T: a terminal in the active panel's real folder (an
+    /// archive's folder inside one). Started on a thread: finding the
+    /// terminal stats files, which could hang on a dead mount.
+    pub(super) fn open_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        self.end_search(cx);
+        let dir = self.active_panel(cx).real_dir().to_path_buf();
+        let command = self.terminal.clone();
+        let (failed, failure) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            if let Err(e) = yagni_commander_core::terminal::open_terminal(command.as_deref(), &dir)
+            {
+                let _ = failed.send(e.to_string());
             }
-        })
-        .detach();
+        });
+        let refocus = Some(self.focus.clone());
+        report_failure(failure, "Cannot open a terminal", refocus, window, cx);
     }
 
     /// Shift-F4: create a file (or pick an existing one) and open it in the

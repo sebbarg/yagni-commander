@@ -9,9 +9,10 @@ use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
     About, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist, Edit, EditNewFile,
-    Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings, Pack, PrevTab, Quit,
-    Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner,
-    SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View,
+    Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings, OpenTerminal, Pack,
+    PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
+    View,
 };
 
 pub enum MenuEntry {
@@ -168,6 +169,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Reload", Reload),
                 item("Directory hotlist", DirectoryHotlist),
                 item("Find files...", FindFiles),
+                item("Open terminal here", OpenTerminal),
                 MenuEntry::Separator,
                 item("New tab", NewTab),
                 item("Close tab", CloseTab),
@@ -320,6 +322,7 @@ mod tests {
                 "Reload",
                 "Directory hotlist",
                 "Find files...",
+                "Open terminal here",
                 "-",
                 "New tab",
                 "Close tab",

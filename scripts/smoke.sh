@@ -37,6 +37,10 @@ mkdir -p "$work/bin"
 printf '#!/bin/sh\necho "$1" >>"%s/opened"\n' "$work" >"$work/bin/xdg-open"
 chmod +x "$work/bin/xdg-open"
 export PATH="$work/bin:$PATH"
+# A stand-in terminal (Ctrl-Shift-T): records the folder it started in.
+printf '#!/bin/sh\npwd >"%s/terminal-ran-in"\n' "$work" >"$work/bin/fake-terminal"
+chmod +x "$work/bin/fake-terminal"
+export TERMINAL=fake-terminal
 # `true` stands in for an editor: it starts and exits at once.
 printf '# smoke config\neditor = "true"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
 # An old log file that startup must delete.
@@ -358,6 +362,10 @@ check "back in left after find" title_is "$left"
 keys Tab
 check "right back on right" title_is "$right"
 keys Tab
+
+echo "Ctrl-Shift-T starts \$TERMINAL in the active panel's folder"
+keys ctrl+shift+t
+check "terminal started in left" has "$work/terminal-ran-in" "$left"
 
 echo "Ctrl-. hidden files"
 keys ctrl+period

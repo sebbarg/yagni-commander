@@ -29,6 +29,7 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
     file_manager(cx).update(cx, |this, _| {
         this.watchers = None;
         this.opener = "true".into();
+        this.terminal = Some("true".into());
         this.temp_dir = None;
     });
     cx
@@ -5348,5 +5349,69 @@ mod find_files {
             status_text(&Status::Done(skipped)),
             "0 found, 1 folder skipped"
         );
+    }
+}
+
+mod open_terminal {
+    use super::*;
+
+    /// A stand-in terminal that writes the folder it started in to `out`.
+    fn use_recording_terminal(
+        dir: &std::path::Path,
+        cx: &mut VisualTestContext,
+    ) -> std::path::PathBuf {
+        let out = dir.join("terminal-ran-in");
+        let command = format!("sh -c 'pwd > \"{}\"'", out.display());
+        file_manager(cx).update(cx, |this, _| this.terminal = Some(command));
+        out
+    }
+
+    fn started_in(out: &std::path::Path, cx: &mut VisualTestContext) -> String {
+        wait_until(cx, |_| {
+            std::fs::read_to_string(out).is_ok_and(|s| s.ends_with('\n'))
+        });
+        std::fs::read_to_string(out).unwrap().trim().to_owned()
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_shift_t_starts_a_terminal_in_the_active_panels_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let out = use_recording_terminal(tmp.path(), cx);
+        cx.simulate_keystrokes("tab down enter"); // the right panel into a
+        cx.simulate_keystrokes("ctrl-shift-t");
+        assert_eq!(
+            started_in(&out, cx),
+            tmp.path().join("a").display().to_string()
+        );
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_menu_item_does_the_same(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let out = use_recording_terminal(tmp.path(), cx);
+        cx.dispatch_action(crate::actions::OpenTerminal);
+        assert_eq!(started_in(&out, cx), tmp.path().display().to_string());
+    }
+
+    #[gpui_kit::test]
+    fn inside_an_archive_it_starts_in_the_archives_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = super::archive_browsing::inside_zip(cx);
+        let out = use_recording_terminal(tmp.path(), cx);
+        cx.simulate_keystrokes("ctrl-shift-t");
+        assert_eq!(started_in(&out, cx), tmp.path().display().to_string());
+    }
+
+    #[gpui_kit::test]
+    fn a_terminal_that_cannot_start_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        file_manager(cx).update(cx, |this, _| {
+            this.terminal = Some("no-such-terminal-here".into())
+        });
+        cx.simulate_keystrokes("ctrl-shift-t");
+        wait_until(cx, dialog_open);
+        let text = box_text(cx);
+        assert!(text.starts_with("Cannot open a terminal"), "{text}");
+        assert!(text.contains("no-such-terminal-here"), "{text}");
     }
 }
