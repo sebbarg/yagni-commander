@@ -3484,3 +3484,82 @@ mod open_file {
         assert!(!dialog_open(cx));
     }
 }
+
+mod copy_message {
+    use super::*;
+
+    fn show(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            super::commands::show_error(
+                "Cannot open file",
+                "No application could open it.",
+                None,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_c_copies_an_error_box_and_leaves_it_open(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        show(cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("Cannot open file\nNo application could open it.")
+        );
+        assert!(dialog_open(cx), "copying doesn't close it");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_ins_copies_it_too(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        show(cx);
+        cx.simulate_keystrokes("ctrl-insert");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("Cannot open file\nNo application could open it.")
+        );
+        if cfg!(target_os = "macos") {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("x".into()));
+            cx.simulate_keystrokes("cmd-c");
+            assert_eq!(
+                clipboard_text(cx).as_deref(),
+                Some("Cannot open file\nNo application could open it.")
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_real_error_box_copies_its_text(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        // Shift-F4 without an editor shows an error box.
+        cx.simulate_keystrokes("shift-f4");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(
+            clipboard_text(cx).as_deref(),
+            Some("Cannot open editor\nNo editor configured: set `editor` in config.toml.")
+        );
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_c_in_a_confirm_dialog_copies_nothing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        use_fake_trash(cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.simulate_keystrokes("down f8");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(clipboard_text(cx).as_deref(), Some("before"));
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("escape");
+    }
+}

@@ -213,6 +213,14 @@ typed typed-text
 keys ctrl+a ctrl+c
 check "the field's text copied" clipboard typed-text
 keys Escape
+echo "Ctrl-C in an error box copies its text"
+keys F7
+typed docs
+keys Return            # "docs" exists: an error box
+keys ctrl+c
+check "the error copied" sh -c 'xclip -o -selection clipboard | head -1 | grep -qx "Cannot create directory"'
+shot 01b-error-box
+keys Return Escape     # dismiss, then cancel the prompt
 
 echo "Ctrl-. hidden files"
 keys ctrl+period

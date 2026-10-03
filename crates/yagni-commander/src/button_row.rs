@@ -6,16 +6,19 @@
 //! button (drawn as the primary one), Left/Right and Tab/Shift-Tab move the
 //! selection, Enter and Space press it. Tab past either end leaves the row,
 //! e.g. back to a prompt's text field. Escape is left to the dialog (cancel).
+//! In a message box, Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy its text.
 
 use std::rc::Rc;
 
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
-    App, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Window, div, prelude::FluentBuilder, px,
+    App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
-use crate::actions::{BUTTON_ROW_CONTEXT, NextButton, PressButton, PrevButton, TabNext, TabPrev};
+use crate::actions::{
+    BUTTON_ROW_CONTEXT, CopyText, NextButton, PressButton, PrevButton, TabNext, TabPrev,
+};
 
 /// What a button does when pressed. It closes the dialog itself if it should.
 pub type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -24,6 +27,8 @@ pub struct ButtonRow {
     focus: FocusHandle,
     buttons: Vec<(SharedString, OnPress)>,
     selected: usize,
+    /// What Ctrl-C copies while the row has focus (a message box's text).
+    copy_text: Option<SharedString>,
 }
 
 impl ButtonRow {
@@ -37,6 +42,7 @@ impl ButtonRow {
             focus: cx.focus_handle().tab_stop(true),
             selected: selected.min(buttons.len().saturating_sub(1)),
             buttons,
+            copy_text: None,
         }
     }
 
@@ -52,6 +58,12 @@ impl ButtonRow {
             .map(|(label, on_press)| (SharedString::from(label), on_press))
             .collect();
         cx.new(|cx| Self::new(buttons, selected, cx))
+    }
+
+    /// Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy `text` while the row has
+    /// focus. Without it the keys pass on.
+    pub fn set_copy_text(&mut self, text: impl Into<SharedString>) {
+        self.copy_text = Some(text.into());
     }
 
     fn select(&mut self, index: usize, cx: &mut Context<Self>) {
@@ -106,6 +118,14 @@ impl Render for ButtonRow {
             .on_action(cx.listener(|this, _: &PressButton, window, cx| {
                 this.press(this.selected, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &CopyText, _, cx| match &this.copy_text {
+                    Some(text) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text.to_string()))
+                    }
+                    None => cx.propagate(),
+                }),
+            )
             .children(self.buttons.iter().enumerate().map(|(ix, (label, _))| {
                 Button::new(("button", ix))
                     .label(label.clone())

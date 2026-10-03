@@ -99,7 +99,14 @@ pub mod hotlist_list {
 
 actions!(
     button_row,
-    [PrevButton, NextButton, TabNext, TabPrev, PressButton]
+    [
+        PrevButton,
+        NextButton,
+        TabNext,
+        TabPrev,
+        PressButton,
+        CopyText
+    ]
 );
 
 pub fn bind_default_keys(cx: &mut App) {
@@ -191,7 +198,13 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-tab", TabPrev, row),
         KeyBinding::new("enter", PressButton, row),
         KeyBinding::new("space", PressButton, row),
+        // A message box's text (see `ButtonRow::set_copy_text`).
+        KeyBinding::new("ctrl-c", CopyText, row),
+        KeyBinding::new("ctrl-insert", CopyText, row),
     ]);
+    if cfg!(target_os = "macos") {
+        cx.bind_keys([KeyBinding::new("cmd-c", CopyText, row)]);
+    }
     // More specific than the file manager's Up/Down/Enter/Escape.
     let popup = Some(HOTLIST_CONTEXT);
     cx.bind_keys([
