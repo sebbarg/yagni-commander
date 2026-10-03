@@ -87,7 +87,10 @@ pub mod viewer {
             End,
             ToggleWrap,
             ScrollLeft,
-            ScrollRight
+            ScrollRight,
+            Find,
+            FindNext,
+            FindPrevious
         ]
     );
 }
@@ -311,5 +314,9 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("w", viewer::ToggleWrap, ctx),
         KeyBinding::new("left", viewer::ScrollLeft, ctx),
         KeyBinding::new("right", viewer::ScrollRight, ctx),
+        KeyBinding::new("ctrl-f", viewer::Find, ctx),
+        KeyBinding::new("f3", viewer::FindNext, ctx),
+        KeyBinding::new("enter", viewer::FindNext, ctx),
+        KeyBinding::new("shift-f3", viewer::FindPrevious, ctx),
     ]);
 }

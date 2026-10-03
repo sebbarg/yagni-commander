@@ -85,9 +85,10 @@ impl FileManager {
                     cx.notify();
                 });
             }
-            FindEvent::View(path) => {
+            FindEvent::View(path, text) => {
                 let main = window.window_bounds();
-                if let Err(e) = crate::viewer_view::open(path.clone(), main, None, cx) {
+                let text = text.clone();
+                if let Err(e) = crate::viewer_view::open(path.clone(), main, None, text, cx) {
                     let back = window.focused(cx);
                     show_error("Cannot view file", e.to_string(), back, window, cx);
                 }

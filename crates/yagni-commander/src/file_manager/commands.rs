@@ -376,8 +376,10 @@ impl FileManager {
             return;
         }
         let path = panel.cursor_path();
+        // A results panel's text search: the viewer opens at its match.
+        let text = panel.results().and_then(|r| r.text.clone());
         let main = window.window_bounds();
-        if let Err(e) = crate::viewer_view::open(path, main, None, cx) {
+        if let Err(e) = crate::viewer_view::open(path, main, None, text, cx) {
             show_error(
                 "Cannot view file",
                 e.to_string(),
@@ -535,7 +537,7 @@ pub(crate) fn show_error(
 }
 
 /// A centered, modal message box with one `button`, like [`show_error`].
-pub(super) fn show_message(
+pub(crate) fn show_message(
     title: &'static str,
     message: impl Into<SharedString>,
     button: &'static str,

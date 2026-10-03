@@ -2575,6 +2575,17 @@ mod results_tests {
     }
 
     #[test]
+    fn a_recheck_keeps_the_searched_text() {
+        let tmp = tree();
+        let text = crate::find::text::Text {
+            pattern: "main".into(),
+            ..Default::default()
+        };
+        let results = results(tmp.path(), "*.rs").with_text(Some(text.clone()));
+        assert_eq!(results.recheck().text, Some(text));
+    }
+
+    #[test]
     fn alt_z_and_ctrl_u_carry_results() {
         let tmp = tree();
         let mut c = fed(&tmp);

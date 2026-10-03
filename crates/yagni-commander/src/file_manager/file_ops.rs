@@ -903,7 +903,8 @@ impl FileManager {
                 );
             } else if let (Some(viewing), false) = (running.viewing, report.cancelled) {
                 let main = window.window_bounds();
-                if let Err(e) = crate::viewer_view::open(viewing.file, main, Some(viewing.dir), cx)
+                if let Err(e) =
+                    crate::viewer_view::open(viewing.file, main, Some(viewing.dir), None, cx)
                 {
                     show_error(
                         "Cannot view file",

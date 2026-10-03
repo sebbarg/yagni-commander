@@ -36,15 +36,19 @@ pub struct Row {
     pub dim: Vec<Range<usize>>,
     /// Width of `text` in columns.
     pub width: u32,
+    /// The range of `text` that shows the marked bytes (the current match).
+    pub mark: Option<Range<usize>>,
 }
 
 impl Row {
     /// The part of the row from column `from_col`, at most `cols` wide, with
-    /// its dim ranges. A wide character cut by either edge becomes a space.
-    pub fn visible(&self, from_col: u32, cols: u32) -> (String, Vec<Range<usize>>) {
+    /// its dim ranges and mark. A wide character cut by either edge becomes a
+    /// space.
+    pub fn visible(&self, from_col: u32, cols: u32) -> Visible {
         let to_col = from_col.saturating_add(cols);
         let mut text = String::new();
         let mut dim = Vec::new();
+        let mut mark: Option<Range<usize>> = None;
         let mut col = 0;
         // `self.dim` is sorted, so one pass over it keeps this linear.
         let mut dims = self.dim.iter().map(|r| r.start).peekable();
@@ -60,18 +64,43 @@ impl Row {
             if start >= to_col {
                 break;
             }
+            let at = text.len();
             if start < from_col || end > to_col {
                 text.push(' ');
-                continue;
+            } else {
+                text.push(ch);
+                if is_dim {
+                    dim.push(at..text.len());
+                }
             }
-            let at = text.len();
-            text.push(ch);
-            if is_dim {
-                dim.push(at..text.len());
+            if self.mark.as_ref().is_some_and(|m| m.contains(&ix)) {
+                mark.get_or_insert(at..at).end = text.len();
             }
         }
-        (text, dim)
+        Visible { text, dim, mark }
     }
+}
+
+impl Row {
+    /// The columns [`Self::mark`] takes.
+    pub fn mark_columns(&self) -> Option<Range<u32>> {
+        let mark = self.mark.as_ref()?;
+        let width = |s: &str| {
+            s.chars()
+                .map(|c| c.width().unwrap_or(1) as u32)
+                .sum::<u32>()
+        };
+        let start = width(&self.text[..mark.start]);
+        Some(start..start + width(&self.text[mark.clone()]))
+    }
+}
+
+/// What [`Row::visible`] shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Visible {
+    pub text: String,
+    pub dim: Vec<Range<usize>>,
+    pub mark: Option<Range<usize>>,
 }
 
 /// Decodes one unit at the start of `bytes`: a valid UTF-8 character and its
@@ -92,11 +121,19 @@ pub(crate) fn decode(bytes: &[u8]) -> (Option<char>, usize) {
 
 /// Lays out the row starting at file offset `start`. `bytes` begins there;
 /// the row never extends past `limit` bytes (a forced break or the end of
-/// the file) and, wrapping, never past `cols` columns.
-pub(crate) fn layout_row(bytes: &[u8], start: u64, limit: usize, wrap: Wrap) -> Row {
+/// the file) and, wrapping, never past `cols` columns. `mark`: file bytes
+/// whose characters get [`Row::mark`].
+pub(crate) fn layout_row(
+    bytes: &[u8],
+    start: u64,
+    limit: usize,
+    wrap: Wrap,
+    mark: Option<&Range<u64>>,
+) -> Row {
     let limit = limit.min(bytes.len());
     let mut text = String::new();
     let mut dim = Vec::new();
+    let mut marked: Option<Range<usize>> = None;
     let mut col = 0u32;
     let mut chars = 0;
     let mut i = 0;
@@ -140,6 +177,10 @@ pub(crate) fn layout_row(bytes: &[u8], start: u64, limit: usize, wrap: Wrap) -> 
         if is_dim {
             dim.push(at..text.len());
         }
+        let pos = start + i as u64;
+        if mark.is_some_and(|m| pos < m.end && pos + len as u64 > m.start) {
+            marked.get_or_insert(at..at).end = text.len();
+        }
         col += w;
         chars += 1;
         i += len;
@@ -147,12 +188,17 @@ pub(crate) fn layout_row(bytes: &[u8], start: u64, limit: usize, wrap: Wrap) -> 
             soft = Some((i, text.len(), dim.len(), col));
         }
     }
+    // A word-wrap break may have cut the marked text off.
+    let mark = marked
+        .map(|m| m.start..m.end.min(text.len()))
+        .filter(|m| m.start < m.end);
     Row {
         start,
         end: start + i as u64,
         text,
         dim,
         width: col,
+        mark,
     }
 }
 
@@ -169,7 +215,7 @@ mod tests {
         let mut rows = Vec::new();
         let mut pos = 0;
         while pos < bytes.len() {
-            let row = layout_row(&bytes[pos..], pos as u64, bytes.len() - pos, wrap);
+            let row = layout_row(&bytes[pos..], pos as u64, bytes.len() - pos, wrap, None);
             pos = row.end as usize;
             rows.push(row);
         }
@@ -259,7 +305,7 @@ mod tests {
 
     #[test]
     fn limit_forces_a_break() {
-        let row = layout_row(b"abcdef", 10, 3, Wrap::Off);
+        let row = layout_row(b"abcdef", 10, 3, Wrap::Off, None);
         assert_eq!((row.start, row.end, row.text.as_str()), (10, 13, "abc"));
     }
 
@@ -267,8 +313,82 @@ mod tests {
     fn crlf_split_by_the_limit_shows_the_cr() {
         // A forced break between \r and \n: the \r stays a placeholder so the
         // row ends exactly at the break.
-        let row = layout_row(b"a\r\n", 0, 2, Wrap::Off);
+        let row = layout_row(b"a\r\n", 0, 2, Wrap::Off, None);
         assert_eq!((row.end, row.text.as_str()), (2, "a·"));
+    }
+
+    /// The marked text of each row laid out from 0.
+    fn marked(bytes: &[u8], wrap: Wrap, mark: Range<u64>) -> Vec<Option<String>> {
+        let mut rows = Vec::new();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let row = layout_row(
+                &bytes[pos..],
+                pos as u64,
+                bytes.len() - pos,
+                wrap,
+                Some(&mark),
+            );
+            pos = row.end as usize;
+            rows.push(row.mark.map(|m| row.text[m].to_owned()));
+        }
+        rows
+    }
+
+    #[test]
+    fn the_mark_covers_the_characters_of_its_bytes() {
+        assert_eq!(
+            marked(b"ab cd\nef", Wrap::Off, 3..5),
+            [Some("cd".into()), None]
+        );
+        assert_eq!(
+            marked(b"ab cd\nef", Wrap::Off, 6..8),
+            [None, Some("ef".into())]
+        );
+        // A tab shows as spaces, a control byte as a placeholder.
+        assert_eq!(marked(b"a\tb", Wrap::Off, 1..2), [Some(" ".repeat(7))]);
+        assert_eq!(marked(b"a\x01b", Wrap::Off, 1..3), [Some("·b".into())]);
+        // Inside a multi-byte character: the whole character.
+        assert_eq!(
+            marked("xéy".as_bytes(), Wrap::Off, 2..3),
+            [Some("é".into())]
+        );
+        assert_eq!(marked(b"abc", Wrap::Off, 1..1), [None], "empty");
+    }
+
+    #[test]
+    fn a_mark_across_wrapped_rows_shows_on_each() {
+        assert_eq!(
+            marked(b"hello big world", wrap(10), 6..13),
+            [Some("big ".into()), Some("wor".into())]
+        );
+        // The break falls back to the last space, cutting the marked "wor"
+        // off the first row.
+        assert_eq!(
+            marked(b"hello world", wrap(8), 6..9),
+            [None, Some("wor".into())]
+        );
+    }
+
+    #[test]
+    fn mark_columns_count_display_columns() {
+        let row = layout_row("日\tab".as_bytes(), 0, 6, Wrap::Off, Some(&(4..6)));
+        assert_eq!(row.mark_columns(), Some(8..10));
+        assert_eq!(
+            layout_row(b"ab", 0, 2, Wrap::Off, None).mark_columns(),
+            None
+        );
+    }
+
+    #[test]
+    fn visible_clips_the_mark() {
+        let row = layout_row(b"abcdef", 0, 6, Wrap::Off, Some(&(1..5)));
+        let shown = row.visible(2, 2);
+        assert_eq!((shown.text.as_str(), shown.mark), ("cd", Some(0..2)));
+        assert_eq!(row.visible(5, 3).mark, None);
+        let wide = layout_row("a日b".as_bytes(), 0, 5, Wrap::Off, Some(&(1..4)));
+        let shown = wide.visible(2, 3);
+        assert_eq!((shown.text.as_str(), shown.mark), (" b", Some(0..1)));
     }
 
     #[test]
@@ -284,16 +404,16 @@ mod tests {
     fn visible_slices_by_columns() {
         let row = &all("ab日cd".as_bytes(), Wrap::Off)[0];
         // The wide char straddles column 3: it becomes a space at either edge.
-        assert_eq!(row.visible(0, 3).0, "ab ");
-        assert_eq!(row.visible(3, 10).0, " cd");
-        assert_eq!(row.visible(2, 2).0, "日");
-        assert_eq!(row.visible(50, 10).0, "");
+        assert_eq!(row.visible(0, 3).text, "ab ");
+        assert_eq!(row.visible(3, 10).text, " cd");
+        assert_eq!(row.visible(2, 2).text, "日");
+        assert_eq!(row.visible(50, 10).text, "");
     }
 
     #[test]
     fn visible_keeps_dim_ranges() {
         let row = &all(b"ab\x01cd", Wrap::Off)[0];
-        let (text, dim) = row.visible(1, 3);
+        let Visible { text, dim, .. } = row.visible(1, 3);
         assert_eq!(text, "b·c");
         assert_eq!(&text[dim[0].clone()], "·");
     }
@@ -303,7 +423,7 @@ mod tests {
         // A no-wrap row of binary data: every character a placeholder.
         let row = &all(&[0x01; MAX_ROW_CHARS], Wrap::Off)[0];
         let start = std::time::Instant::now();
-        let (text, dim) = row.visible(0, MAX_ROW_CHARS as u32);
+        let Visible { text, dim, .. } = row.visible(0, MAX_ROW_CHARS as u32);
         assert_eq!(dim.len(), MAX_ROW_CHARS);
         assert_eq!(text.chars().count(), MAX_ROW_CHARS);
         // Quadratic takes seconds here in a debug build; linear ~1 ms.

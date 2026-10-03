@@ -13,15 +13,21 @@ use gpui_kit::{
     App, AppContext, Context, FocusHandle, HighlightStyle, SharedString, StyledText, Subscription,
     Window, WindowBounds, WindowOptions, div, font, prelude::*, px,
 };
+use yagni_commander_core::find::text::Text;
 use yagni_commander_core::format_size;
-use yagni_commander_core::viewer::{Document, FileSource, LineIndex, Row, Wrap, count_lines};
+use yagni_commander_core::viewer::{
+    Direction, Document, FileSource, LineIndex, Row, Visible, Wrap, count_lines,
+};
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
-    Close, End, LineDown, LineUp, PageDown, PageUp, ScrollLeft, ScrollRight, Start, ToggleWrap,
+    Close, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown, PageUp, ScrollLeft,
+    ScrollRight, Start, ToggleWrap,
 };
 use crate::app_state::AppState;
 use crate::theme::Theme;
+
+mod search;
 
 const PADDING: f32 = 8.0;
 const LINE_HEIGHT: f32 = 18.0;
@@ -44,10 +50,12 @@ pub fn window_title(path: &Path) -> String {
 /// over the main window (`main`).
 /// `temp`: the private copy of an archive entry that `path` is in, deleted
 /// with the window.
+/// `search`: Alt-F7's text, searched for from the start of the file.
 pub fn open(
     path: PathBuf,
     main: WindowBounds,
     temp: Option<tempfile::TempDir>,
+    search: Option<Text>,
     cx: &mut App,
 ) -> io::Result<()> {
     let source = FileSource::open(&path)?;
@@ -57,7 +65,13 @@ pub fn open(
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| ViewerView::new(path, source, temp, window, cx))
+        cx.new(|cx| {
+            let mut view = ViewerView::new(path, source, temp, window, cx);
+            if let Some(text) = search {
+                view.search_from_start(text, window, cx);
+            }
+            view
+        })
     })
     .map_err(io::Error::other)?;
     Ok(())
@@ -81,8 +95,12 @@ pub struct ViewerView {
     /// Line of `top`, cached while `top` doesn't change.
     top_line: Option<(u64, u64)>,
     cancel_count: Arc<AtomicBool>,
-    /// Texts of the rows last drawn (tests read them).
+    /// Ctrl-F / F3 / Shift-F3.
+    search: search::SearchState,
+    /// Texts of the rows last drawn, and their marked parts (tests read
+    /// them).
     shown: Vec<String>,
+    shown_marks: Vec<Option<String>>,
     /// Bytes shown, for the scrollbar thumb and the percentage.
     shown_end: u64,
     dragging_thumb: bool,
@@ -139,7 +157,9 @@ impl ViewerView {
             lines: None,
             top_line: None,
             cancel_count,
+            search: search::SearchState::default(),
             shown: Vec::new(),
+            shown_marks: Vec::new(),
             shown_end: 0,
             dragging_thumb: false,
             wheel_rows: 0.0,
@@ -202,8 +222,11 @@ impl ViewerView {
         cx.notify();
     }
 
-    fn close(&mut self, window: &mut Window) {
-        window.remove_window();
+    /// Escape: stops a running search, else closes the window.
+    fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.stop_search(cx) {
+            window.remove_window();
+        }
     }
 
     /// Rows and columns that fit the window, from the monospace font.
@@ -235,6 +258,9 @@ impl ViewerView {
             .checked_div(len)
             .unwrap_or(100)
             .min(100);
+        if let Some(searching) = self.searching_text() {
+            return format!("{name} · {} · {searching}", format_size(len));
+        }
         let mode = if self.wrap { "wrap" } else { "no wrap" };
         let line = match &self.lines {
             None => "counting lines...".to_owned(),
@@ -279,6 +305,21 @@ impl ViewerView {
     #[cfg(test)]
     pub(crate) fn screen_rows(&self) -> usize {
         self.screen_rows
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shown_marks(&self) -> &[Option<String>] {
+        &self.shown_marks
+    }
+
+    #[cfg(test)]
+    pub(crate) fn current_match(&self) -> Option<std::ops::Range<u64>> {
+        self.search.current.clone()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn searching(&self) -> bool {
+        self.search.running.is_some()
     }
 }
 
@@ -375,7 +416,9 @@ impl Render for ViewerView {
                 self.top = self.doc.row_start_at(self.top, self.layout());
             }
         }
-        let visible: Vec<Row> = self.doc.rows(self.top, rows, self.layout());
+        let visible: Vec<Row> =
+            self.doc
+                .marked_rows(self.top, rows, self.layout(), self.search.current.as_ref());
         self.shown_end = visible.last().map_or(self.top, |r| r.end);
         self.widest = visible.iter().map(|r| r.width).max().unwrap_or(0);
 
@@ -384,17 +427,41 @@ impl Render for ViewerView {
             color: Some(colors.hidden.into()),
             ..Default::default()
         };
+        let marked = HighlightStyle {
+            color: Some(colors.text_on_accent.into()),
+            background_color: Some(colors.accent.into()),
+            ..Default::default()
+        };
         self.shown.clear();
+        self.shown_marks.clear();
         let mut row_elements = Vec::with_capacity(visible.len());
         for (ix, row) in visible.iter().enumerate() {
-            let (text, dims) = if self.wrap {
-                (row.text.clone(), row.dim.clone())
+            let Visible {
+                text,
+                dim: dims,
+                mark,
+            } = if self.wrap {
+                Visible {
+                    text: row.text.clone(),
+                    dim: row.dim.clone(),
+                    mark: row.mark.clone(),
+                }
             } else {
                 row.visible(self.h_offset, self.cols)
             };
             self.shown.push(text.clone());
-            let styled = StyledText::new(SharedString::from(text))
-                .with_highlights(dims.into_iter().map(|r| (r, dim)));
+            self.shown_marks
+                .push(mark.clone().map(|m| text[m].to_owned()));
+            // The mark wins over the placeholders inside it; gpui wants the
+            // ranges in order.
+            let mut highlights: Vec<_> = dims
+                .into_iter()
+                .filter(|d| !mark.as_ref().is_some_and(|m| m.contains(&d.start)))
+                .map(|r| (r, dim))
+                .chain(mark.clone().map(|m| (m, marked)))
+                .collect();
+            highlights.sort_by_key(|(r, _)| r.start);
+            let styled = StyledText::new(SharedString::from(text)).with_highlights(highlights);
             row_elements.push(
                 div()
                     .debug_selector(move || format!("viewer-row-{ix}"))
@@ -413,7 +480,14 @@ impl Render for ViewerView {
         div()
             .key_context(VIEWER_CONTEXT)
             .track_focus(&self.focus)
-            .on_action(cx.listener(|this, _: &Close, window, _| this.close(window)))
+            .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &FindNext, window, cx| {
+                this.find_again(Direction::Forward, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &FindPrevious, window, cx| {
+                this.find_again(Direction::Backward, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &LineDown, _, cx| this.down(1, cx)))
             .on_action(cx.listener(|this, _: &LineUp, _, cx| this.up(1, cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| {

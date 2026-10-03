@@ -11,6 +11,7 @@ mod icon_font;
 mod info_dialog;
 mod menu_bar;
 mod menus;
+mod option_box;
 mod panel_view;
 mod settings_dialog;
 mod theme;

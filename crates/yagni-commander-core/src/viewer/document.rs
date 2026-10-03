@@ -8,6 +8,7 @@
 //! Both directions apply that rule by looking back at most a few blocks, so
 //! they always agree.
 
+use std::ops::Range;
 use std::rc::Rc;
 
 use super::layout::{BLOCK, ROW_WINDOW, Row, Wrap, decode, layout_row};
@@ -180,21 +181,36 @@ impl<S: Source> Document<S> {
     }
 
     fn row(&mut self, start: u64, wrap: Wrap) -> Row {
+        self.marked_row(start, wrap, None)
+    }
+
+    fn marked_row(&mut self, start: u64, wrap: Wrap, mark: Option<&Range<u64>>) -> Row {
         let window = self.bytes(start, ROW_WINDOW);
         let limit = match self.break_after(start) {
             Some(b) => ((b - start) as usize).min(window.len()),
             None => window.len(),
         };
-        layout_row(&window, start, limit, wrap)
+        layout_row(&window, start, limit, wrap, mark)
     }
 
     /// Up to `n` rows from the row start `top`.
     pub fn rows(&mut self, top: u64, n: usize, wrap: Wrap) -> Vec<Row> {
+        self.marked_rows(top, n, wrap, None)
+    }
+
+    /// [`Self::rows`], with [`Row::mark`] set where they show `mark`.
+    pub fn marked_rows(
+        &mut self,
+        top: u64,
+        n: usize,
+        wrap: Wrap,
+        mark: Option<&Range<u64>>,
+    ) -> Vec<Row> {
         self.check_shrunk();
         let mut rows = Vec::new();
         let mut pos = top;
         while rows.len() < n && pos < self.len {
-            let row = self.row(pos, wrap);
+            let row = self.marked_row(pos, wrap, mark);
             if row.end == pos {
                 break; // the file shrank under us
             }

@@ -43,7 +43,8 @@ fn view(
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("file.txt");
     std::fs::write(&path, text).unwrap();
-    cx.update(|cx| open(path, main_bounds(), None, cx)).unwrap();
+    cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        .unwrap();
     let window = *cx.windows().last().unwrap();
     let viewer = viewer_in(window, cx).expect("a viewer window");
     let vcx = VisualTestContext::from_window(window, cx);
@@ -281,8 +282,8 @@ fn closing_the_main_window_closes_the_viewers(cx: &mut TestAppContext) {
     std::fs::write(&path, b"x").unwrap();
     cx.update(|cx| {
         crate::windows::close_all_when_main_closes(main, cx).detach();
-        open(path.clone(), main_bounds(), None, cx).unwrap();
-        open(path, main_bounds(), None, cx).unwrap();
+        open(path.clone(), main_bounds(), None, None, cx).unwrap();
+        open(path, main_bounds(), None, None, cx).unwrap();
     });
     cx.run_until_parked();
     assert_eq!(cx.windows().len(), 3);
@@ -290,4 +291,289 @@ fn closing_the_main_window_closes_the_viewers(cx: &mut TestAppContext) {
         .unwrap();
     cx.run_until_parked();
     assert!(cx.windows().is_empty());
+}
+
+mod search {
+    use super::*;
+    use crate::viewer_view::search::LastSearch;
+    use gpui_kit::component::WindowExt;
+    use yagni_commander_core::find::text::Text;
+
+    /// Lets the running search end and its result arrive.
+    fn settle(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) {
+        for _ in 0..400 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+            if !viewer.read_with(cx, |v, _| v.searching()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("the search never ended");
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    /// Ctrl-F, `text` typed over the prefill, Enter; waits for the result.
+    fn find(viewer: &Entity<ViewerView>, text: &str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_input(text);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        settle(viewer, cx);
+    }
+
+    /// (row on screen, marked text) of every marked row.
+    fn marks(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Vec<(usize, String)> {
+        cx.run_until_parked();
+        viewer.read_with(cx, |v, _| {
+            v.shown_marks()
+                .iter()
+                .enumerate()
+                .filter_map(|(ix, m)| m.clone().map(|m| (ix, m)))
+                .collect()
+        })
+    }
+
+    fn top_row(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> String {
+        shown(viewer, cx)[0].clone()
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_f_finds_and_marks_the_match_a_third_down(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        find(&viewer, "line 500", &mut cx);
+        assert!(!dialog_open(&mut cx));
+        let screen = viewer.read_with(&cx, |v, _| v.screen_rows());
+        assert_eq!(marks(&viewer, &mut cx), [(screen / 3, "line 500".into())]);
+        // The view keeps keys: Escape still closes it.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cx.windows().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_match_on_screen_leaves_the_view_alone(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        find(&viewer, "line 5", &mut cx);
+        assert_eq!(top_row(&viewer, &mut cx), "line 1");
+        assert_eq!(marks(&viewer, &mut cx), [(4, "line 5".into())]);
+    }
+
+    #[gpui_kit::test]
+    fn f3_and_shift_f3_step_through_matches(cx: &mut TestAppContext) {
+        let text: String = (0..300)
+            .map(|n| {
+                if n % 100 == 50 {
+                    format!("needle {n}\n")
+                } else {
+                    format!("{n}\n")
+                }
+            })
+            .collect();
+        let (_tmp, viewer, mut cx) = view(text.as_bytes(), cx);
+        let current = |cx: &mut VisualTestContext| {
+            let m = viewer.read_with(cx, |v, _| v.current_match()).unwrap();
+            text[m.start as usize..].lines().next().unwrap().to_owned()
+        };
+        find(&viewer, "needle", &mut cx);
+        assert_eq!(current(&mut cx), "needle 50");
+        cx.simulate_keystrokes("f3");
+        settle(&viewer, &mut cx);
+        assert_eq!(current(&mut cx), "needle 150");
+        cx.simulate_keystrokes("f3");
+        settle(&viewer, &mut cx);
+        assert_eq!(current(&mut cx), "needle 250");
+        cx.simulate_keystrokes("f3");
+        settle(&viewer, &mut cx);
+        assert!(dialog_open(&mut cx), "not found");
+        assert_eq!(current(&mut cx), "needle 250", "the match stays");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1, "Escape closed only the box");
+        cx.simulate_keystrokes("shift-f3");
+        settle(&viewer, &mut cx);
+        assert_eq!(current(&mut cx), "needle 150");
+        // Off screen, F3 starts at the top of the screen.
+        cx.simulate_keystrokes("ctrl-home f3");
+        settle(&viewer, &mut cx);
+        assert_eq!(current(&mut cx), "needle 50");
+        // Enter is F3 too.
+        cx.simulate_keystrokes("enter");
+        settle(&viewer, &mut cx);
+        assert_eq!(current(&mut cx), "needle 150");
+    }
+
+    #[gpui_kit::test]
+    fn f3_without_a_search_opens_the_dialog(cx: &mut TestAppContext) {
+        for key in ["f3", "shift-f3", "enter"] {
+            let (_tmp, _viewer, mut vcx) = view(b"text\n", cx);
+            vcx.simulate_keystrokes(key);
+            vcx.run_until_parked();
+            assert!(dialog_open(&mut vcx), "{key}");
+            vcx.simulate_keystrokes("escape");
+            vcx.run_until_parked();
+            assert!(!dialog_open(&mut vcx));
+            vcx.simulate_keystrokes("escape");
+            vcx.run_until_parked();
+        }
+    }
+
+    #[gpui_kit::test]
+    fn empty_text_does_nothing_and_a_bad_regex_says_so(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"a (b)\n", cx);
+        cx.simulate_keystrokes("ctrl-f enter");
+        cx.run_until_parked();
+        assert!(dialog_open(&mut cx), "empty: the dialog stays");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            cx.set_global(LastSearch(Text {
+                pattern: "(".into(),
+                regex: true,
+                ..Text::default()
+            }))
+        });
+        cx.simulate_keystrokes("ctrl-f enter");
+        cx.run_until_parked();
+        assert!(!viewer.read_with(&cx, |v, _| v.searching()));
+        // The error box over the dialog; closing it goes back to the dialog.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(dialog_open(&mut cx));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(&mut cx));
+        assert_eq!(viewer.read_with(&cx, |v, _| v.current_match()), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_dialog_starts_with_the_last_search_from_any_viewer(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(b"one Two two\n", cx);
+        vcx.simulate_keystrokes("ctrl-f");
+        vcx.run_until_parked();
+        vcx.simulate_input("two");
+        // Tab to Case-sensitive, Space ticks it.
+        vcx.simulate_keystrokes("tab space enter");
+        vcx.run_until_parked();
+        settle(&viewer, &mut vcx);
+        assert_eq!(
+            viewer.read_with(&vcx, |v, _| v.current_match()),
+            Some(8..11)
+        );
+        // A second viewer's dialog: Enter searches the same way.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("other.txt");
+        std::fs::write(&path, b"Two two\n").unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let other = viewer_in(window, cx).unwrap();
+        let mut ocx = VisualTestContext::from_window(window, cx);
+        ocx.run_until_parked();
+        ocx.simulate_keystrokes("ctrl-f enter");
+        ocx.run_until_parked();
+        settle(&other, &mut ocx);
+        assert_eq!(other.read_with(&ocx, |v, _| v.current_match()), Some(4..7));
+    }
+
+    #[gpui_kit::test]
+    fn escape_stops_a_long_search_and_the_status_line_says_so(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        viewer.update(&mut cx, |v, _| v.search.hold = true);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("line 900");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let status = |cx: &mut VisualTestContext| viewer.update(cx, |v, _| v.status_text());
+        assert!(!status(&mut cx).contains("searching"), "quiet at first");
+        for _ in 0..3 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        assert!(
+            status(&mut cx).contains("searching... 0%"),
+            "{}",
+            status(&mut cx)
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), 1, "Escape stopped the search only");
+        assert!(!viewer.read_with(&cx, |v, _| v.searching()));
+        viewer.update(&mut cx, |v, _| {
+            v.search
+                .held
+                .take()
+                .unwrap()
+                .store(false, Ordering::Relaxed)
+        });
+        for _ in 0..5 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        assert_eq!(viewer.read_with(&cx, |v, _| v.current_match()), None);
+        assert_eq!(top_row(&viewer, &mut cx), "line 1");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(cx.windows().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn without_wrap_the_columns_follow_the_match(cx: &mut TestAppContext) {
+        let line = format!("{}needle\n", "x".repeat(500));
+        let (_tmp, viewer, mut cx) = view(line.as_bytes(), cx);
+        cx.simulate_keystrokes("w");
+        find(&viewer, "needle", &mut cx);
+        assert!(viewer.read_with(&cx, |v, _| v.h_offset()) > 0);
+        assert_eq!(marks(&viewer, &mut cx), [(0, "needle".into())]);
+    }
+
+    #[gpui_kit::test]
+    fn a_wrapped_match_is_marked_on_each_row(cx: &mut TestAppContext) {
+        let (tmp, first, vcx) = view(b"y", cx);
+        let cols = first.read_with(&vcx, |v, _| v.cols) as usize;
+        let path = tmp.path().join("wide.txt");
+        std::fs::write(&path, format!("{}abcdef\n", "x".repeat(cols - 3))).unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window, cx);
+        cx.run_until_parked();
+        find(&viewer, "abcdef", &mut cx);
+        assert_eq!(
+            marks(&viewer, &mut cx),
+            [(0, "abc".into()), (1, "def".into())]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_f7_text_opens_at_the_first_match(cx: &mut TestAppContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("file.txt");
+        std::fs::write(&path, numbered(1000)).unwrap();
+        let text = Text {
+            pattern: "LINE 700".into(),
+            ..Text::default()
+        };
+        cx.update(|cx| open(path, main_bounds(), None, Some(text), cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        let mut vcx = VisualTestContext::from_window(window, cx);
+        settle(&viewer, &mut vcx);
+        let screen = viewer.read_with(&vcx, |v, _| v.screen_rows());
+        assert_eq!(marks(&viewer, &mut vcx), [(screen / 3, "line 700".into())]);
+        let last = cx.update(|cx| cx.global::<LastSearch>().0.pattern.clone());
+        assert_eq!(last, "LINE 700");
+    }
 }

@@ -5280,6 +5280,64 @@ mod find_files {
         assert!(dialog_open(cx));
     }
 
+    /// The match the viewer opened by F3 on a result shows, once its
+    /// search ends.
+    fn viewer_match(cx: &mut VisualTestContext) -> Option<std::ops::Range<u64>> {
+        let viewer = cx
+            .windows()
+            .into_iter()
+            .find_map(|w| crate::viewer_view::tests::viewer_in(w, cx))
+            .expect("a viewer");
+        wait_until(cx, |cx| !viewer.read_with(cx, |v, _| v.searching()));
+        viewer.read_with(cx, |v, _| v.current_match())
+    }
+
+    #[gpui_kit::test]
+    fn f3_after_a_text_search_shows_the_first_match(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Masks, "*.txt");
+        set(cx, Field::Text, "NEEDLE");
+        run_search(cx);
+        // The fields changed since: the search's own text counts.
+        set(cx, Field::Text, "here");
+        cx.simulate_keystrokes("f3");
+        cx.run_until_parked();
+        assert_eq!(viewer_match(cx), Some(2..8));
+    }
+
+    #[gpui_kit::test]
+    fn f3_in_a_fed_panel_shows_the_first_match_too(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Masks, "*.txt");
+        set(cx, Field::Text, "NEEDLE");
+        run_search(cx);
+        cx.simulate_keystrokes("alt-l");
+        cx.run_until_parked();
+        assert!(commander.read_with(cx, |c, _| c.panel(c.active()).in_results()));
+        // Ctrl-R re-checks the results and keeps the text.
+        cx.simulate_keystrokes("ctrl-r end f3");
+        cx.run_until_parked();
+        assert_eq!(viewer_match(cx), Some(2..8));
+    }
+
+    #[gpui_kit::test]
+    fn f3_after_a_not_containing_search_just_views(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        set(cx, Field::Masks, "*.txt");
+        set(cx, Field::Text, "absent");
+        click(cx, "find-not", 1);
+        run_search(cx);
+        cx.simulate_keystrokes("f3");
+        cx.run_until_parked();
+        assert_eq!(viewer_match(cx), None);
+    }
+
     #[gpui_kit::test]
     fn bad_input_shows_an_error_and_keeps_the_dialog(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = opened(cx);

@@ -506,6 +506,18 @@ keys ctrl+End
 shot 09-viewer-end
 keys w Right Right
 shot 10-viewer-nowrap
+echo "Ctrl-F and F3 in the viewer"
+keys w ctrl+Home ctrl+f
+typed "line 150000"
+shot 10a0-viewer-find-dialog
+keys Return
+sleep 1
+shot 10a-viewer-found
+keys F3
+sleep 1
+shot 10b-viewer-not-found
+keys Escape
+check "Escape closed only the not-found box" xdotool search --name "big.txt - yagni-commander"
 keys Escape
 check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
 xdotool windowfocus "$window"

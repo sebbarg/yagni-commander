@@ -4,6 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
+use std::ops::Range;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,27 +96,29 @@ impl TextQuery {
 
     /// A match in `hay` that stays on one line.
     fn line_match(&self, hay: &[u8]) -> bool {
-        let mut at = 0;
+        self.find_at(hay, 0).is_some()
+    }
+
+    /// The leftmost match starting at or after `at` that stays on one line.
+    /// The bytes before `at` are context for `^` and `\b`. Shared by Alt-F7
+    /// and the viewer, so both agree on what a match is.
+    pub fn find_at(&self, hay: &[u8], at: usize) -> Option<Range<usize>> {
+        let mut at = at;
         while at <= hay.len() {
-            let Some(m) = self.regex.find_at(hay, at) else {
-                return false;
-            };
+            let m = self.regex.find_at(hay, at)?;
             let Some(i) = m.as_bytes().iter().position(|&b| b == b'\n') else {
-                return true;
+                return Some(m.range());
             };
-            // The leftmost match ran past its line; a shorter one may
-            // still fit on it.
+            // The leftmost match ran past its line; a shorter one may still
+            // fit on it. Cut at the line end, which behaves like the `\n`
+            // for `$` and `\b`.
             let line_end = m.start() + i;
-            let line_start = hay[..m.start()]
-                .iter()
-                .rposition(|&b| b == b'\n')
-                .map_or(0, |n| n + 1);
-            if self.regex.is_match(&hay[line_start..line_end]) {
-                return true;
+            if let Some(m) = self.regex.find_at(&hay[..line_end], m.start()) {
+                return Some(m.range());
             }
             at = line_end + 1;
         }
-        false
+        None
     }
 }
 
@@ -248,6 +251,52 @@ mod tests {
         content.extend_from_slice(b"needle");
         assert!(found(&text("needle"), &content));
         assert!(!found(&text("absent"), &content));
+    }
+
+    fn at(t: &Text, hay: &str, at: usize) -> Option<Range<usize>> {
+        t.compile().unwrap().find_at(hay.as_bytes(), at)
+    }
+
+    fn re(pattern: &str) -> Text {
+        Text {
+            regex: true,
+            ..text(pattern)
+        }
+    }
+
+    #[test]
+    fn find_at_gives_the_leftmost_match_from_a_position() {
+        assert_eq!(at(&text("ab"), "ab ab", 0), Some(0..2));
+        assert_eq!(at(&text("ab"), "ab ab", 1), Some(3..5));
+        assert_eq!(at(&text("aa"), "aaa", 1), Some(1..3), "overlapping");
+        assert_eq!(at(&text("ab"), "ab ab", 4), None);
+        assert_eq!(at(&text("ab"), "ab", 3), None, "past the end");
+    }
+
+    #[test]
+    fn find_at_sees_the_bytes_before_it() {
+        let words = Text {
+            whole_words: true,
+            ..text("foo")
+        };
+        assert_eq!(at(&words, "xfoo foo", 1), Some(5..8));
+        assert_eq!(at(&re("^b"), "ab\nb", 1), Some(3..4));
+    }
+
+    #[test]
+    fn find_at_keeps_matches_on_one_line() {
+        assert_eq!(
+            at(&re(r"a\s*"), "a\nb", 0),
+            Some(0..1),
+            "shorter on the line"
+        );
+        assert_eq!(at(&re(r"a\sb"), "a\nb a b", 0), Some(4..7), "next line's");
+        assert_eq!(at(&re(r"a\sb"), "a\nb", 0), None);
+    }
+
+    #[test]
+    fn find_at_can_return_an_empty_match() {
+        assert_eq!(at(&re("^"), "ab\ncd", 1), Some(3..3));
     }
 
     #[test]

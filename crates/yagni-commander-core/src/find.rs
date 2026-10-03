@@ -36,6 +36,9 @@ pub struct Results {
     /// Named by their path relative to `root`. Shared with the find
     /// dialog, which keeps them for the next Alt-F7.
     pub entries: std::sync::Arc<Vec<crate::Entry>>,
+    /// The text searched for, so F3 opens the viewer at its first match
+    /// (none for "Not containing").
+    pub text: Option<text::Text>,
 }
 
 /// Same root, masks and entry names (navigations compare by this).
@@ -64,7 +67,12 @@ impl Results {
             root,
             masks,
             entries,
+            text: None,
         }
+    }
+
+    pub fn with_text(self, text: Option<text::Text>) -> Self {
+        Self { text, ..self }
     }
 
     /// The panel's path header: `Results: *.rs in /x/proj`.
@@ -116,6 +124,7 @@ impl Results {
             root: self.root.clone(),
             masks: self.masks.clone(),
             entries: std::sync::Arc::new(entries),
+            text: self.text.clone(),
         }
     }
 }

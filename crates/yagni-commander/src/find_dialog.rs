@@ -28,8 +28,8 @@ use yagni_commander_core::find::{
 use yagni_commander_core::{Entry, EntryKind, format_count, hotlist};
 
 use crate::actions::{
-    FIND_DIALOG_CONTEXT, FIND_OPTION_CONTEXT, FIND_RESULTS_CONTEXT, FIND_SKIP_BUTTON_CONTEXT,
-    FIND_SKIP_CONTEXT, find_results as act,
+    FIND_DIALOG_CONTEXT, FIND_RESULTS_CONTEXT, FIND_SKIP_BUTTON_CONTEXT, FIND_SKIP_CONTEXT,
+    find_results as act,
 };
 use crate::app_state::AppState;
 use crate::button_row::{ButtonRow, OnPress, focus_ring};
@@ -82,8 +82,9 @@ pub enum Status {
 pub enum FindEvent {
     /// Show this result in the active panel; close the dialog.
     GoTo(PathBuf),
-    /// F3 on a result; the dialog stays.
-    View(PathBuf),
+    /// F3 on a result, with the text searched for (to show its first
+    /// match); the dialog stays.
+    View(PathBuf, Option<Text>),
     /// Show the results in the active panel; close the dialog.
     Feed(Results),
     /// The Close button.
@@ -129,6 +130,9 @@ pub struct FindDialog {
     /// The folder and masks `found` came from (the panel's header).
     root: PathBuf,
     masks_text: String,
+    /// The text of the search that found the results, for F3 (none for
+    /// "Not containing").
+    searched: Option<Text>,
     cursor: usize,
     list_focus: FocusHandle,
     scroll: UniformListScrollHandle,
@@ -182,6 +186,7 @@ impl FindDialog {
             found: Arc::default(),
             root: PathBuf::new(),
             masks_text: String::new(),
+            searched: None,
             cursor: 0,
             list_focus: cx.focus_handle().tab_stop(true),
             scroll: UniformListScrollHandle::new(),
@@ -305,6 +310,7 @@ impl FindDialog {
         self.cursor = 0;
         self.root = query.root.clone();
         self.masks_text = self.field(Field::Masks, cx);
+        self.searched = self.text(cx).filter(|t| !t.not_containing);
         self.next_id += 1;
         let id = self.next_id;
         let cancel = Arc::new(AtomicBool::new(false));
@@ -352,6 +358,18 @@ impl FindDialog {
     }
 
     /// The query the fields describe, or the field at fault and why.
+    /// The "Containing text" part of the fields, if any.
+    fn text(&self, cx: &App) -> Option<Text> {
+        let pattern = self.field(Field::Text, cx);
+        (!pattern.is_empty()).then(|| Text {
+            pattern,
+            case_sensitive: self.options[CASE_TEXT],
+            regex: self.options[REGEX],
+            whole_words: self.options[WHOLE_WORDS],
+            not_containing: self.options[NOT_CONTAINING],
+        })
+    }
+
     fn query(&self, cx: &App) -> Result<Query, (Field, String)> {
         let typed = self.field(Field::SearchIn, cx);
         let typed = typed.trim();
@@ -366,21 +384,12 @@ impl FindDialog {
                 format!("{} is not a folder.", root.display()),
             ));
         }
-        let pattern = self.field(Field::Text, cx);
-        let text = if pattern.is_empty() {
-            None
-        } else {
-            let text = Text {
-                pattern,
-                case_sensitive: self.options[CASE_TEXT],
-                regex: self.options[REGEX],
-                whole_words: self.options[WHOLE_WORDS],
-                not_containing: self.options[NOT_CONTAINING],
-            };
-            Some(
+        let text = match self.text(cx) {
+            None => None,
+            Some(text) => Some(
                 text.compile()
                     .map_err(|e| (Field::Text, format!("Invalid regular expression: {e}")))?,
-            )
+            ),
         };
         Ok(Query {
             root,
@@ -461,11 +470,14 @@ impl FindDialog {
         if self.running.is_some() || self.found.is_empty() {
             return;
         }
-        cx.emit(FindEvent::Feed(Results::new(
-            self.root.clone(),
-            self.masks_text.clone(),
-            self.found.clone(),
-        )));
+        cx.emit(FindEvent::Feed(
+            Results::new(
+                self.root.clone(),
+                self.masks_text.clone(),
+                self.found.clone(),
+            )
+            .with_text(self.searched.clone()),
+        ));
     }
 
     /// Search becomes Stop while running; Feed only with finished results.
@@ -505,7 +517,10 @@ impl FindDialog {
             return;
         };
         if entry.kind == EntryKind::File {
-            cx.emit(FindEvent::View(self.root.join(&entry.name)));
+            cx.emit(FindEvent::View(
+                self.root.join(&entry.name),
+                self.searched.clone(),
+            ));
         }
     }
 
@@ -715,7 +730,7 @@ impl FindDialog {
                             cx.stop_propagation();
                         }),
                     )
-                    .child(check_square(on, &colors))
+                    .child(crate::option_box::check_square(on, &colors))
                     .child(*name)
             });
             deferred(
@@ -760,36 +775,21 @@ impl FindDialog {
         div().flex().flex_col().child(control).children(popup)
     }
 
-    /// An option box: Space or a click toggles it. Our own rather than
-    /// gpui-component's `Checkbox`, whose focus ring is too faint to see.
     fn option_box(&self, ix: usize, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        let colors = Theme::get(cx).colors.clone();
         let (id, label) = OPTIONS[ix];
-        let checked = self.options[ix];
-        let focus = &self.option_focus[ix];
-        div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .key_context(FIND_OPTION_CONTEXT)
-            .track_focus(focus)
-            .relative()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .cursor_pointer()
-            .on_action(cx.listener(move |this, _: &act::Toggle, _, cx| this.toggle(ix, cx)))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _: &MouseDownEvent, window, cx| {
-                    this.option_focus[ix].focus(window, cx);
-                    this.toggle(ix, cx);
-                }),
-            )
-            .child(check_square(checked, &colors))
-            .child(label)
-            .when(focus.is_focused(window), |d| {
-                d.child(focus_ring(colors.accent, id))
-            })
+        let this = cx.entity().downgrade();
+        let toggle = move |_: &mut Window, cx: &mut App| {
+            let _ = this.update(cx, |this, cx| this.toggle(ix, cx));
+        };
+        crate::option_box::option_box(
+            id,
+            label,
+            self.options[ix],
+            &self.option_focus[ix],
+            toggle,
+            window,
+            cx,
+        )
     }
 }
 
@@ -958,25 +958,6 @@ impl Render for FindDialog {
                     .child(SharedString::from(status_text(&self.status))),
             )
     }
-}
-
-/// A ticked or empty square, as in the option boxes.
-fn check_square(on: bool, colors: &crate::theme::Colors) -> Div {
-    div()
-        .size(px(16.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .rounded(px(4.0))
-        .border_1()
-        .border_color(if on { colors.accent } else { colors.text_dim })
-        .when(on, |d| {
-            d.bg(colors.accent).child(
-                Icon::new(IconName::Check)
-                    .size(px(12.0))
-                    .text_color(colors.text_on_accent),
-            )
-        })
 }
 
 /// The "Skip folders" control's text: the folders on (`skip` follows
