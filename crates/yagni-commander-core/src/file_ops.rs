@@ -15,10 +15,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::fs_ops::{rename_noreplace, same_file};
 use crate::oplog::OperationLog;
+
+mod archive_names;
+mod extract;
+mod pack;
+mod safe_dir;
+pub use archive_names::{Format, is_archive};
 
 /// Bytes copied between progress reports and cancel checks.
 const CHUNK: u64 = 4 << 20;
@@ -42,6 +48,18 @@ pub enum Operation {
     Trash { sources: Vec<PathBuf> },
     /// Deletes each source permanently, directories with their contents.
     Delete { sources: Vec<PathBuf> },
+    /// Packs the sources into a new zip at `to` (Alt-F5). Entry names are
+    /// relative to `base` (the panel's folder).
+    Pack {
+        sources: Vec<PathBuf>,
+        base: PathBuf,
+        to: PathBuf,
+    },
+    /// Extracts each archive into `into` (Alt-F6), with smart extraction.
+    Extract {
+        archives: Vec<PathBuf>,
+        into: PathBuf,
+    },
 }
 
 /// Where copied or moved entries go. Missing folders on the way are created.
@@ -83,6 +101,8 @@ pub struct Progress {
 pub struct Conflict {
     pub source: PathBuf,
     pub target: PathBuf,
+    /// Set when the new file comes from an archive.
+    pub incoming: Option<Incoming>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +112,51 @@ pub enum Answer {
     OverwriteAll,
     SkipAll,
     Cancel,
+}
+
+/// A symbolic link met while packing; the job waits for a [`LinkAnswer`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkQuestion {
+    /// The link on disk.
+    pub link: PathBuf,
+    /// Its name in the archive, e.g. `src/tools/run`.
+    pub shown: PathBuf,
+    /// What it points to, as stored in the link.
+    pub target: PathBuf,
+    pub place: LinkPlace,
+}
+
+/// Where a link points, relative to what is being packed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkPlace {
+    Inside,
+    Outside,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkChoice {
+    /// Pack what the link points to, under the link's name.
+    Follow,
+    /// Pack the link itself.
+    Store,
+    LeaveOut,
+    Cancel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkAnswer {
+    pub choice: LinkChoice,
+    /// "Same for the remaining links": no more questions in this job.
+    pub for_all: bool,
+}
+
+/// An archive entry that would replace an existing file, for the conflict
+/// prompt (it has no file on disk to describe).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Incoming {
+    pub size: u64,
+    pub modified: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +172,8 @@ pub struct Report {
     /// Files left alone because their target existed and the user chose Skip.
     pub skipped: usize,
     pub cancelled: bool,
+    /// Links the user chose to leave out of a zip.
+    pub left_out: Vec<PathBuf>,
 }
 
 pub trait Observer {
@@ -114,6 +181,9 @@ pub trait Observer {
     /// A target exists. Not called once the user has answered "... all".
     fn conflict(&mut self, conflict: &Conflict) -> Answer;
     fn is_cancelled(&self) -> bool;
+    /// A symlink while packing. Not called again once the user has
+    /// answered with `for_all`.
+    fn link(&mut self, question: &LinkQuestion) -> LinkAnswer;
 }
 
 /// How operations run, beyond what the user chose.
@@ -145,11 +215,19 @@ pub fn system_trash(path: &Path) -> Result<(), String> {
 
 /// Runs `operation` to completion (or cancellation) on the calling thread.
 pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settings) -> Report {
-    let (name, sources, to) = match operation {
-        Operation::Copy { sources, to } => ("copy", sources, Some(to)),
-        Operation::Move { sources, to } => ("move", sources, Some(to)),
-        Operation::Trash { sources } => ("trash", sources, None),
-        Operation::Delete { sources } => ("delete", sources, None),
+    let (name, sources): (&'static str, &[PathBuf]) = match operation {
+        Operation::Copy { sources, .. } => ("copy", sources),
+        Operation::Move { sources, .. } => ("move", sources),
+        Operation::Trash { sources } => ("trash", sources),
+        Operation::Delete { sources } => ("delete", sources),
+        Operation::Pack { sources, .. } => ("pack", sources),
+        Operation::Extract { archives, .. } => ("extract", archives),
+    };
+    let to: Option<&Path> = match operation {
+        Operation::Copy { to, .. } | Operation::Move { to, .. } => Some(to.path()),
+        Operation::Pack { to, .. } => Some(to),
+        Operation::Extract { into, .. } => Some(into),
+        Operation::Trash { .. } | Operation::Delete { .. } => None,
     };
     let mut engine = Engine {
         observer,
@@ -158,12 +236,13 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         report: Report::default(),
         log: settings.log.as_deref(),
         name,
+        link_choice: None,
     };
     match to {
         Some(to) => engine.note(format_args!(
             "start: {} entries to {}",
             sources.len(),
-            to.path().display()
+            to.display()
         )),
         None => engine.note(format_args!("start: {} entries", sources.len())),
     }
@@ -175,6 +254,8 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Operation::Move { sources, to } => engine.transfer(sources, to, true),
         Operation::Trash { sources } => engine.trash(sources, settings.trash),
         Operation::Delete { sources } => engine.delete(sources),
+        Operation::Pack { sources, base, to } => engine.pack(sources, base, to),
+        Operation::Extract { archives, into } => engine.extract(archives, into),
     }
     let report = &engine.report;
     engine.note(format_args!(
@@ -234,6 +315,8 @@ struct Engine<'a> {
     log: Option<&'a OperationLog>,
     /// The operation's name in log lines ("copy", "move", ...).
     name: &'static str,
+    /// Set by "Same for the remaining links".
+    link_choice: Option<LinkChoice>,
 }
 
 impl Engine<'_> {
@@ -688,7 +771,7 @@ impl Engine<'_> {
         if target.symlink_metadata().is_ok_and(|m| m.is_dir()) {
             return Some(self.fail(target, "a directory with this name exists"));
         }
-        match self.choose(source, target) {
+        match self.choose(source, target, None) {
             Choice::Overwrite => {
                 self.note(format_args!("replacing {}", target.display()));
                 None
@@ -706,7 +789,7 @@ impl Engine<'_> {
         }
     }
 
-    fn choose(&mut self, source: &Path, target: &Path) -> Choice {
+    fn choose(&mut self, source: &Path, target: &Path, incoming: Option<Incoming>) -> Choice {
         match self.always {
             Some(true) => return Choice::Overwrite,
             Some(false) => return Choice::Skip,
@@ -715,6 +798,7 @@ impl Engine<'_> {
         let conflict = Conflict {
             source: source.to_path_buf(),
             target: target.to_path_buf(),
+            incoming,
         };
         match self.observer.conflict(&conflict) {
             Answer::Overwrite => Choice::Overwrite,
@@ -945,6 +1029,8 @@ pub enum Event {
     Progress(Progress),
     /// The job waits until [`Job::answer`] is called.
     Conflict(Conflict),
+    /// The job waits until [`Job::answer_link`] is called.
+    Link(LinkQuestion),
     /// The last event.
     Finished(Report),
 }
@@ -954,6 +1040,7 @@ pub enum Event {
 pub struct Job {
     events: Receiver<Event>,
     answers: Sender<Answer>,
+    link_answers: Sender<LinkAnswer>,
     cancel: Arc<AtomicBool>,
 }
 
@@ -961,10 +1048,12 @@ impl Job {
     pub fn spawn(operation: Operation, settings: Settings) -> io::Result<Self> {
         let (event_tx, events) = mpsc::channel();
         let (answers, answer_rx) = mpsc::channel();
+        let (link_answers, link_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let mut observer = ChannelObserver {
             events: event_tx,
             answers: answer_rx,
+            links: link_rx,
             cancel: cancel.clone(),
             last_progress: None,
         };
@@ -977,6 +1066,7 @@ impl Job {
         Ok(Self {
             events,
             answers,
+            link_answers,
             cancel,
         })
     }
@@ -989,6 +1079,11 @@ impl Job {
     /// Answers the pending [`Event::Conflict`].
     pub fn answer(&self, answer: Answer) {
         let _ = self.answers.send(answer);
+    }
+
+    /// Answers the pending [`Event::Link`].
+    pub fn answer_link(&self, answer: LinkAnswer) {
+        let _ = self.link_answers.send(answer);
     }
 
     /// Stops at the next file or chunk. A pending conflict must still be
@@ -1007,6 +1102,7 @@ impl Drop for Job {
 struct ChannelObserver {
     events: Sender<Event>,
     answers: Receiver<Answer>,
+    links: Receiver<LinkAnswer>,
     cancel: Arc<AtomicBool>,
     last_progress: Option<Instant>,
 }
@@ -1029,6 +1125,18 @@ impl Observer for ChannelObserver {
         }
         // A dropped job closes the channel, which also means cancel.
         self.answers.recv().unwrap_or(Answer::Cancel)
+    }
+
+    fn link(&mut self, question: &LinkQuestion) -> LinkAnswer {
+        let cancel = LinkAnswer {
+            choice: LinkChoice::Cancel,
+            for_all: false,
+        };
+        if self.events.send(Event::Link(question.clone())).is_err() {
+            return cancel;
+        }
+        // A dropped job closes the channel, which also means cancel.
+        self.links.recv().unwrap_or(cancel)
     }
 
     fn is_cancelled(&self) -> bool {

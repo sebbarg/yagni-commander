@@ -3,24 +3,28 @@
 //! progress updates the progress dialog, a conflict opens the Overwrite/Skip
 //! prompt, and the end reloads both panels and reports any failures.
 
+use std::cell::Cell;
 use std::io;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::{
-    App, AppContext, Context, Entity, Focusable, IntoElement, ParentElement, Render, SharedString,
-    Styled, WeakEntity, Window, div, px,
+    App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, Styled, WeakEntity, Window, div, px,
 };
 use yagni_commander_core::file_ops::{
-    Answer, Conflict, Destination, Event, Job, Operation, Progress, Report, Settings,
+    Answer, Conflict, Destination, Event, Incoming, Job, LinkAnswer, LinkChoice, LinkPlace,
+    LinkQuestion, Operation, Progress, Report, Settings, is_archive,
 };
 use yagni_commander_core::{Command, Side, format_modified, format_size};
 
 use super::FileManager;
-use super::commands::{Prompt, focus_when_open, show_error, stem_range};
+use super::commands::{Prompt, focus_when_open, show_error, show_message, stem_range};
 use crate::button_row::{ButtonRow, OnPress};
 use crate::theme::Theme;
 
@@ -37,6 +41,8 @@ pub(super) enum Kind {
     Move,
     Trash,
     Delete,
+    Pack,
+    Extract,
 }
 
 impl Kind {
@@ -46,6 +52,8 @@ impl Kind {
             Kind::Move => "Move",
             Kind::Trash => "Move to trash",
             Kind::Delete => "Delete",
+            Kind::Pack => "Pack",
+            Kind::Extract => "Extract",
         }
     }
 
@@ -55,6 +63,8 @@ impl Kind {
             Kind::Move => "Moving",
             Kind::Trash => "Moving to trash",
             Kind::Delete => "Deleting",
+            Kind::Pack => "Packing",
+            Kind::Extract => "Extracting",
         }
     }
 }
@@ -140,6 +150,128 @@ impl FileManager {
                     _ => Operation::Move { sources, to },
                 };
                 this.start_job(kind, operation, window, cx)
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Alt-F5: ask for the zip's path (in the other panel by default), then
+    /// pack the selection or the entry under the cursor into it. An
+    /// existing zip is replaced only after a confirm box.
+    pub(super) fn pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        let other = self.commander.read(cx).active().other();
+        if self.commander.read(cx).panel(other).loading().is_some() {
+            return;
+        }
+        self.end_search(cx);
+        let (sources, dir, other_dir) = {
+            let commander = self.commander.read(cx);
+            let panel = commander.panel(commander.active());
+            let other = commander.panel(commander.active().other());
+            (
+                source_paths(panel),
+                panel.path().to_path_buf(),
+                other.path().to_path_buf(),
+            )
+        };
+        if sources.is_empty() || self.refuse_second_job(window, cx) {
+            return;
+        }
+        let title = format!("Pack {} to", describe(&sources));
+        let (initial, selection) = zip_target(&other_dir, &sources, &dir);
+        self.prompt_name(
+            Prompt {
+                title: &title,
+                error_title: "Cannot pack",
+                initial: &initial,
+                selection,
+                width: COPY_PROMPT_WIDTH,
+            },
+            Rc::new(move |this, typed, window, cx| {
+                let to = zip_path(&dir, typed)?;
+                let operation = Operation::Pack {
+                    sources: sources.clone(),
+                    base: dir.clone(),
+                    to: to.clone(),
+                };
+                if to.exists() {
+                    // After the prompt has closed: closing pops the top dialog.
+                    let this = cx.entity().downgrade();
+                    window.defer(cx, move |window, cx| {
+                        confirm_overwrite(this, to, operation, window, cx)
+                    });
+                    return Ok(());
+                }
+                this.start_job(Kind::Pack, operation, window, cx)
+            }),
+            window,
+            cx,
+        );
+    }
+
+    /// Alt-F6 / Alt-F9: ask for the folder (the other panel's by default),
+    /// then extract the selected archives or the one under the cursor.
+    pub(super) fn extract(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) {
+            return;
+        }
+        let other = self.commander.read(cx).active().other();
+        if self.commander.read(cx).panel(other).loading().is_some() {
+            return;
+        }
+        self.end_search(cx);
+        let (archives, dir, other_dir) = {
+            let commander = self.commander.read(cx);
+            let panel = commander.panel(commander.active());
+            let other = commander.panel(commander.active().other());
+            (
+                source_paths(panel),
+                panel.path().to_path_buf(),
+                other.path().to_path_buf(),
+            )
+        };
+        if archives.is_empty() || self.refuse_second_job(window, cx) {
+            return;
+        }
+        if !archives.iter().any(|path| is_archive(path)) {
+            let message = match archives.as_slice() {
+                [one] => format!(
+                    "“{}” is not an archive.",
+                    one.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                _ => "None of the selected entries is an archive.".to_owned(),
+            };
+            show_error(
+                "Cannot extract",
+                message,
+                Some(self.focus.clone()),
+                window,
+                cx,
+            );
+            return;
+        }
+        let title = extract_title(&archives);
+        let initial = other_dir.display().to_string();
+        let end = initial.len();
+        self.prompt_name(
+            Prompt {
+                title: &title,
+                error_title: "Cannot extract",
+                initial: &initial,
+                selection: end..end,
+                width: COPY_PROMPT_WIDTH,
+            },
+            Rc::new(move |this, typed, window, cx| {
+                let into = extract_folder(&dir, typed)?;
+                let operation = Operation::Extract {
+                    archives: archives.clone(),
+                    into,
+                };
+                this.start_job(Kind::Extract, operation, window, cx)
             }),
             window,
             cx,
@@ -279,6 +411,7 @@ impl FileManager {
         };
         running.polls += 1;
         let mut conflict = None;
+        let mut link = None;
         while let Some(event) = running.job.try_event() {
             match event {
                 Event::Progress(progress) => running.view.update(cx, |view, cx| {
@@ -290,13 +423,18 @@ impl FileManager {
                     conflict = Some(c);
                     break;
                 }
+                Event::Link(question) => {
+                    link = Some(question);
+                    break;
+                }
                 Event::Finished(report) => {
                     self.finish_job(report, window, cx);
                     return false;
                 }
             }
         }
-        if !running.progress_open && (conflict.is_some() || running.polls >= POLLS_BEFORE_PROGRESS)
+        if !running.progress_open
+            && (conflict.is_some() || link.is_some() || running.polls >= POLLS_BEFORE_PROGRESS)
         {
             running.progress_open = true;
             let (kind, view) = (running.kind, running.view.clone());
@@ -304,6 +442,9 @@ impl FileManager {
         }
         if let Some(conflict) = conflict {
             self.ask_conflict(&conflict, window, cx);
+        }
+        if let Some(question) = link {
+            self.ask_link(&question, window, cx);
         }
         true
     }
@@ -352,7 +493,11 @@ impl FileManager {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         let question = SharedString::from(format!("“{name}” already exists in {place}."));
-        let new = SharedString::from(format!("New:       {}", describe_file(&conflict.source)));
+        let new_text = match conflict.incoming {
+            Some(incoming) => describe_incoming(incoming),
+            None => describe_file(&conflict.source),
+        };
+        let new = SharedString::from(format!("New:       {new_text}"));
         let old = SharedString::from(format!("Existing: {}", describe_file(&conflict.target)));
         let this = cx.entity().downgrade();
         let button = |label: &'static str, answer: Answer| -> (&'static str, OnPress) {
@@ -389,12 +534,101 @@ impl FileManager {
                     div()
                         .text_color(dim)
                         .text_size(px(13.0))
-                        .child(new.clone())
+                        .child(
+                            div()
+                                .debug_selector(|| "conflict-new".into())
+                                .child(new.clone()),
+                        )
                         .child(old.clone()),
                 )
                 .footer(buttons.clone())
                 .on_cancel(move |_, _, cx| {
                     answer_job(&this_cancel, Answer::Cancel, cx);
+                    true
+                })
+        });
+    }
+
+    fn ask_link(&mut self, question: &LinkQuestion, window: &mut Window, cx: &mut Context<Self>) {
+        let place = match question.place {
+            LinkPlace::Inside => "inside what you are packing",
+            LinkPlace::Outside => "outside what you are packing",
+            LinkPlace::Missing => "its target does not exist",
+        };
+        let text = SharedString::from(format!(
+            "{}  ->  {}",
+            question.shown.display(),
+            question.target.display()
+        ));
+        let place = SharedString::from(format!("({place})"));
+        let for_all = Rc::new(Cell::new(false));
+        let this = cx.entity().downgrade();
+        let button = |label: &'static str, choice: LinkChoice| -> (&'static str, OnPress) {
+            let (this, for_all) = (this.clone(), for_all.clone());
+            let on_press: OnPress = Rc::new(move |window, cx| {
+                let answer = LinkAnswer {
+                    choice,
+                    for_all: for_all.get(),
+                };
+                answer_link_job(&this, answer, cx);
+                window.close_dialog(cx);
+            });
+            (label, on_press)
+        };
+        // Follow is preselected: Enter packs what the link points to.
+        let buttons = ButtonRow::build(
+            [
+                button("Follow", LinkChoice::Follow),
+                button("Store as link", LinkChoice::Store),
+                button("Leave out", LinkChoice::LeaveOut),
+                button("Cancel", LinkChoice::Cancel),
+            ],
+            0,
+            cx,
+        );
+        focus_when_open(buttons.focus_handle(cx), window, cx);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let dim = Theme::get(cx).colors.text_dim;
+            let this_cancel = this.clone();
+            let checked = for_all.get();
+            let for_all = for_all.clone();
+            dialog
+                .title("Symbolic link")
+                .w(px(560.0))
+                .close_button(false)
+                .overlay_closable(false)
+                .child(
+                    div()
+                        .debug_selector(|| "link-prompt".into())
+                        .child(text.clone()),
+                )
+                .child(
+                    div()
+                        .text_color(dim)
+                        .text_size(px(13.0))
+                        .child(place.clone()),
+                )
+                .child(
+                    div()
+                        .debug_selector(|| "link-all".into())
+                        .pt(px(8.0))
+                        .child(
+                            Checkbox::new("link-all")
+                                .label("Same for the remaining links")
+                                .checked(checked)
+                                .on_click(move |on, window, _| {
+                                    for_all.set(*on);
+                                    window.refresh();
+                                }),
+                        ),
+                )
+                .footer(buttons.clone())
+                .on_cancel(move |_, _, cx| {
+                    let answer = LinkAnswer {
+                        choice: LinkChoice::Cancel,
+                        for_all: false,
+                    };
+                    answer_link_job(&this_cancel, answer, cx);
                     true
                 })
         });
@@ -408,20 +642,34 @@ impl FileManager {
             window.close_dialog(cx);
         }
         let complete = report.failures.is_empty() && !report.cancelled;
-        if running.kind == Kind::Copy && complete {
+        if matches!(running.kind, Kind::Copy | Kind::Pack) && complete {
             self.commander.update(cx, |commander, _| {
                 commander.clear_selection(running.source, &running.source_dir)
             });
         }
         self.execute(Command::Reload, cx);
+        let left_out = left_out_summary(&report);
         if !report.failures.is_empty() {
             let title = match running.kind {
                 Kind::Copy => "Some entries were not copied",
                 Kind::Move => "Some entries were not moved",
                 Kind::Trash => "Some entries were not moved to the trash",
                 Kind::Delete => "Some entries were not deleted",
+                Kind::Pack => "Some entries were not packed",
+                Kind::Extract => "Some entries were not extracted",
             };
-            show_error(title, failure_summary(&report), None, window, cx);
+            let mut text = failure_summary(&report);
+            if let Some(left_out) = &left_out {
+                text.push_str(
+                    "
+
+",
+                );
+                text.push_str(left_out);
+            }
+            show_error(title, text, None, window, cx);
+        } else if let Some(text) = left_out {
+            show_message("Links left out", text, "OK", None, window, cx);
         }
     }
 }
@@ -476,6 +724,166 @@ fn describe_file(path: &Path) -> String {
         }
         Err(e) => e.to_string(),
     }
+}
+
+/// The Alt-F5 field: a zip in `other_dir` named after the one source (a
+/// file without its extension, like F2) or after the current folder; the
+/// name before `.zip` is preselected.
+fn zip_target(other_dir: &Path, sources: &[PathBuf], current: &Path) -> (String, Range<usize>) {
+    let stem = match sources {
+        [one] => {
+            let name = one
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let is_dir = one.symlink_metadata().is_ok_and(|m| m.is_dir());
+            name[stem_range(&name, is_dir)].to_owned()
+        }
+        _ => current.file_name().map_or_else(
+            || "archive".to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        ),
+    };
+    let text = other_dir.join(format!("{stem}.zip")).display().to_string();
+    let end = text.len() - ".zip".len();
+    (text, end - stem.len()..end)
+}
+
+/// The zip the Alt-F5 prompt names: relative to `dir`, `.zip` added when
+/// the name doesn't end in it.
+fn zip_path(dir: &Path, typed: &str) -> io::Result<PathBuf> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err(invalid("give a name for the archive".into()));
+    }
+    let mut path = dir.join(typed);
+    if typed.ends_with('/') || path.is_dir() {
+        return Err(invalid(format!("“{typed}” is a folder")));
+    }
+    if !path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+    {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".zip");
+        path.set_file_name(name);
+    }
+    Ok(path)
+}
+
+/// "Links left out:" and their paths, at most [`MAX_LISTED_FAILURES`].
+fn left_out_summary(report: &Report) -> Option<String> {
+    if report.left_out.is_empty() {
+        return None;
+    }
+    let mut lines = vec!["Links left out:".to_owned()];
+    lines.extend(
+        report
+            .left_out
+            .iter()
+            .take(MAX_LISTED_FAILURES)
+            .map(|path| path.display().to_string()),
+    );
+    let more = report.left_out.len().saturating_sub(MAX_LISTED_FAILURES);
+    if more > 0 {
+        lines.push(format!("and {more} more"));
+    }
+    Some(lines.join("\n"))
+}
+
+/// Size and time of a file coming from an archive, for the conflict prompt.
+fn describe_incoming(incoming: Incoming) -> String {
+    let modified = incoming.modified.map(format_modified).unwrap_or_default();
+    format!("{}, {modified}", format_size(incoming.size))
+}
+
+/// The zip exists: replace it only after a confirm (Overwrite preselected).
+fn confirm_overwrite(
+    this: WeakEntity<FileManager>,
+    to: PathBuf,
+    operation: Operation,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let name = to
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let question = SharedString::from(format!("“{name}” exists. Overwrite it?"));
+    let focus = this.upgrade().map(|fm| fm.read(cx).focus.clone());
+    let cancel: OnPress = Rc::new({
+        let focus = focus.clone();
+        move |window, cx| {
+            window.close_dialog(cx);
+            if let Some(focus) = &focus {
+                focus.focus(window, cx);
+            }
+        }
+    });
+    let overwrite: OnPress = Rc::new(move |window, cx| {
+        window.close_dialog(cx);
+        let operation = operation.clone();
+        let result = this
+            .update(cx, |this, cx| {
+                this.start_job(Kind::Pack, operation, window, cx)
+            })
+            .unwrap_or(Ok(()));
+        if let Err(e) = result {
+            show_error("Cannot pack", e.to_string(), None, window, cx);
+        }
+    });
+    let buttons = ButtonRow::build([("Cancel", cancel), ("Overwrite", overwrite)], 1, cx);
+    focus_when_open(buttons.focus_handle(cx), window, cx);
+    window.open_dialog(cx, move |dialog, _, _| {
+        let focus = focus.clone();
+        dialog
+            .title("Archive exists")
+            .w(px(420.0))
+            .close_button(false)
+            .child(question.clone())
+            .footer(buttons.clone())
+            .on_cancel(move |_, window, cx| {
+                if let Some(focus) = &focus {
+                    focus.focus(window, cx);
+                }
+                true
+            })
+    });
+}
+
+fn answer_link_job(this: &WeakEntity<FileManager>, answer: LinkAnswer, cx: &mut App) {
+    let _ = this.update(cx, |this, _| {
+        if let Some(running) = &this.job {
+            running.job.answer_link(answer);
+        }
+    });
+}
+
+/// "Extract “name” to", "Extract 3 archives to", or "3 entries" when some
+/// selected entries are not archives (they fail in the summary).
+fn extract_title(archives: &[PathBuf]) -> String {
+    if archives.len() > 1 && archives.iter().all(|path| is_archive(path)) {
+        format!("Extract {} archives to", archives.len())
+    } else {
+        format!("Extract {} to", describe(archives))
+    }
+}
+
+/// The folder the Alt-F6 prompt names, relative to `dir`; created by the job.
+fn extract_folder(dir: &Path, typed: &str) -> io::Result<PathBuf> {
+    let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
+    let typed = typed.trim();
+    if typed.is_empty() {
+        return Err(invalid("give a folder".into()));
+    }
+    let into = dir.join(typed);
+    if into.exists() && !into.is_dir() {
+        return Err(invalid(format!("“{typed}” is not a folder")));
+    }
+    Ok(into)
 }
 
 /// Width of the F5/F6 prompt: room for long paths.
@@ -771,5 +1179,97 @@ mod tests {
         std::fs::write(&file, b"12345").unwrap();
         assert!(describe_file(&file).starts_with("5 B, "));
         assert!(!describe_file(&tmp.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn the_zip_is_named_after_the_entry_or_the_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("photos")).unwrap();
+        let other = Path::new("/o");
+        let (text, sel) = zip_target(other, &[tmp.path().join("notes.txt")], tmp.path());
+        assert_eq!(text, "/o/notes.zip");
+        assert_eq!(&text[sel], "notes");
+        let (text, sel) = zip_target(other, &[tmp.path().join("photos")], tmp.path());
+        assert_eq!(text, "/o/photos.zip");
+        assert_eq!(&text[sel], "photos");
+        let (text, sel) = zip_target(
+            other,
+            &[tmp.path().join("a"), tmp.path().join("b")],
+            Path::new("/home/me/work"),
+        );
+        assert_eq!(text, "/o/work.zip");
+        assert_eq!(&text[sel], "work");
+        let (text, _) = zip_target(
+            other,
+            &[PathBuf::from("/a"), PathBuf::from("/b")],
+            Path::new("/"),
+        );
+        assert_eq!(text, "/o/archive.zip");
+    }
+
+    #[test]
+    fn zip_is_added_when_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert_eq!(zip_path(dir, "out").unwrap(), dir.join("out.zip"));
+        assert_eq!(zip_path(dir, " out.zip ").unwrap(), dir.join("out.zip"));
+        assert_eq!(zip_path(dir, "OUT.ZIP").unwrap(), dir.join("OUT.ZIP"));
+        assert_eq!(zip_path(dir, "sub/x").unwrap(), dir.join("sub/x.zip"));
+        assert_eq!(
+            zip_path(dir, "/abs/y.zip").unwrap(),
+            PathBuf::from("/abs/y.zip")
+        );
+        assert!(zip_path(dir, "  ").is_err());
+        assert!(zip_path(dir, "folder/").is_err());
+        std::fs::create_dir(dir.join("existing")).unwrap();
+        assert!(zip_path(dir, "existing").is_err());
+    }
+
+    #[test]
+    fn left_out_links_are_listed() {
+        let mut report = Report::default();
+        assert_eq!(left_out_summary(&report), None);
+        report.left_out = (0..12).map(|i| PathBuf::from(format!("/l{i}"))).collect();
+        let text = left_out_summary(&report).unwrap();
+        assert!(text.starts_with("Links left out:\n/l0\n"), "{text}");
+        assert!(text.ends_with("/l9\nand 2 more"), "{text}");
+    }
+
+    #[test]
+    fn incoming_entries_show_size_and_time() {
+        let incoming = Incoming {
+            size: 2048,
+            modified: None,
+        };
+        assert_eq!(
+            describe_incoming(incoming),
+            format!("{}, ", format_size(2048))
+        );
+    }
+
+    #[test]
+    fn the_extract_folder_is_relative_and_must_be_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert_eq!(
+            extract_folder(dir, " out/here ").unwrap(),
+            dir.join("out/here")
+        );
+        assert_eq!(extract_folder(dir, "/abs").unwrap(), PathBuf::from("/abs"));
+        assert!(extract_folder(dir, "").is_err());
+        std::fs::write(dir.join("file"), "").unwrap();
+        assert!(extract_folder(dir, "file").is_err());
+    }
+
+    #[test]
+    fn the_extract_title_counts_archives() {
+        assert_eq!(
+            extract_title(&[PathBuf::from("/a/p.zip")]),
+            "Extract “p.zip” to"
+        );
+        let two = [PathBuf::from("/a/p.zip"), PathBuf::from("/a/q.tgz")];
+        assert_eq!(extract_title(&two), "Extract 2 archives to");
+        let mixed = [PathBuf::from("/a/p.zip"), PathBuf::from("/a/n.txt")];
+        assert_eq!(extract_title(&mixed), "Extract 2 entries to");
     }
 }

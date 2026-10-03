@@ -199,6 +199,40 @@ keys Return
 check "doomed.txt deleted" test ! -e "$left/doomed.txt"
 check "doomed.txt not in the trash" test ! -e "$work/data/Trash/files/doomed.txt"
 
+echo "Alt-F5 pack a folder with a link (stored), Alt-F6 extract it"
+mkdir -p "$left/bundle"
+printf hello >"$left/bundle/hi.txt"
+ln -s hi.txt "$left/bundle/link"
+keys ctrl+r
+typed bundle
+keys Escape alt+F5
+shot 08a-pack-prompt
+keys Return            # into the right panel as bundle.zip
+sleep 1
+shot 08b-link-prompt
+keys Right Return      # Store as link
+check "bundle.zip written" test -f "$right/bundle.zip"
+check "zip lists the files" python3 -c 'import sys, zipfile; n = sorted(zipfile.ZipFile(sys.argv[1]).namelist()); sys.exit(0 if n == ["bundle/", "bundle/hi.txt", "bundle/link"] else 1)' "$right/bundle.zip"
+keys Tab               # the right panel
+typed bundle.z
+keys Escape alt+F6
+keys ctrl+a
+typed "$work/unpacked"
+keys Return
+check "extracted the file" has "$work/unpacked/bundle/hi.txt" hello
+check "extracted the link" test -L "$work/unpacked/bundle/link"
+
+echo "Alt-F9 extracts a .tar.gz made by tar"
+tar -C "$left" -czf "$right/docs.tar.gz" docs
+keys ctrl+r
+typed docs.tar
+keys Escape alt+F9
+keys ctrl+a
+typed "$work/untarred"
+keys Return
+check "tar.gz extracted" test -d "$work/untarred/docs"
+keys Tab               # back to the left panel
+
 echo "Ctrl-C and Ctrl-Ins copy the full path under the cursor"
 clipboard() { [[ $(xclip -o -selection clipboard) == "$1" ]]; }
 typed notes

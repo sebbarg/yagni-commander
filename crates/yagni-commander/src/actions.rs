@@ -34,6 +34,8 @@ actions!(
         Move,
         Trash,
         Delete,
+        Pack,
+        Extract,
         SyncOtherPanel,
         SwapPanels,
         NewTab,
@@ -158,6 +160,12 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-f8", Delete, context),
         KeyBinding::new("shift-delete", Delete, context),
         KeyBinding::new("shift-f8", Delete, context),
+        KeyBinding::new("alt-f5", Pack, context),
+        // Alt-F9 like TC (Alt-F6 failed on Windows 95). Alt-F6 registered
+        // first and last so both menus show it.
+        KeyBinding::new("alt-f6", Extract, context),
+        KeyBinding::new("alt-f9", Extract, context),
+        KeyBinding::new("alt-f6", Extract, context),
         KeyBinding::new("alt-z", SyncOtherPanel, context),
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-t", NewTab, context),

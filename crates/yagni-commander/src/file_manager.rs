@@ -18,11 +18,11 @@ mod watch;
 
 use crate::actions::{
     About, Activate, CancelSearch, CloseTab, Copy, CopyPath, CursorDown, CursorEnd, CursorHome,
-    CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, FILE_MANAGER_CONTEXT, GoUp,
-    MakeDirectory, MenuAlt, Move, NewTab, NextTab, OpenFilesMenu, OpenSettings, PageDown, PageUp,
-    PrevTab, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner, SortByPermissions,
-    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
-    Trash, View,
+    CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, GoUp,
+    MakeDirectory, MenuAlt, Move, NewTab, NextTab, OpenFilesMenu, OpenSettings, Pack, PageDown,
+    PageUp, PrevTab, Reload, Rename, SelectAll, SortByModified, SortByName, SortByOwner,
+    SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden,
+    ToggleMenu, ToggleSelection, Trash, View,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -671,6 +671,8 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
             .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))
+            .on_action(cx.listener(|this, _: &Pack, window, cx| this.pack(window, cx)))
+            .on_action(cx.listener(|this, _: &Extract, window, cx| this.extract(window, cx)))
             .on_action(cx.listener(|this, _: &Copy, window, cx| {
                 this.copy_or_move(file_ops::Kind::Copy, window, cx)
             }))

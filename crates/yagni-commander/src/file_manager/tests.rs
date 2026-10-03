@@ -1795,6 +1795,13 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         Some("shift-f8")
     );
     assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    for (action, keys) in [
+        (&crate::actions::Pack as &dyn gpui_kit::Action, "alt-f5"),
+        (&crate::actions::Extract, "alt-f6"),
+    ] {
+        assert_eq!(key(action, cx).as_deref(), Some(keys));
+        assert_eq!(first(action, cx).as_deref(), Some(keys));
+    }
     let copy = if cfg!(target_os = "macos") {
         "cmd-c"
     } else {
@@ -3587,4 +3594,283 @@ fn dialogs_appear_in_place_so_clicks_land(cx: &mut TestAppContext) {
     assert_eq!(center(cx, "settings-sort"), first, "the dialog moved");
     click_at(cx, first, 1);
     assert!(config(cx).case_sensitive_sort);
+}
+
+mod archives {
+    use super::*;
+
+    fn zip_names(path: &std::path::Path) -> Vec<String> {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        let mut names: Vec<String> = (0..zip.len())
+            .map(|i| zip.by_index(i).unwrap().name().to_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn is_link_entry(path: &std::path::Path, name: &str) -> bool {
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
+        zip.by_name(name).unwrap().is_symlink()
+    }
+
+    fn link_prompt_open(cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        cx.debug_bounds("link-prompt").is_some()
+    }
+
+    #[gpui_kit::test]
+    fn alt_f5_packs_the_entry_under_the_cursor_into_the_other_panel(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx); // left cursor on "f"
+        cx.simulate_keystrokes("alt-f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx));
+        assert_eq!(zip_names(&tmp.path().join("a/f.zip")), ["f"]);
+    }
+
+    #[gpui_kit::test]
+    fn the_typed_name_gets_zip_added(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("alt-f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("bundle");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(
+            tmp.path().join("bundle.zip").is_file(),
+            "relative to the active panel"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_existing_zip_asks_before_overwriting(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        let zip = tmp.path().join("a/f.zip");
+        std::fs::write(&zip, "old").unwrap();
+        cx.simulate_keystrokes("alt-f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter"); // the prompt
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "the confirm box");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read_to_string(&zip).unwrap(), "old");
+        cx.simulate_keystrokes("alt-f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter"); // Overwrite (preselected)
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(zip_names(&zip), ["f"]);
+    }
+
+    /// `b` holds `link -> ../f`; packs `b` and waits for the link prompt.
+    fn pack_b_with_a_link(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
+        let _ = std::fs::remove_file(tmp.path().join("a/b.zip"));
+        let link = tmp.path().join("b/link");
+        if link.symlink_metadata().is_err() {
+            std::os::unix::fs::symlink("../f", &link).unwrap();
+        }
+        cx.simulate_keystrokes("home down down alt-f5"); // on "b"
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, link_prompt_open);
+    }
+
+    #[gpui_kit::test]
+    fn the_link_prompt_buttons_follow_store_leave_out_and_cancel(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        let zip = tmp.path().join("a/b.zip");
+
+        pack_b_with_a_link(&tmp, cx);
+        cx.simulate_keystrokes("enter"); // Follow
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(zip_names(&zip), ["b/", "b/link"]);
+        assert!(!is_link_entry(&zip, "b/link"), "followed: a file");
+
+        pack_b_with_a_link(&tmp, cx);
+        cx.simulate_keystrokes("right enter"); // Store as link
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(is_link_entry(&zip, "b/link"));
+
+        pack_b_with_a_link(&tmp, cx);
+        cx.simulate_keystrokes("right right enter"); // Leave out
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(zip_names(&zip), ["b/"]);
+        assert!(dialog_open(cx), "the left-out summary");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+
+        pack_b_with_a_link(&tmp, cx);
+        cx.simulate_keystrokes("escape"); // Cancel
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!zip.exists());
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn same_for_the_remaining_links_asks_once(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        std::os::unix::fs::symlink("../f", tmp.path().join("b/l1")).unwrap();
+        std::os::unix::fs::symlink("../f", tmp.path().join("b/l2")).unwrap();
+        cx.simulate_keystrokes("home down down alt-f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, link_prompt_open);
+        click(cx, "link-all", 1);
+        // Back to the buttons (Follow is still highlighted), then press it.
+        cx.simulate_keystrokes("tab");
+        press(cx, "enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!link_prompt_open(cx), "asked once");
+        assert_eq!(
+            zip_names(&tmp.path().join("a/b.zip")),
+            ["b/", "b/l1", "b/l2"]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_f5_ends_the_quick_search_and_waits_for_a_loading_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("f alt-f5");
+        cx.run_until_parked();
+        assert_eq!(search(&commander, cx), None);
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("escape home");
+        cx.run_until_parked();
+        enter_held_a(&tmp, cx);
+        assert!(loading(&commander, cx));
+        cx.simulate_keystrokes("alt-f5");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        release(&tmp);
+    }
+
+    fn make_zip(path: &std::path::Path, entries: &[(&str, &str)]) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        for (name, contents) in entries {
+            if name.ends_with('/') {
+                zip.add_directory(*name, options).unwrap();
+            } else {
+                zip.start_file(*name, options).unwrap();
+                zip.write_all(contents.as_bytes()).unwrap();
+            }
+        }
+        zip.finish().unwrap();
+    }
+
+    /// Extracts the left panel's last entry (`pkg.zip`) with `key`.
+    fn extract_last_with(key: &str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("ctrl-r end");
+        cx.simulate_keystrokes(key);
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "the folder prompt");
+    }
+
+    #[gpui_kit::test]
+    fn alt_f6_extracts_into_the_other_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        make_zip(
+            &tmp.path().join("pkg.zip"),
+            &[("pkg/", ""), ("pkg/x.txt", "x")],
+        );
+        extract_last_with("alt-f6", cx);
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a/pkg/x.txt")).unwrap(),
+            "x"
+        );
+        assert!(
+            labels(&commander, Side::Right, cx).contains(&"pkg".to_owned()),
+            "reloaded"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_f9_extracts_too(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        make_zip(&tmp.path().join("pkg.zip"), &[("x.txt", "x")]);
+        extract_last_with("alt-f9", cx);
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a/pkg/x.txt")).unwrap(),
+            "x"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_typed_relative_folder_is_used_and_created(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        make_zip(&tmp.path().join("pkg.zip"), &[("pkg/x.txt", "x")]);
+        extract_last_with("alt-f6", cx);
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("out/here");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("out/here/pkg/x.txt")).unwrap(),
+            "x"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn no_archive_under_the_cursor_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open_with_target(cx); // on "f"
+        cx.simulate_keystrokes("alt-f6");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "the error box");
+        assert!(!job_running(cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn an_existing_file_asks_and_enter_overwrites(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        make_zip(&tmp.path().join("pkg.zip"), &[("pkg/x.txt", "new")]);
+        std::fs::create_dir_all(tmp.path().join("a/pkg")).unwrap();
+        std::fs::write(tmp.path().join("a/pkg/x.txt"), "old").unwrap();
+        extract_last_with("alt-f6", cx);
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| cx.debug_bounds("conflict-new").is_some());
+        cx.simulate_keystrokes("enter"); // Overwrite
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("a/pkg/x.txt")).unwrap(),
+            "new"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn several_selected_archives_extract_each(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        make_zip(&tmp.path().join("one.zip"), &[("1.txt", "1")]);
+        make_zip(&tmp.path().join("two.zip"), &[("2.txt", "2")]);
+        // Rows: .., a, b, f, one.zip, two.zip
+        cx.simulate_keystrokes("ctrl-r end space up space alt-f6");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("a/one/1.txt").is_file());
+        assert!(tmp.path().join("a/two/2.txt").is_file());
+    }
+
+    #[gpui_kit::test]
+    fn alt_f6_waits_for_a_loading_panel(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        enter_held_a(&tmp, cx);
+        cx.simulate_keystrokes("alt-f6");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        release(&tmp);
+    }
 }

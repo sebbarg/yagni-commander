@@ -8,15 +8,21 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+bzip2.workspace = true
 dirs.workspace = true
+flate2.workspace = true
 jiff.workspace = true
+liblzma.workspace = true
 notify.workspace = true
 serde.workspace = true
 shlex.workspace = true
+tar.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
 trash.workspace = true
 unicode-width.workspace = true
+zip.workspace = true
+zstd.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

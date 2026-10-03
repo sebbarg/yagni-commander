@@ -29,6 +29,14 @@ nix = { version = "0.31", default-features = false, features = ["user", "fs", "d
 trash = "5"
 unicode-width = "0.2"
 tempfile = "3"
+# Archives (Alt-F5, Alt-F6). zip without its default codecs: Deflate (zlib-rs
+# through flate2) and Deflate64, which Windows uses for big zips.
+zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "jiff-02"] }
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.6"
+liblzma = "0.4"
+zstd = "0.14"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
