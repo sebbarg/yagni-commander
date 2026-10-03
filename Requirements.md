@@ -65,7 +65,7 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 - Directories are read off the UI thread, so a huge directory or a slow or hung network mount never freezes the app (decided 2026-10-01; the owner uses network mounts).
 - While a panel loads, it keeps showing its previous listing. A load that finishes within about 150 ms switches without any indicator. After that the panel header shows "Loading <path>... N entries" (a live count) and the old listing dims.
-- While loading, that panel accepts only Escape (cancel: stay on the old listing; at startup: go to the home folder) and Tab. Dialogs and file operations on the loading panel are ignored. Quit always works, and the other panel works normally.
+- While loading, that panel accepts only Escape (cancel: stay on the old listing; at startup: go to the home folder) and Tab/Shift-Tab. Dialogs and file operations on the loading panel are ignored. Quit always works, and the other panel works normally.
 - A failed load leaves the panel where it was, with the error in the status line.
 - Startup loads in the background too, including the fallback for a missing remembered folder (nearest readable parent, then home). Folders given on the command line are checked before the window opens; one that is not a directory ends the app with an error.
 - A newer navigation replaces a pending one. A reload requested while a navigation is pending is dropped (the navigation brings a fresh listing anyway).
@@ -107,6 +107,7 @@ Toolbar with e.g. drive icons.
 | Ctrl-R | Reload the visible tab of each side and re-read the config (see Config). |
 | Ctrl-T | New tab on the active side, a copy of the visible one (see Tabs). |
 | Ctrl-W | Close the active tab; the last tab of a side stays. |
+| Tab, Shift-Tab | Switch to the other panel (two panels, so both keys do the same). |
 | Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |
 | In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |

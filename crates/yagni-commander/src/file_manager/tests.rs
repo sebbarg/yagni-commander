@@ -71,6 +71,15 @@ fn tab_switches_the_panel_that_keys_act_on(cx: &mut TestAppContext) {
     commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
 }
 
+#[gpui_kit::test]
+fn shift_tab_also_switches_panels(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("shift-tab");
+    commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Right));
+    cx.simulate_keystrokes("shift-tab");
+    commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+}
+
 fn tab_state(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> (usize, usize) {
     commander.read_with(cx, |c, _| (c.tabs(side).count(), c.tabs(side).index()))
 }

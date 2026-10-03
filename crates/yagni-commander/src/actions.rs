@@ -103,6 +103,7 @@ pub fn bind_default_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new(quit, Quit, None),
         KeyBinding::new("tab", SwitchPanel, context),
+        KeyBinding::new("shift-tab", SwitchPanel, context),
         KeyBinding::new("up", CursorUp, context),
         KeyBinding::new("down", CursorDown, context),
         KeyBinding::new("home", CursorHome, context),
