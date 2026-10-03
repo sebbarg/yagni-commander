@@ -42,9 +42,28 @@ pub(super) const PROMPT_WIDTH: f32 = 420.0;
 type Confirm = dyn Fn(&mut Window, &mut App) -> bool;
 
 impl FileManager {
+    /// Inside an archive, a writing command shows why it can't run.
+    /// Returns true when refused.
+    pub(super) fn refuse_in_archive(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.active_panel(cx).in_archive() {
+            return false;
+        }
+        show_error(
+            "Inside an archive",
+            yagni_commander_core::archive::IN_ARCHIVE,
+            Some(self.focus.clone()),
+            window,
+            cx,
+        );
+        true
+    }
+
     /// F2: rename the entry under the cursor.
     pub(super) fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
+            return;
+        }
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -83,6 +102,9 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
+        if self.refuse_in_archive(window, cx) {
+            return;
+        }
         self.end_search(cx);
         let dir = self.active_panel(cx).path().to_path_buf();
         self.prompt_name(
@@ -110,6 +132,9 @@ impl FileManager {
     /// The hotlist's "Add current folder": asks for a name (the folder's
     /// name, preselected) and appends the entry.
     pub(super) fn add_current_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.refuse_in_archive(window, cx) {
+            return;
+        }
         if self.config_refused(window, cx) {
             return;
         }
@@ -141,6 +166,9 @@ impl FileManager {
     /// the configured editor.
     pub(super) fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
+            return;
+        }
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -225,6 +253,9 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
+        if self.refuse_in_archive(window, cx) {
+            return;
+        }
         self.end_search(cx);
         let Some(editor) = configured_editor(window, cx) else {
             return;
@@ -268,9 +299,29 @@ impl FileManager {
         {
             return;
         }
+        if panel.in_archive() {
+            let refused = panel.cursor_entry().is_some_and(|e| e.is_symlink);
+            let result = if refused {
+                Err(std::io::Error::other(
+                    "Only files can be viewed inside an archive.",
+                ))
+            } else {
+                self.view_in_archive(window, cx)
+            };
+            if let Err(e) = result {
+                show_error(
+                    "Cannot view file",
+                    e.to_string(),
+                    Some(self.focus.clone()),
+                    window,
+                    cx,
+                );
+            }
+            return;
+        }
         let path = panel.cursor_path();
         let main = window.window_bounds();
-        if let Err(e) = crate::viewer_view::open(path, main, cx) {
+        if let Err(e) = crate::viewer_view::open(path, main, None, cx) {
             show_error(
                 "Cannot view file",
                 e.to_string(),

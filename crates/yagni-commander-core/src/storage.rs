@@ -33,6 +33,31 @@ pub fn log_dir() -> Option<PathBuf> {
     Some(state_dir()?.join("logs"))
 }
 
+/// Where F3 inside an archive puts its private copies: `viewer-tmp` next
+/// to the state file. Emptied at startup.
+pub fn viewer_temp_dir() -> Option<PathBuf> {
+    Some(state_dir()?.join("viewer-tmp"))
+}
+
+/// Creates `dir` (and its parents) readable by the owner only, or makes an
+/// existing one so.
+pub fn private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+}
+
+/// Removes `dir` with everything in it; a missing one is fine.
+pub fn clear_dir(dir: &Path) -> io::Result<()> {
+    match fs::remove_dir_all(dir) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
 fn state_dir() -> Option<PathBuf> {
     let base = dirs::state_dir().or_else(dirs::data_dir)?;
     Some(base.join(APP_DIR))
@@ -95,6 +120,30 @@ pub fn write_atomic(path: &Path, contents: &str) -> Result<(), StorageError> {
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn private_dir_is_owner_only_and_clear_dir_removes_leftovers() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("viewer-tmp");
+        private_dir(&dir).unwrap();
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        private_dir(&dir).unwrap();
+        assert_eq!(
+            fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        fs::create_dir(dir.join("view-1")).unwrap();
+        fs::write(dir.join("view-1/left"), b"").unwrap();
+        clear_dir(&dir).unwrap();
+        assert!(!dir.exists());
+        clear_dir(&dir).unwrap(); // already gone
+        assert!(viewer_temp_dir().is_none_or(|d| d.ends_with("yagni-commander/viewer-tmp")));
+    }
 
     #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]
     #[serde(default)]

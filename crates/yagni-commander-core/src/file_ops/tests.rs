@@ -1,7 +1,10 @@
 use super::*;
 use std::collections::VecDeque;
+use std::ffi::OsString;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::time::SystemTime;
+
+use crate::test_archives::{T, make_tar, make_zip};
 
 /// Answers conflicts from a script and cancels on demand.
 #[derive(Default)]
@@ -1615,23 +1618,6 @@ fn packing_is_logged() {
     );
 }
 
-/// A zip at `path`: names ending in "/" are folders, the rest files with
-/// the given contents.
-fn make_zip(path: &Path, entries: &[(&str, &str)]) {
-    use std::io::Write;
-    let mut zip = zip::ZipWriter::new(File::create(path).unwrap());
-    let options = zip::write::SimpleFileOptions::default();
-    for (name, contents) in entries {
-        if name.ends_with('/') {
-            zip.add_directory(*name, options).unwrap();
-        } else {
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(contents.as_bytes()).unwrap();
-        }
-    }
-    zip.finish().unwrap();
-}
-
 #[test]
 fn one_top_folder_goes_straight_in() {
     let tmp = tempfile::tempdir().unwrap();
@@ -1929,95 +1915,6 @@ fn extraction_is_logged() {
         )),
         "{lines:?}"
     );
-}
-
-/// One entry for [`make_tar`].
-enum T<'a> {
-    File(&'a str, &'a str, u32),
-    Dir(&'a str),
-    Link(&'a str, &'a str),
-    Hard(&'a str, &'a [u8]),
-    Fifo(&'a str),
-    /// A file with a raw name (bypasses the tar crate's `..` check).
-    Raw(&'a [u8]),
-}
-
-/// Writes raw name and link-name bytes into a header.
-fn raw_names(header: &mut tar::Header, name: &[u8], link: &[u8]) {
-    let old = header.as_old_mut();
-    old.name = [0; 100];
-    old.name[..name.len()].copy_from_slice(name);
-    old.linkname = [0; 100];
-    old.linkname[..link.len()].copy_from_slice(link);
-}
-
-/// A tar of `entries` at `path`, compressed as `format`.
-fn make_tar(path: &Path, format: Format, entries: &[T]) {
-    use std::io::Write;
-    let file = File::create(path).unwrap();
-    let writer: Box<dyn Write> = match format {
-        Format::Tar => Box::new(file),
-        Format::TarGz => Box::new(flate2::write::GzEncoder::new(
-            file,
-            flate2::Compression::default(),
-        )),
-        Format::TarBz2 => Box::new(bzip2::write::BzEncoder::new(
-            file,
-            bzip2::Compression::default(),
-        )),
-        Format::TarXz => Box::new(liblzma::write::XzEncoder::new(file, 6)),
-        Format::TarZst => Box::new(
-            zstd::stream::write::Encoder::new(file, 0)
-                .unwrap()
-                .auto_finish(),
-        ),
-        Format::Zip => unreachable!(),
-    };
-    let mut builder = tar::Builder::new(writer);
-    for entry in entries {
-        let mut header = tar::Header::new_gnu();
-        header.set_mtime(1_000_000_000);
-        header.set_mode(0o644);
-        header.set_size(0);
-        let data: &[u8] = match entry {
-            T::File(name, contents, mode) => {
-                header.set_entry_type(tar::EntryType::Regular);
-                header.set_mode(*mode);
-                header.set_size(contents.len() as u64);
-                raw_names(&mut header, name.as_bytes(), b"");
-                contents.as_bytes()
-            }
-            T::Dir(name) => {
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_mode(0o755);
-                raw_names(&mut header, name.as_bytes(), b"");
-                b""
-            }
-            T::Link(name, target) => {
-                header.set_entry_type(tar::EntryType::Symlink);
-                raw_names(&mut header, name.as_bytes(), target.as_bytes());
-                b""
-            }
-            T::Hard(name, target) => {
-                header.set_entry_type(tar::EntryType::Link);
-                raw_names(&mut header, name.as_bytes(), target);
-                b""
-            }
-            T::Fifo(name) => {
-                header.set_entry_type(tar::EntryType::Fifo);
-                raw_names(&mut header, name.as_bytes(), b"");
-                b""
-            }
-            T::Raw(name) => {
-                header.set_entry_type(tar::EntryType::Regular);
-                raw_names(&mut header, name, b"");
-                b""
-            }
-        };
-        header.set_cksum();
-        builder.append(&header, data).unwrap();
-    }
-    builder.into_inner().unwrap().flush().unwrap();
 }
 
 #[test]
@@ -2909,4 +2806,220 @@ fn deflated_aes_entries_of_both_versions_extract() {
     assert!(report.failures.is_empty(), "{report:?}");
     assert_eq!(read(out.join("p/small")), "tiny");
     assert_eq!(read(out.join("p/big")).len(), 10_000);
+}
+
+#[test]
+fn tar_listing_is_strict_and_carries_owners() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("a.tar");
+    make_tar(
+        &path,
+        Format::Tar,
+        &[T::Dir("d/"), T::File("d/x", "xy", 0o644)],
+    );
+    let mut seen = 0;
+    let listed = extract::read_tar_list(&path, Format::Tar, || seen += 1).unwrap();
+    assert_eq!(seen, 2);
+    assert_eq!(listed[1].size, 2);
+    assert_eq!(listed[1].owner.as_deref(), Some("me:staff"));
+
+    let bad = tmp.path().join("bad.tar.gz");
+    fs::write(&bad, b"not gzip").unwrap();
+    assert!(extract::read_tar_list(&bad, Format::TarGz, || {}).is_err());
+}
+
+#[test]
+fn zip_listing_counts_entries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("a.zip");
+    make_zip(&path, &[("d/", ""), ("d/x", "xy")]);
+    let mut zip = zip::ZipArchive::new(File::open(&path).unwrap()).unwrap();
+    let mut seen = 0;
+    let listed = extract::list_zip(&mut zip, || seen += 1).unwrap();
+    assert_eq!((seen, listed.len()), (2, 2));
+    assert!(listed[0].owner.is_none());
+}
+
+fn entries_op(archive: &Path, inner: &[&str], names: &[&str], to: Destination) -> Operation {
+    Operation::ExtractEntries {
+        archive: archive.to_path_buf(),
+        inner: inner.iter().map(OsString::from).collect(),
+        names: names.iter().map(OsString::from).collect(),
+        to,
+    }
+}
+
+/// `pkg.zip` with `src/lib/{a,b}.rs`, `src/main.rs`, `lib/other.rs` and
+/// `README` (no folder entries).
+fn source_zip(dir: &Path) -> PathBuf {
+    let zip = dir.join("pkg.zip");
+    make_zip(
+        &zip,
+        &[
+            ("src/lib/a.rs", "a"),
+            ("src/lib/b.rs", "b"),
+            ("src/main.rs", "m"),
+            ("lib/other.rs", "o"),
+            ("README", "r"),
+        ],
+    );
+    zip
+}
+
+#[test]
+fn extract_entries_copies_the_picked_trees_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = source_zip(tmp.path());
+    let out = tmp.path().join("out");
+    let mut script = Script::default();
+    let op = entries_op(
+        &zip,
+        &["src"],
+        &["lib", "main.rs"],
+        Destination::Into(out.clone()),
+    );
+    let report = run_script(&op, &mut script);
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(names(&out), ["lib", "main.rs"]);
+    assert_eq!(names(&out.join("lib")), ["a.rs", "b.rs"]);
+    assert_eq!(read(out.join("lib/a.rs")), "a");
+    assert_eq!(script.last.files_total, 3, "only the picked files count");
+    assert!(!out.join("lib/other.rs").exists(), "not the root's lib");
+}
+
+#[test]
+fn extract_entries_as_renames_the_one_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = source_zip(tmp.path());
+    let target = tmp.path().join("new/dir/renamed.rs");
+    let op = entries_op(
+        &zip,
+        &["src"],
+        &["main.rs"],
+        Destination::As(target.clone()),
+    );
+    let report = run_script(&op, &mut Script::default());
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(read(&target), "m");
+    assert_eq!(names(&tmp.path().join("new/dir")), ["renamed.rs"]);
+
+    let folder = tmp.path().join("copy");
+    let op = entries_op(&zip, &[], &["src"], Destination::As(folder.clone()));
+    run_script(&op, &mut Script::default());
+    assert_eq!(read(folder.join("lib/a.rs")), "a");
+    assert_eq!(names(&folder), ["lib", "main.rs"]);
+}
+
+#[test]
+fn extract_entries_as_needs_one_entry() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = source_zip(tmp.path());
+    let target = tmp.path().join("x");
+    let op = entries_op(
+        &zip,
+        &[],
+        &["src", "README"],
+        Destination::As(target.clone()),
+    );
+    let report = run_script(&op, &mut Script::default());
+    assert_eq!(report.failures.len(), 1);
+    assert!(!target.exists());
+}
+
+#[test]
+fn extract_entries_from_a_tar_asks_on_conflicts_and_cancels() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tar = tmp.path().join("pkg.tar.xz");
+    make_tar(
+        &tar,
+        Format::TarXz,
+        &[
+            T::Dir("d/"),
+            T::File("d/x", "new", 0o644),
+            T::File("d/y", "y", 0o644),
+        ],
+    );
+    let out = tmp.path().join("out");
+    fs::create_dir(&out).unwrap();
+    fs::write(out.join("x"), b"old").unwrap();
+    let op = entries_op(&tar, &["d"], &["x", "y"], Destination::Into(out.clone()));
+    let mut script = Script::answering(&[Answer::Skip]);
+    let report = run_script(&op, &mut script);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(
+        (read(out.join("x")), read(out.join("y"))),
+        ("old".into(), "y".into())
+    );
+
+    fs::remove_file(out.join("y")).unwrap();
+    let mut script = Script::answering(&[Answer::Cancel]);
+    let report = run_script(&op, &mut script);
+    assert!(report.cancelled);
+    assert!(!out.join("y").exists(), "stopped at the conflict");
+}
+
+#[test]
+fn a_hard_link_to_an_entry_not_picked_fails() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tar = tmp.path().join("h.tar");
+    make_tar(
+        &tar,
+        Format::Tar,
+        &[T::File("x", "1", 0o644), T::Hard("y", b"x")],
+    );
+    let out = tmp.path().join("out");
+    let op = entries_op(&tar, &[], &["y"], Destination::Into(out.clone()));
+    let report = run_script(&op, &mut Script::default());
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert!(report.failures[0].message.contains("not copied"));
+    assert!(!out.join("x").exists() && !out.join("y").exists());
+
+    let op = entries_op(&tar, &[], &["x", "y"], Destination::Into(out.clone()));
+    let report = run_script(&op, &mut Script::default());
+    assert!(report.failures.is_empty(), "both picked: {report:?}");
+    assert_eq!(read(out.join("y")), "1");
+}
+
+#[test]
+fn only_picked_encrypted_entries_ask_for_the_password() {
+    let tmp = tempfile::tempdir().unwrap();
+    let zip = tmp.path().join("locked.zip");
+    make_locked_zip(
+        &zip,
+        "pw",
+        false,
+        &[("open.txt", "o", false), ("secret.txt", "s", true)],
+        &[],
+    );
+    let out = tmp.path().join("out");
+    let op = entries_op(&zip, &[], &["open.txt"], Destination::Into(out.clone()));
+    let mut script = Script::default();
+    run_script(&op, &mut script);
+    assert!(script.password_questions.is_empty());
+    assert_eq!(read(out.join("open.txt")), "o");
+
+    let op = entries_op(&zip, &[], &["secret.txt"], Destination::Into(out.clone()));
+    let mut script = Script {
+        passwords: [pw("pw")].into(),
+        ..Script::default()
+    };
+    run_script(&op, &mut script);
+    assert_eq!(read(out.join("secret.txt")), "s");
+}
+
+#[test]
+fn unsafe_names_are_never_picked() {
+    let tmp = tempfile::tempdir().unwrap();
+    let tar = tmp.path().join("evil.tar");
+    make_tar(
+        &tar,
+        Format::Tar,
+        &[T::Raw(b"../x"), T::File("ok", "1", 0o644)],
+    );
+    let out = tmp.path().join("out");
+    let op = entries_op(&tar, &[], &["ok"], Destination::Into(out.clone()));
+    let report = run_script(&op, &mut Script::default());
+    assert!(report.failures.is_empty(), "{report:?}");
+    assert_eq!(names(&out), ["ok"]);
+    assert!(!tmp.path().join("x").exists());
 }

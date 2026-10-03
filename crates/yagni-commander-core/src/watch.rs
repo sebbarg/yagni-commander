@@ -425,6 +425,7 @@ mod tests {
             path: tmp.path().to_path_buf(),
             fallback: None,
             progress: Arc::default(),
+            archive: None,
         };
         crate::read_listing(&request).unwrap();
         std::fs::read(tmp.path().join("f")).unwrap(); // F3 opens files too

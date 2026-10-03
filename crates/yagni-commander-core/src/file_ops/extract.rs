@@ -13,13 +13,13 @@ use std::time::SystemTime;
 
 use super::archive_names::{Format, components, single_top_folder, stem};
 use super::safe_dir::{Kind, SafeDir};
-use super::{CHUNK, Choice, Engine, Incoming, PasswordAnswer, PasswordQuestion, Step};
+use super::{CHUNK, Choice, Destination, Engine, Incoming, PasswordAnswer, PasswordQuestion, Step};
 
 /// Longer link targets are refused (PATH_MAX is 4096 on Linux).
 const MAX_LINK_TARGET: u64 = 4096;
 
 /// What an archive entry is.
-pub(super) enum What {
+pub(crate) enum What {
     Dir,
     File,
     Symlink,
@@ -31,16 +31,27 @@ pub(super) enum What {
 
 /// An archive entry's metadata, read before extracting (smart extraction,
 /// progress totals) and again for each entry.
-pub(super) struct Listed {
+pub(crate) struct Listed {
     /// The name as stored.
-    pub(super) name: Vec<u8>,
-    pub(super) parts: Result<Vec<OsString>, &'static str>,
-    pub(super) what: What,
-    pub(super) size: u64,
+    pub(crate) name: Vec<u8>,
+    pub(crate) parts: Result<Vec<OsString>, &'static str>,
+    pub(crate) what: What,
+    pub(crate) size: u64,
     /// rwx bits only.
-    pub(super) mode: Option<u32>,
-    pub(super) modified: Option<SystemTime>,
-    pub(super) encrypted: bool,
+    pub(crate) mode: Option<u32>,
+    pub(crate) modified: Option<SystemTime>,
+    pub(crate) encrypted: bool,
+    /// `user:group` as a tar stores them; zips have none.
+    pub(crate) owner: Option<String>,
+}
+
+/// Which entries an F5 or F3 out of an archive takes, and where they go.
+pub(super) struct Pick {
+    /// The folder inside the archive that `names` are in.
+    inner: Vec<OsString>,
+    names: Vec<OsString>,
+    /// [`Destination::As`]: the one entry's new name.
+    rename: Option<OsString>,
 }
 
 /// Where one archive's entries go, and what has been written so far.
@@ -53,10 +64,17 @@ pub(super) struct Sink<'d> {
     folders: Vec<(Vec<OsString>, Option<u32>, Option<SystemTime>)>,
     /// Files extracted in this run: the only things a hard link may name.
     written: HashSet<Vec<OsString>>,
+    /// Only these entries, without smart extraction.
+    pick: Option<&'d Pick>,
 }
 
 impl<'d> Sink<'d> {
-    pub(super) fn new(dir: &'d SafeDir, archive: &'d Path, listed: &[Listed]) -> Self {
+    pub(super) fn new(
+        dir: &'d SafeDir,
+        archive: &'d Path,
+        listed: &[Listed],
+        pick: Option<&'d Pick>,
+    ) -> Self {
         let valid: Vec<(Vec<OsString>, bool)> = listed
             .iter()
             .filter_map(|item| {
@@ -64,7 +82,7 @@ impl<'d> Sink<'d> {
                 Some((parts.clone(), matches!(item.what, What::Dir)))
             })
             .collect();
-        let prefix = if single_top_folder(&valid) {
+        let prefix = if pick.is_some() || single_top_folder(&valid) {
             Vec::new()
         } else {
             vec![stem(archive.file_name().unwrap_or_default())]
@@ -75,11 +93,32 @@ impl<'d> Sink<'d> {
             prefix,
             folders: Vec::new(),
             written: HashSet::new(),
+            pick,
         }
     }
 
-    fn parts(&self, entry: &[OsString]) -> Vec<OsString> {
-        self.prefix.iter().chain(entry).cloned().collect()
+    /// Where an entry goes below the extraction folder, or `None` when
+    /// this extraction doesn't take it.
+    fn parts(&self, entry: &[OsString]) -> Option<Vec<OsString>> {
+        let Some(pick) = self.pick else {
+            return Some(self.prefix.iter().chain(entry).cloned().collect());
+        };
+        let rest = entry.strip_prefix(pick.inner.as_slice())?;
+        let (top, below) = rest.split_first()?;
+        if !pick.names.contains(top) {
+            return None;
+        }
+        let top = pick.rename.clone().unwrap_or_else(|| top.clone());
+        Some(std::iter::once(top).chain(below.iter().cloned()).collect())
+    }
+
+    /// Whether this extraction takes `item`. An unsafe name is taken only
+    /// without a pick, so that it is reported.
+    pub(super) fn takes(&self, item: &Listed) -> bool {
+        match &item.parts {
+            Ok(parts) => self.parts(parts).is_some(),
+            Err(_) => self.pick.is_none(),
+        }
     }
 }
 
@@ -171,6 +210,37 @@ fn aes_authentic<R: Read + io::Seek>(
 
 impl Engine<'_> {
     pub(super) fn extract(&mut self, archives: &[PathBuf], into: &Path) {
+        self.extract_into(archives, into, None);
+    }
+
+    /// F5 and F3 inside an archive: `names` from folder `inner`.
+    pub(super) fn extract_entries(
+        &mut self,
+        archive: &Path,
+        inner: &[OsString],
+        names: &[OsString],
+        to: &Destination,
+    ) {
+        let (into, rename) = match to {
+            Destination::Into(dir) => (dir.as_path(), None),
+            Destination::As(path) => match (path.parent(), path.file_name()) {
+                (Some(dir), Some(name)) if names.len() == 1 => (dir, Some(name.to_os_string())),
+                _ => {
+                    self.fail(path, "not a valid target");
+                    return;
+                }
+            },
+        };
+        let pick = Pick {
+            inner: inner.to_vec(),
+            names: names.to_vec(),
+            rename,
+        };
+        let archives = [archive.to_path_buf()];
+        self.extract_into(&archives, into, Some(&pick));
+    }
+
+    fn extract_into(&mut self, archives: &[PathBuf], into: &Path, pick: Option<&Pick>) {
         self.progress.items_total = archives.len();
         if !self.make_folders(into) {
             return;
@@ -190,8 +260,8 @@ impl Engine<'_> {
             self.set_current(archive);
             let step = match archive.file_name().and_then(Format::from_name) {
                 None => self.fail(archive, "not an archive"),
-                Some(Format::Zip) => self.extract_zip(&dir, archive),
-                Some(format) => self.extract_tar(&dir, archive, format),
+                Some(Format::Zip) => self.extract_zip(&dir, archive, pick),
+                Some(format) => self.extract_tar(&dir, archive, format, pick),
             };
             if step == Step::Cancelled {
                 self.report.cancelled = true;
@@ -202,7 +272,7 @@ impl Engine<'_> {
         }
     }
 
-    fn extract_zip(&mut self, dir: &SafeDir, archive: &Path) -> Step {
+    fn extract_zip(&mut self, dir: &SafeDir, archive: &Path, pick: Option<&Pick>) -> Step {
         let file = match File::open(archive) {
             Ok(file) => file,
             Err(e) => return self.fail(archive, e),
@@ -211,37 +281,20 @@ impl Engine<'_> {
             Ok(zip) => zip,
             Err(e) => return self.fail(archive, e),
         };
-        let mut listed = Vec::with_capacity(zip.len());
-        for i in 0..zip.len() {
-            let entry = match zip.by_index_raw(i) {
-                Ok(entry) => entry,
-                Err(e) => return self.fail(archive, e),
-            };
-            let name = entry.name().as_bytes().to_vec();
-            let what = if entry.is_dir() {
-                What::Dir
-            } else if entry.is_symlink() {
-                What::Symlink
-            } else {
-                What::File
-            };
-            listed.push(Listed {
-                parts: components(&name, true),
-                name,
-                what,
-                size: entry.size(),
-                mode: entry.unix_mode().map(|mode| mode & 0o777),
-                modified: from_zip_time(entry.last_modified()),
-                encrypted: entry.encrypted(),
-            });
-        }
-        let mut sink = Sink::new(dir, archive, &listed);
-        self.count(&listed);
+        let listed = match list_zip(&mut zip, || {}) {
+            Ok(listed) => listed,
+            Err(e) => return self.fail(archive, e),
+        };
+        let mut sink = Sink::new(dir, archive, &listed, pick);
+        self.count(&listed, &sink);
         let mut step = Step::Done;
         let mut skip_locked = false;
         for (i, item) in listed.iter().enumerate() {
             if self.observer.is_cancelled() {
                 return self.end_archive(&mut sink, Step::Cancelled);
+            }
+            if !sink.takes(item) {
+                continue;
             }
             let needs_data = item.parts.is_ok() && matches!(item.what, What::File | What::Symlink);
             let entry_step = if needs_data && item.encrypted {
@@ -336,12 +389,18 @@ impl Engine<'_> {
         Step::Incomplete
     }
 
-    fn extract_tar(&mut self, dir: &SafeDir, archive: &Path, format: Format) -> Step {
+    fn extract_tar(
+        &mut self,
+        dir: &SafeDir,
+        archive: &Path,
+        format: Format,
+        pick: Option<&Pick>,
+    ) -> Step {
         // First pass: names, kinds, sizes (smart extraction, progress). It
         // stops quietly at a read error; the second pass reports it.
         let listed = list_tar(archive, format);
-        let mut sink = Sink::new(dir, archive, &listed);
-        self.count(&listed);
+        let mut sink = Sink::new(dir, archive, &listed, pick);
+        self.count(&listed, &sink);
         let reader = match tar_reader(archive, format) {
             Ok(reader) => reader,
             Err(e) => return self.fail(archive, e),
@@ -367,6 +426,9 @@ impl Engine<'_> {
                 continue;
             }
             let item = listed_tar(&entry);
+            if !sink.takes(&item) {
+                continue;
+            }
             let link_target = entry.link_name_bytes().map(|bytes| bytes.into_owned());
             match self.put(&mut sink, &item, link_target, &mut entry) {
                 Step::Done => {}
@@ -378,8 +440,11 @@ impl Engine<'_> {
     }
 
     /// Adds an archive's files and bytes to the progress totals.
-    pub(super) fn count(&mut self, listed: &[Listed]) {
-        for item in listed.iter().filter(|item| matches!(item.what, What::File)) {
+    pub(super) fn count(&mut self, listed: &[Listed], sink: &Sink) {
+        let files = listed
+            .iter()
+            .filter(|item| matches!(item.what, What::File) && sink.takes(item));
+        for item in files {
             self.progress.files_total += 1;
             self.progress.bytes_total += item.size;
         }
@@ -397,7 +462,9 @@ impl Engine<'_> {
     ) -> Step {
         let shown = inside(sink.archive, &item.name);
         let parts = match &item.parts {
-            Ok(parts) => sink.parts(parts),
+            Ok(parts) => sink
+                .parts(parts)
+                .expect("only entries the sink takes are put"),
             Err(why) => return self.fail(&shown, why),
         };
         match &item.what {
@@ -626,9 +693,14 @@ impl Engine<'_> {
             Ok(entry) => sink.parts(&entry),
             Err(why) => return self.fail(shown, why),
         };
-        if !sink.written.contains(&existing) {
-            return self.fail(shown, "a hard link to something outside this archive");
-        }
+        let Some(existing) = existing.filter(|e| sink.written.contains(e)) else {
+            let why = if sink.pick.is_some() {
+                "a hard link to an entry not copied"
+            } else {
+                "a hard link to something outside this archive"
+            };
+            return self.fail(shown, why);
+        };
         if let Ok(Some(_)) = sink.dir.kind(parts) {
             return self.fail(shown, "an entry with this name exists");
         }
@@ -675,6 +747,56 @@ fn tar_reader(path: &Path, format: Format) -> io::Result<Box<dyn Read>> {
         Format::TarZst => Box::new(zstd::stream::read::Decoder::new(file)?),
         Format::Zip => return Err(io::Error::other("a zip is not a tar")),
     })
+}
+
+/// A zip's entries from its central directory; `each` runs once per entry.
+pub(crate) fn list_zip<R: Read + io::Seek>(
+    zip: &mut zip::ZipArchive<R>,
+    mut each: impl FnMut(),
+) -> zip::result::ZipResult<Vec<Listed>> {
+    let mut listed = Vec::with_capacity(zip.len());
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i)?;
+        each();
+        let name = entry.name().as_bytes().to_vec();
+        let what = if entry.is_dir() {
+            What::Dir
+        } else if entry.is_symlink() {
+            What::Symlink
+        } else {
+            What::File
+        };
+        listed.push(Listed {
+            parts: components(&name, true),
+            name,
+            what,
+            size: entry.size(),
+            mode: entry.unix_mode().map(|mode| mode & 0o777),
+            modified: from_zip_time(entry.last_modified()),
+            encrypted: entry.encrypted(),
+            owner: None,
+        });
+    }
+    Ok(listed)
+}
+
+/// A tar's entries for browsing: the first read error is the result.
+pub(crate) fn read_tar_list(
+    path: &Path,
+    format: Format,
+    mut each: impl FnMut(),
+) -> io::Result<Vec<Listed>> {
+    let mut tar = tar::Archive::new(tar_reader(path, format)?);
+    let mut listed = Vec::new();
+    for entry in tar.entries()? {
+        let entry = entry?;
+        if is_tar_metadata(&entry) {
+            continue;
+        }
+        each();
+        listed.push(listed_tar(&entry));
+    }
+    Ok(listed)
 }
 
 /// A tar's entries, up to the first read error.
@@ -732,5 +854,11 @@ fn listed_tar<R: Read>(entry: &tar::Entry<R>) -> Listed {
             .ok()
             .map(|secs| SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(secs)),
         encrypted: false,
+        owner: match (header.username(), header.groupname()) {
+            (Ok(Some(user)), Ok(Some(group))) if !user.is_empty() => {
+                Some(format!("{user}:{group}"))
+            }
+            _ => None,
+        },
     }
 }

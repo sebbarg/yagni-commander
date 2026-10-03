@@ -49,6 +49,31 @@ impl Entry {
         }
     }
 
+    /// An entry inside an archive (`crate::archive`): never followed, so a
+    /// symlink is a file here.
+    pub(crate) fn archived(
+        name: OsString,
+        kind: EntryKind,
+        is_symlink: bool,
+        size: Option<u64>,
+        modified: Option<SystemTime>,
+        mode: Option<u32>,
+        owner: Option<Arc<str>>,
+    ) -> Self {
+        let label = name.to_string_lossy().into_owned();
+        Self {
+            sort_name: label.to_lowercase(),
+            label,
+            name,
+            kind,
+            is_symlink,
+            size,
+            modified,
+            mode,
+            owner,
+        }
+    }
+
     /// Hidden means the name starts with `.` (Linux and macOS). ".." is not hidden.
     pub fn is_hidden(&self) -> bool {
         self.kind != EntryKind::Parent && is_hidden_name(&self.name)

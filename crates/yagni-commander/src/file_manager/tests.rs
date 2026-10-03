@@ -29,6 +29,7 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
     file_manager(cx).update(cx, |this, _| {
         this.watchers = None;
         this.opener = "true".into();
+        this.temp_dir = None;
     });
     cx
 }
@@ -1852,6 +1853,29 @@ fn menu_checks_follow_ctrl_dot_sorting_and_the_active_panel(cx: &mut TestAppCont
     assert!(native_check(cx, "Sort by name"));
 }
 
+/// A zip at `path`: names ending in "/" are folders, the rest files with
+/// the given contents.
+fn make_zip(path: &std::path::Path, entries: &[(&str, &str)]) {
+    use std::io::Write;
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    for (name, contents) in entries {
+        if name.ends_with('/') {
+            zip.add_directory(*name, options).unwrap();
+        } else {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(contents.as_bytes()).unwrap();
+        }
+    }
+    zip.finish().unwrap();
+}
+
+/// The open message box's title and text (copied with Ctrl-C).
+fn box_text(cx: &mut VisualTestContext) -> String {
+    cx.simulate_keystrokes("ctrl-c");
+    clipboard_text(cx).unwrap_or_default()
+}
+
 fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
     cx.read_from_clipboard()
         .and_then(|item| item.text())
@@ -2953,6 +2977,23 @@ mod hotlist {
     }
 
     #[gpui_kit::test]
+    fn add_current_folder_is_refused_inside_an_archive(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = super::archive_browsing::inside_zip(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d up up enter");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            format!(
+                "Inside an archive\n{}",
+                yagni_commander_core::archive::IN_ARCHIVE
+            )
+        );
+        assert_eq!(saved_hotlist(&file).len(), 2, "nothing added");
+    }
+
+    #[gpui_kit::test]
     fn add_current_folder_asks_for_a_name_and_saves(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
@@ -3750,21 +3791,6 @@ mod archives {
         release(&tmp);
     }
 
-    fn make_zip(path: &std::path::Path, entries: &[(&str, &str)]) {
-        use std::io::Write;
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
-        let options = zip::write::SimpleFileOptions::default();
-        for (name, contents) in entries {
-            if name.ends_with('/') {
-                zip.add_directory(*name, options).unwrap();
-            } else {
-                zip.start_file(*name, options).unwrap();
-                zip.write_all(contents.as_bytes()).unwrap();
-            }
-        }
-        zip.finish().unwrap();
-    }
-
     /// Extracts the left panel's last entry (`pkg.zip`) with `key`.
     fn extract_last_with(key: &str, cx: &mut VisualTestContext) {
         cx.simulate_keystrokes("ctrl-r end");
@@ -4142,5 +4168,283 @@ mod compare {
                 .collect::<Vec<_>>()
         });
         assert!(labels.contains(&("Compare by content", "yagni_commander::CompareContents")));
+    }
+}
+
+mod archive_browsing {
+    use super::*;
+    use yagni_commander_core::archive::IN_ARCHIVE;
+
+    /// The left panel inside `pkg.zip` (src/lib/a.rs, src/main.rs,
+    /// README), the right panel on `a`.
+    pub(super) fn inside_zip(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        make_zip(
+            &tmp.path().join("pkg.zip"),
+            &[("src/lib/a.rs", "a"), ("src/main.rs", "m"), ("README", "r")],
+        );
+        cx.simulate_keystrokes("ctrl-r end enter");
+        cx.run_until_parked();
+        assert!(commander.read_with(cx, |c, _| c.panel(Side::Left).in_archive()));
+        (tmp, commander, cx)
+    }
+
+    /// The error box's text, then closes it.
+    fn refusal(cx: &mut VisualTestContext) -> String {
+        assert!(dialog_open(cx), "an error box");
+        let text = box_text(cx);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        text
+    }
+
+    #[gpui_kit::test]
+    fn enter_opens_a_zip_and_backspace_leaves_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = inside_zip(cx);
+        assert_eq!(labels(&commander, Side::Left, cx), ["..", "src", "README"]);
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(
+            path(&commander, Side::Left, cx),
+            tmp.path().join("pkg.zip/src")
+        );
+        cx.simulate_keystrokes("backspace backspace");
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        assert!(!commander.read_with(cx, |c, _| c.panel(Side::Left).in_archive()));
+    }
+
+    #[gpui_kit::test]
+    fn writing_keys_are_refused_inside(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        for key in [
+            "f2",
+            "f4",
+            "f6",
+            "f7",
+            "f8",
+            "delete",
+            "shift-f8",
+            "shift-delete",
+            "shift-f4",
+            "alt-f5",
+            "alt-f6",
+            "alt-f9",
+        ] {
+            cx.simulate_keystrokes("end");
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert_eq!(
+                refusal(cx),
+                format!("Inside an archive\n{IN_ARCHIVE}"),
+                "{key}"
+            );
+        }
+        assert!(!job_running(cx));
+        assert!(tmp.path().join("f").exists());
+        assert!(tmp.path().join("pkg.zip").is_file());
+    }
+
+    #[gpui_kit::test]
+    fn compare_is_refused_when_an_entry_is_inside(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        // The right panel's cursor on a real file, the left on README.
+        std::fs::write(tmp.path().join("a/x"), "r").unwrap();
+        cx.simulate_keystrokes("tab ctrl-r end tab end");
+        cx.run_until_parked();
+        cx.dispatch_action(crate::actions::CompareContents);
+        cx.run_until_parked();
+        assert_eq!(refusal(cx), format!("Inside an archive\n{IN_ARCHIVE}"));
+        assert!(!job_running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn f5_copies_selected_entries_out(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = inside_zip(cx);
+        cx.simulate_keystrokes("home down enter"); // into src
+        cx.simulate_keystrokes("ctrl-a f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "destination prompt");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        let read = |p: &str| std::fs::read_to_string(tmp.path().join(p)).unwrap();
+        assert_eq!(read("a/lib/a.rs"), "a");
+        assert_eq!(read("a/main.rs"), "m");
+        assert!(selected(&commander, Side::Left, cx).is_empty(), "copied");
+        assert!(commander.read_with(cx, |c, _| c.panel(Side::Left).in_archive()));
+        assert!(
+            labels(&commander, Side::Right, cx).contains(&"lib".to_owned()),
+            "reloaded"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn f5_extracts_several_entries_into_the_archives_own_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        cx.simulate_keystrokes("tab backspace tab"); // right panel on the zip's folder
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a f5 enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error box");
+        let readme = std::fs::read_to_string(tmp.path().join("README")).unwrap();
+        assert_eq!(readme, "r");
+        assert!(tmp.path().join("src/main.rs").exists());
+    }
+
+    #[gpui_kit::test]
+    fn f5_on_one_entry_can_rename_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        cx.simulate_keystrokes("end f5"); // README
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input(&tmp.path().join("a/read.txt").display().to_string());
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        let copy = std::fs::read_to_string(tmp.path().join("a/read.txt")).unwrap();
+        assert_eq!(copy, "r");
+    }
+
+    #[gpui_kit::test]
+    fn f5_on_one_folder_preselects_its_whole_name(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        cx.simulate_keystrokes("home down f5"); // src
+        cx.run_until_parked();
+        cx.simulate_input("v1.0");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("a/v1.0/lib/a.rs").exists());
+    }
+
+    #[gpui_kit::test]
+    fn copies_into_an_archive_are_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        // The right panel into the zip too, the left back to the folder.
+        cx.simulate_keystrokes("alt-z backspace");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("end f5"); // `pkg.zip` itself as the source
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(box_text(cx), "Cannot copy\nCan't copy into an archive");
+        cx.simulate_keystrokes("escape escape");
+        cx.run_until_parked();
+        assert!(!job_running(cx));
+        assert!(!dialog_open(cx));
+        assert!(tmp.path().join("pkg.zip").is_file());
+    }
+
+    /// Points the F3 temp folder at a fresh folder.
+    fn use_temp_dir(cx: &mut VisualTestContext) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("viewer-tmp");
+        file_manager(cx).update(cx, |this, _| this.temp_dir = Some(dir));
+        temp
+    }
+
+    fn copies(temp: &tempfile::TempDir) -> usize {
+        std::fs::read_dir(temp.path().join("viewer-tmp"))
+            .map(|d| d.count())
+            .unwrap_or(0)
+    }
+
+    #[gpui_kit::test]
+    fn f3_views_an_entry_and_closing_deletes_its_copy(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = inside_zip(cx);
+        let temp = use_temp_dir(cx);
+        cx.simulate_keystrokes("end f3"); // README
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        assert_eq!(viewers(cx), 1);
+        assert_eq!(copies(&temp), 1, "one private copy");
+        let window = cx
+            .windows()
+            .into_iter()
+            .find(|w| crate::viewer_view::tests::viewer_in(*w, cx).is_some())
+            .unwrap();
+        let mut viewer_cx = VisualTestContext::from_window(window, cx);
+        viewer_cx.simulate_keystrokes("escape");
+        viewer_cx.run_until_parked();
+        cx.run_until_parked();
+        assert_eq!(viewers(cx), 0);
+        assert_eq!(copies(&temp), 0, "deleted with the window");
+    }
+
+    #[gpui_kit::test]
+    fn f3_on_a_folder_does_nothing_and_on_a_link_explains(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        let temp = use_temp_dir(cx);
+        let file = std::fs::File::create(tmp.path().join("links.tar")).unwrap();
+        let mut builder = tar::Builder::new(file);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        builder.append_link(&mut header, "zlink", "target").unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        builder
+            .append_data(&mut header, "dir/", std::io::empty())
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        let ix = labels(&commander, Side::Left, cx)
+            .iter()
+            .position(|l| l == "links.tar")
+            .unwrap();
+        commander.update(cx, |c, _| {
+            c.execute(Command::CursorTo(Side::Left, ix));
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(commander.read_with(cx, |c, _| c.panel(Side::Left).in_archive()));
+
+        cx.simulate_keystrokes("home down f3"); // "dir" (folders first)
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && !job_running(cx), "a folder: nothing");
+        cx.simulate_keystrokes("end f3"); // "zlink"
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot view file\nOnly files can be viewed inside an archive."
+        );
+        assert_eq!(viewers(cx), 0);
+        assert_eq!(copies(&temp), 0);
+    }
+
+    #[gpui_kit::test]
+    fn f3_without_a_temp_folder_says_so(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = inside_zip(cx);
+        file_manager(cx).update(cx, |this, _| this.temp_dir = None);
+        cx.simulate_keystrokes("end f3");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot view file\nno folder for temporary files"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_watcher_and_state_use_the_archives_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = inside_zip(cx);
+        let watched = file_manager(cx).read_with(cx, |this, _| this.watched[0].clone());
+        assert_eq!(watched.as_deref(), Some(tmp.path()));
+        let saved = cx.update(|_, cx| cx.global::<AppState>().state.left_tabs.clone());
+        assert_eq!(saved, [tmp.path().to_path_buf()]);
+    }
+
+    #[gpui_kit::test]
+    fn the_window_title_shows_the_path_inside(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = inside_zip(cx);
+        let title = commander.read_with(cx, |c, _| super::super::window_title(c));
+        assert_eq!(
+            title,
+            format!("{} - yagni-commander", tmp.path().join("pkg.zip").display())
+        );
     }
 }

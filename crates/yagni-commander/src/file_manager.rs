@@ -99,6 +99,8 @@ pub struct FileManager {
     pub(crate) settings: Option<Entity<crate::settings_dialog::SettingsView>>,
     /// Where the operation log goes. Tests replace it.
     pub(crate) log_dir: Option<PathBuf>,
+    /// Where F3 inside an archive puts its private copies. Tests replace it.
+    pub(crate) temp_dir: Option<PathBuf>,
     /// The in-window menu bar; `None` on macOS, which has the native one.
     menu_bar: Option<Entity<MenuBar>>,
     /// The open Ctrl-D popup.
@@ -206,6 +208,7 @@ impl FileManager {
             changes,
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
+            temp_dir: yagni_commander_core::storage::viewer_temp_dir(),
             menu_bar,
             hotlist: None,
             hotlist_dialog: None,
@@ -427,7 +430,7 @@ impl FileManager {
     /// The active panel's folder as "Add current folder" stores it.
     pub(crate) fn current_folder_entry_path(&self, cx: &App) -> String {
         let commander = self.commander.read(cx);
-        let path = commander.panel(commander.active()).path();
+        let path = commander.panel(commander.active()).real_dir();
         yagni_commander_core::hotlist::contract(path, commander.home())
     }
 

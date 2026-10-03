@@ -5,8 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::archive::ArchiveIndex;
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
-use crate::listing::Listing;
+use crate::file_ops::Format;
+use crate::listing::{ArchiveRead, Listing};
 use crate::sort::{Sort, SortKey, sort_entries};
 
 /// One side of the commander: a directory listing with a cursor.
@@ -38,6 +40,9 @@ pub struct Panel {
     /// A re-read was asked for while another read was pending: the folder
     /// may have changed after that read listed it.
     pub(crate) stale: bool,
+    /// The archive `path` is inside, if any. `path` then runs through the
+    /// archive file (`/x/a.zip/src`), so it never names a real folder.
+    archive: Option<Arc<ArchiveIndex>>,
 }
 
 /// Counts and sizes for the panel footer. Directory sizes are unknown, so
@@ -68,6 +73,8 @@ pub(crate) struct Navigation {
     pub target: PathBuf,
     /// Entry to put the cursor on.
     pub select: Option<OsString>,
+    /// `target` is inside this archive.
+    pub archive: Option<ArchiveRead>,
 }
 
 /// What Enter on the cursor entry leads to.
@@ -133,6 +140,7 @@ impl Panel {
             refresh: None,
             loaded: false,
             stale: false,
+            archive: None,
         }
     }
 
@@ -151,6 +159,7 @@ impl Panel {
             refresh: None,
             loaded: self.loaded,
             stale: false,
+            archive: self.archive.clone(),
         }
     }
 
@@ -159,7 +168,14 @@ impl Panel {
         let path = std::path::absolute(path)?;
         let entries = read_entries(&path, &AtomicUsize::new(0))?;
         let mut panel = Self::empty(path.clone(), show_hidden);
-        panel.apply(Listing { path, entries }, None);
+        panel.apply(
+            Listing {
+                path,
+                entries,
+                archive: None,
+            },
+            None,
+        );
         Ok(panel)
     }
 
@@ -211,17 +227,39 @@ impl Panel {
             EntryKind::Dir => Enter::Dir(Navigation {
                 target: self.path.join(&entry.name),
                 select: None,
+                archive: self.archive_read(true),
             }),
+            // No archives in archives, nothing runs from one.
+            EntryKind::File if self.in_archive() => Enter::None,
+            EntryKind::File if Format::from_name(&entry.name).is_some() => {
+                let file = self.path.join(&entry.name);
+                Enter::Dir(Navigation {
+                    target: file.clone(),
+                    select: None,
+                    archive: Some(ArchiveRead { file, known: None }),
+                })
+            }
             EntryKind::File => Enter::File(self.path.join(&entry.name)),
         }
     }
 
     /// Going up: the parent, with the cursor on the folder we came from.
     pub(crate) fn parent_target(&self) -> Option<Navigation> {
+        // At an archive's root, up leaves the archive.
+        if let Some(index) = &self.archive
+            && self.path == index.file()
+        {
+            return Some(Navigation {
+                target: index.file().parent()?.to_path_buf(),
+                select: index.file().file_name().map(|n| n.to_os_string()),
+                archive: None,
+            });
+        }
         let parent = self.path.parent()?.to_path_buf();
         Some(Navigation {
             target: parent,
             select: self.path.file_name().map(|n| n.to_os_string()),
+            archive: self.archive_read(true),
         })
     }
 
@@ -231,13 +269,50 @@ impl Panel {
         Navigation {
             target: self.path.clone(),
             select: select.map(OsStr::to_os_string).or(keep),
+            // An archive is read again only if it changed.
+            archive: self.archive_read(true),
         }
+    }
+
+    pub fn archive(&self) -> Option<&Arc<ArchiveIndex>> {
+        self.archive.as_ref()
+    }
+
+    pub fn in_archive(&self) -> bool {
+        self.archive.is_some()
+    }
+
+    /// The real folder: the archive's folder inside an archive, else the
+    /// panel's own (watcher, state file).
+    pub fn real_dir(&self) -> &Path {
+        match &self.archive {
+            Some(index) => index.file().parent().unwrap_or(index.file()),
+            None => &self.path,
+        }
+    }
+
+    /// Where this panel's archive comes from, with its index when `keep`.
+    pub(crate) fn archive_read(&self, keep: bool) -> Option<ArchiveRead> {
+        self.archive.as_ref().map(|index| ArchiveRead {
+            file: index.file().to_path_buf(),
+            known: keep.then(|| index.clone()),
+        })
+    }
+
+    /// Shows `nav` inside an archive whose index is at hand: no read.
+    pub(crate) fn browse(&mut self, index: Arc<ArchiveIndex>, nav: &Navigation) {
+        let listing = crate::archive::listing(index, &nav.target);
+        self.apply(listing, nav.select.as_deref());
     }
 
     /// Shows a finished read, with the cursor on `select` if it is there.
     pub(crate) fn apply(&mut self, listing: Listing, select: Option<&OsStr>) {
-        let target = listing.path;
-        let (mut entries, hidden) = split_hidden(listing.entries, self.show_hidden);
+        let Listing {
+            path: target,
+            entries,
+            archive,
+        } = listing;
+        let (mut entries, hidden) = split_hidden(entries, self.show_hidden);
         sort_entries(&mut entries, self.sort);
         let same_dir = target == self.path && self.loaded;
         let cursor = select
@@ -254,6 +329,7 @@ impl Panel {
             self.selection.clear();
         }
         self.path = target;
+        self.archive = archive;
         self.entries = entries;
         self.hidden = hidden;
         self.cursor = cursor;
@@ -477,14 +553,14 @@ fn split_hidden(entries: Vec<Entry>, show_hidden: bool) -> (Vec<Entry>, Vec<Entr
 impl Panel {
     /// Reads `nav` now and shows it, like a finished load.
     fn follow(&mut self, nav: Navigation) -> io::Result<()> {
-        let entries = read_entries(&nav.target, &AtomicUsize::new(0))?;
-        self.apply(
-            Listing {
-                path: nav.target,
-                entries,
-            },
-            nav.select.as_deref(),
-        );
+        let listing = crate::listing::read_listing(&crate::listing::LoadRequest {
+            id: 0,
+            path: nav.target.clone(),
+            fallback: None,
+            progress: Arc::default(),
+            archive: nav.archive.clone(),
+        })?;
+        self.apply(listing, nav.select.as_deref());
         Ok(())
     }
 
@@ -512,6 +588,7 @@ impl Panel {
         self.follow(Navigation {
             target: path,
             select: select.map(OsStr::to_os_string),
+            archive: None,
         })
     }
 }
@@ -1070,6 +1147,7 @@ mod tests {
             Listing {
                 path: tmp.path().to_path_buf(),
                 entries,
+                archive: None,
             },
             Some(OsStr::new("beta")),
         );

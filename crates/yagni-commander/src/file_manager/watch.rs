@@ -51,7 +51,7 @@ impl FileManager {
     /// (navigation, Ctrl-U, Alt-Z, the fallback to a parent).
     pub(super) fn watch_panels(&mut self, cx: &App) {
         for (i, side) in SIDES.into_iter().enumerate() {
-            let path = self.commander.read(cx).panel(side).path();
+            let path = self.commander.read(cx).panel(side).real_dir();
             if self.watched[i].as_deref() == Some(path) {
                 continue;
             }

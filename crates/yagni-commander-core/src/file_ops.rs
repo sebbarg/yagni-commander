@@ -9,6 +9,7 @@
 //! operation continues. Existing files are never partly overwritten: a
 //! replacement is written next to the target and renamed over it at the end.
 
+use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, FileTimes, Metadata, OpenOptions};
 use std::io::{self, Read};
@@ -23,7 +24,7 @@ use crate::oplog::OperationLog;
 
 mod archive_names;
 mod compare;
-mod extract;
+pub(crate) mod extract;
 mod pack;
 mod safe_dir;
 pub use archive_names::{Format, is_archive};
@@ -62,6 +63,16 @@ pub enum Operation {
     Extract {
         archives: Vec<PathBuf>,
         into: PathBuf,
+    },
+    /// Copies entries out of an archive (F5 inside an archive; F3 into a
+    /// temp folder). `names` are in folder `inner` of the archive; with
+    /// [`Destination::As`] there is one name, and it arrives under the new
+    /// name.
+    ExtractEntries {
+        archive: PathBuf,
+        inner: Vec<OsString>,
+        names: Vec<OsString>,
+        to: Destination,
     },
     /// Compares two files byte for byte, or two folders by names, types
     /// and contents. Reads only and logs nothing.
@@ -260,6 +271,9 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Operation::Delete { sources } => ("delete", sources, None),
         Operation::Pack { sources, to, .. } => ("pack", sources, Some(to)),
         Operation::Extract { archives, into } => ("extract", archives, Some(into)),
+        Operation::ExtractEntries { archive, to, .. } => {
+            ("extract", std::slice::from_ref(archive), Some(to.path()))
+        }
         // Reads only: no engine, nothing logged.
         Operation::Compare { first, second } => {
             let (comparison, cancelled) = compare::run(first, second, observer);
@@ -298,6 +312,12 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Operation::Delete { sources } => engine.delete(sources),
         Operation::Pack { sources, base, to } => engine.pack(sources, base, to),
         Operation::Extract { archives, into } => engine.extract(archives, into),
+        Operation::ExtractEntries {
+            archive,
+            inner,
+            names,
+            to,
+        } => engine.extract_entries(archive, inner, names, to),
         Operation::Compare { .. } => unreachable!("returned above"),
     }
     let report = &engine.report;

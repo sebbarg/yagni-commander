@@ -43,7 +43,7 @@ fn view(
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("file.txt");
     std::fs::write(&path, text).unwrap();
-    cx.update(|cx| open(path, main_bounds(), cx)).unwrap();
+    cx.update(|cx| open(path, main_bounds(), None, cx)).unwrap();
     let window = *cx.windows().last().unwrap();
     let viewer = viewer_in(window, cx).expect("a viewer window");
     let vcx = VisualTestContext::from_window(window, cx);
@@ -281,8 +281,8 @@ fn closing_the_main_window_closes_the_viewers(cx: &mut TestAppContext) {
     std::fs::write(&path, b"x").unwrap();
     cx.update(|cx| {
         crate::windows::close_all_when_main_closes(main, cx).detach();
-        open(path.clone(), main_bounds(), cx).unwrap();
-        open(path, main_bounds(), cx).unwrap();
+        open(path.clone(), main_bounds(), None, cx).unwrap();
+        open(path, main_bounds(), None, cx).unwrap();
     });
     cx.run_until_parked();
     assert_eq!(cx.windows().len(), 3);

@@ -440,6 +440,46 @@ check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commande
 xdotool windowfocus "$window"
 sleep 0.5
 
+echo "Enter opens a zip; F3 views an entry; F5 copies entries out"
+mkdir -p "$work/browse/docs"
+printf one >"$work/browse/docs/readme.txt"
+printf two >"$work/browse/docs/guide.txt"
+(cd "$work/browse" && python3 -m zipfile -c "$left/browse.zip" docs)
+keys ctrl+r
+typed browse.z
+keys Escape Return
+check "inside the zip" title_is "$left/browse.zip"
+typed docs
+keys Escape Return
+check "inside docs in the zip" title_is "$left/browse.zip/docs"
+shot 08f-archive-inside
+typed readme
+keys Escape F3
+check "viewer on the zip entry" xdotool search --name "^readme.txt - yagni-commander\$"
+xdotool windowfocus "$(xdotool search --name "^readme.txt - yagni-commander\$" | head -1)"
+sleep 0.5
+shot 08g-archive-viewer
+keys Escape
+check "entry viewer closed" bash -c '! xdotool search --name "^readme.txt - yagni-commander\$"'
+check "its private copy deleted" bash -c '[[ -z $(ls -A "$1") ]]' _ "$work/state/yagni-commander/viewer-tmp"
+xdotool windowfocus "$window"
+sleep 0.5
+keys ctrl+a F5
+sleep 0.5
+keys Return
+check "F5 copied readme.txt out" has "$right/readme.txt" one
+check "F5 copied guide.txt out" has "$right/guide.txt" two
+check "the zip is untouched" python3 -c 'import sys, zipfile; sys.exit(0 if len(zipfile.ZipFile(sys.argv[1]).namelist()) == 3 else 1)' "$left/browse.zip"
+keys BackSpace BackSpace
+check "out of the zip" title_is "$left"
+tar -C "$work/browse" -czf "$left/browse2.tar.gz" docs
+keys ctrl+r
+typed browse2
+keys Escape Return
+check "inside the tar.gz" title_is "$left/browse2.tar.gz"
+keys BackSpace
+check "out of the tar.gz" title_is "$left"
+
 echo "F3 viewer on a giant single line"
 typed oneline
 keys F3

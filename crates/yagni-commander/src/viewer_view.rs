@@ -42,7 +42,14 @@ pub fn window_title(path: &Path) -> String {
 
 /// Opens `path` in a new viewer window, placed where the last viewer was or
 /// over the main window (`main`).
-pub fn open(path: PathBuf, main: WindowBounds, cx: &mut App) -> io::Result<()> {
+/// `temp`: the private copy of an archive entry that `path` is in, deleted
+/// with the window.
+pub fn open(
+    path: PathBuf,
+    main: WindowBounds,
+    temp: Option<tempfile::TempDir>,
+    cx: &mut App,
+) -> io::Result<()> {
     let source = FileSource::open(&path)?;
     let options = WindowOptions {
         window_bounds: Some(cx.global::<AppState>().viewer_bounds(main, cx)),
@@ -50,7 +57,7 @@ pub fn open(path: PathBuf, main: WindowBounds, cx: &mut App) -> io::Result<()> {
         ..Default::default()
     };
     gpui_kit::open_window(options, cx, |window, cx| {
-        cx.new(|cx| ViewerView::new(path, source, window, cx))
+        cx.new(|cx| ViewerView::new(path, source, temp, window, cx))
     })
     .map_err(io::Error::other)?;
     Ok(())
@@ -82,10 +89,18 @@ pub struct ViewerView {
     /// Fractional rows of wheel scrolling not applied yet.
     wheel_rows: f32,
     _subscriptions: Vec<Subscription>,
+    /// The private copy of an archive entry, deleted with the window.
+    _temp: Option<tempfile::TempDir>,
 }
 
 impl ViewerView {
-    fn new(path: PathBuf, source: FileSource, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(
+        path: PathBuf,
+        source: FileSource,
+        temp: Option<tempfile::TempDir>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         window.set_window_title(&window_title(&path));
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
@@ -129,6 +144,7 @@ impl ViewerView {
             dragging_thumb: false,
             wheel_rows: 0.0,
             _subscriptions: subscriptions,
+            _temp: temp,
         }
     }
 

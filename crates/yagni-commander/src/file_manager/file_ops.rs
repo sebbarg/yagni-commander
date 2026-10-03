@@ -18,6 +18,7 @@ use gpui_kit::{
     App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, WeakEntity, Window, div, px,
 };
+use yagni_commander_core::archive::inner_parts;
 use yagni_commander_core::file_ops::{
     Answer, Comparison, Conflict, Destination, Difference, Event, Incoming, Job, LinkAnswer,
     LinkChoice, LinkPlace, LinkQuestion, Operation, PasswordAnswer, PasswordQuestion, Progress,
@@ -51,6 +52,8 @@ pub(super) enum Kind {
     Pack,
     Extract,
     Compare,
+    /// F3 inside an archive: a private copy for the viewer.
+    View,
 }
 
 impl Kind {
@@ -63,6 +66,7 @@ impl Kind {
             Kind::Pack => "Pack",
             Kind::Extract => "Extract",
             Kind::Compare => "Compare",
+            Kind::View => "View",
         }
     }
 
@@ -75,8 +79,16 @@ impl Kind {
             Kind::Pack => "Packing",
             Kind::Extract => "Extracting",
             Kind::Compare => "Comparing",
+            Kind::View => "Extracting",
         }
     }
+}
+
+/// F5 inside an archive: the entries to copy out.
+struct FromArchive {
+    archive: PathBuf,
+    inner: Vec<std::ffi::OsString>,
+    names: Vec<std::ffi::OsString>,
 }
 
 /// The job in progress and its dialog.
@@ -92,6 +104,15 @@ pub(super) struct RunningJob {
     progress_open: bool,
     /// What a compare runs on, for its result.
     compare: Option<ComparePair>,
+    /// F3 inside an archive: where the copy goes.
+    viewing: Option<Viewing>,
+}
+
+/// A private copy of an archive entry for the viewer. Dropping it (Cancel,
+/// a failure, the viewer window closing) deletes the folder.
+struct Viewing {
+    dir: tempfile::TempDir,
+    file: PathBuf,
 }
 
 #[cfg(test)]
@@ -112,20 +133,34 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
+        if kind == Kind::Move && self.refuse_in_archive(window, cx) {
+            return;
+        }
         // The destination is the other panel's folder: wait for it too.
         let other = self.commander.read(cx).active().other();
         if self.commander.read(cx).panel(other).loading().is_some() {
             return;
         }
         self.end_search(cx);
-        let (sources, dir, other_dir) = {
+        let (sources, dir, other_dir, one_is_dir, from_archive) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
+            let targets = panel.targets();
+            let one_is_dir = matches!(targets.as_slice(), [one] if one.kind == EntryKind::Dir);
+            // Inside an archive the sources are entries of it.
+            let from_archive = panel.archive().map(|index| FromArchive {
+                archive: index.file().to_path_buf(),
+                inner: inner_parts(index.file(), panel.path()),
+                names: targets.iter().map(|e| e.name.clone()).collect(),
+            });
             (
                 source_paths(panel),
-                panel.path().to_path_buf(),
+                // Typed relative paths start from a real folder.
+                panel.real_dir().to_path_buf(),
                 other.path().to_path_buf(),
+                one_is_dir,
+                from_archive,
             )
         };
         if sources.is_empty() || self.refuse_second_job(window, cx) {
@@ -139,7 +174,7 @@ impl FileManager {
         // One entry: its full target path, so it can be renamed on the way.
         // More: the target folder.
         let (initial, selection) = match sources.as_slice() {
-            [one] => single_target(&other_dir, one),
+            [one] => single_target(&other_dir, one, one_is_dir),
             _ => {
                 let text = other_dir.display().to_string();
                 let end = text.len();
@@ -157,9 +192,15 @@ impl FileManager {
             Rc::new(move |this, typed, window, cx| {
                 let to = destination(&dir, typed, &sources)?;
                 let sources = sources.clone();
-                let operation = match kind {
-                    Kind::Copy => Operation::Copy { sources, to },
-                    _ => Operation::Move { sources, to },
+                let operation = match (&from_archive, kind) {
+                    (Some(from), _) => Operation::ExtractEntries {
+                        archive: from.archive.clone(),
+                        inner: from.inner.clone(),
+                        names: from.names.clone(),
+                        to,
+                    },
+                    (None, Kind::Copy) => Operation::Copy { sources, to },
+                    (None, _) => Operation::Move { sources, to },
                 };
                 this.start_job(kind, operation, window, cx)
             }),
@@ -173,6 +214,9 @@ impl FileManager {
     /// existing zip is replaced only after a confirm box.
     pub(super) fn pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
+            return;
+        }
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         let other = self.commander.read(cx).active().other();
@@ -229,6 +273,9 @@ impl FileManager {
     /// then extract the selected archives or the one under the cursor.
     pub(super) fn extract(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
+            return;
+        }
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         let other = self.commander.read(cx).active().other();
@@ -313,6 +360,16 @@ impl FileManager {
                 return;
             }
         };
+        if inside_archive(&pair.first) || inside_archive(&pair.second) {
+            show_error(
+                "Inside an archive",
+                yagni_commander_core::archive::IN_ARCHIVE,
+                Some(self.focus.clone()),
+                window,
+                cx,
+            );
+            return;
+        }
         let operation = Operation::Compare {
             first: pair.first.clone(),
             second: pair.second.clone(),
@@ -327,8 +384,51 @@ impl FileManager {
         }
     }
 
+    /// F3 inside an archive: extracts the entry under the cursor into a
+    /// fresh private folder; `finish_job` opens the viewer on it.
+    pub(super) fn view_in_archive(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> io::Result<()> {
+        if self.refuse_second_job(window, cx) {
+            return Ok(());
+        }
+        let root = self
+            .temp_dir
+            .clone()
+            .ok_or_else(|| io::Error::other("no folder for temporary files"))?;
+        yagni_commander_core::storage::private_dir(&root)?;
+        let dir = tempfile::Builder::new().prefix("view-").tempdir_in(&root)?;
+        let (archive, inner, name) = {
+            let panel = self.active_panel(cx);
+            let index = panel.archive().expect("view_file checked");
+            let entry = panel.cursor_entry().expect("view_file checked");
+            (
+                index.file().to_path_buf(),
+                inner_parts(index.file(), panel.path()),
+                entry.name.clone(),
+            )
+        };
+        let file = dir.path().join(&name);
+        let operation = Operation::ExtractEntries {
+            archive,
+            inner,
+            names: vec![name],
+            to: Destination::As(file.clone()),
+        };
+        self.start_job(Kind::View, operation, window, cx)?;
+        if let Some(running) = &mut self.job {
+            running.viewing = Some(Viewing { dir, file });
+        }
+        Ok(())
+    }
+
     pub(super) fn trash(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
+            return;
+        }
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -438,6 +538,7 @@ impl FileManager {
             polls: 0,
             progress_open: false,
             compare: None,
+            viewing: None,
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -787,6 +888,31 @@ impl FileManager {
         if running.progress_open {
             window.close_dialog(cx);
         }
+        if running.kind == Kind::View {
+            // Reads only: no reload, the selection stays.
+            if !report.failures.is_empty() {
+                show_error(
+                    "Cannot view file",
+                    failure_summary(&report),
+                    Some(self.focus.clone()),
+                    window,
+                    cx,
+                );
+            } else if let (Some(viewing), false) = (running.viewing, report.cancelled) {
+                let main = window.window_bounds();
+                if let Err(e) = crate::viewer_view::open(viewing.file, main, Some(viewing.dir), cx)
+                {
+                    show_error(
+                        "Cannot view file",
+                        e.to_string(),
+                        Some(self.focus.clone()),
+                        window,
+                        cx,
+                    );
+                }
+            }
+            return;
+        }
         if running.kind == Kind::Compare {
             // Reads only: no reload, the selection stays.
             if let (Some(pair), Some(comparison), false) =
@@ -823,7 +949,7 @@ impl FileManager {
                 Kind::Delete => "Some entries were not deleted",
                 Kind::Pack => "Some entries were not packed",
                 Kind::Extract => "Some entries were not extracted",
-                Kind::Compare => unreachable!("reported above"),
+                Kind::Compare | Kind::View => unreachable!("reported above"),
             };
             let mut text = failure_summary(&report);
             if let Some(left_out) = &left_out {
@@ -1192,6 +1318,9 @@ fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Desti
         return Err(invalid("give a destination".into()));
     }
     let to = dir.join(typed);
+    if inside_archive(&to) {
+        return Err(invalid("Can't copy into an archive".into()));
+    }
     let same = |a: &Path, b: &Path| {
         a.canonicalize()
             .ok()
@@ -1215,7 +1344,10 @@ fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Desti
     if to.exists() && !to.is_dir() {
         return Err(invalid(format!("“{typed}” is not a directory")));
     }
-    if same(&to, dir) {
+    // The sources' own folder: inside an archive it can't exist, so
+    // extracting into the archive's folder is allowed.
+    let sources_dir = sources.first().and_then(|s| s.parent()).unwrap_or(dir);
+    if same(&to, sources_dir) {
         return Err(invalid(
             "source and destination are the same directory".into(),
         ));
@@ -1225,17 +1357,28 @@ fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Desti
 
 /// The F5/F6 field for one source: its path in `other_dir`, with the name
 /// (up to the extension, like F2) preselected.
-fn single_target(other_dir: &Path, source: &Path) -> (String, std::ops::Range<usize>) {
+fn single_target(
+    other_dir: &Path,
+    source: &Path,
+    is_dir: bool,
+) -> (String, std::ops::Range<usize>) {
     let name = source
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
         .into_owned();
     let text = other_dir.join(&name).display().to_string();
-    let is_dir = source.symlink_metadata().is_ok_and(|m| m.is_dir());
     let stem = stem_range(&name, is_dir);
     let start = text.len() - name.len();
     (text, start + stem.start..start + stem.end)
+}
+
+/// Whether `path` is below an archive file (a panel inside an archive
+/// shows such paths): nothing can be written there.
+pub(super) fn inside_archive(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .any(|p| is_archive(p) && p.is_file())
 }
 
 /// One line per failure, at most [`MAX_LISTED_FAILURES`].
@@ -1442,7 +1585,8 @@ mod tests {
 
     #[test]
     fn a_single_source_starts_with_its_full_target_path() {
-        let (text, selection) = single_target(Path::new("/other"), Path::new("/here/notes.txt"));
+        let (text, selection) =
+            single_target(Path::new("/other"), Path::new("/here/notes.txt"), false);
         assert_eq!(text, "/other/notes.txt");
         assert_eq!(&text[selection], "notes");
     }
@@ -1628,6 +1772,19 @@ mod tests {
             text(&comparison, None).ends_with("different: u\ncould not read: /l/x/v: denied"),
             "no limit lists all"
         );
+    }
+
+    #[test]
+    fn inside_archive_means_below_an_archive_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        std::fs::write(&zip, b"").unwrap();
+        std::fs::create_dir(tmp.path().join("dir.zip")).unwrap();
+        assert!(inside_archive(&zip.join("x")));
+        assert!(inside_archive(&zip.join("x/y")));
+        assert!(!inside_archive(&zip), "the archive itself is a file");
+        assert!(!inside_archive(&tmp.path().join("dir.zip/x")));
+        assert!(!inside_archive(&tmp.path().join("plain/x")));
     }
 
     #[test]

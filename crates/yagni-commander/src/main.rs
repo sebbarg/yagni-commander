@@ -37,6 +37,10 @@ fn main() {
             std::process::exit(1);
         }
     }
+    // Private copies of archive entries a crashed run left behind.
+    if let Some(dir) = storage::viewer_temp_dir() {
+        let _ = storage::clear_dir(&dir);
+    }
     let home = storage::home_dir();
     let (left, right) = app_state.state.startup_tabs(&args, &home);
     let mut commander = Commander::start_tabs(left, right, app_state.state.show_hidden, home);

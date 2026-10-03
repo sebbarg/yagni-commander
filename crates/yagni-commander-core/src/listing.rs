@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use crate::archive::{ArchiveIndex, Stamp};
 use crate::entry::{Entry, read_entries};
 
 /// A directory read the UI must run.
@@ -21,7 +22,33 @@ pub struct LoadRequest {
     pub fallback: Option<PathBuf>,
     /// Entries read so far, for the "Loading..." indicator.
     pub progress: Arc<AtomicUsize>,
+    /// `path` is inside this archive (Enter on an archive, or a re-read
+    /// of a panel inside one).
+    pub archive: Option<ArchiveRead>,
 }
+
+/// An archive to list for a [`LoadRequest`].
+#[derive(Debug, Clone)]
+pub struct ArchiveRead {
+    pub file: PathBuf,
+    /// The index the panel already has: reused when the file's size and
+    /// time are unchanged.
+    pub known: Option<Arc<ArchiveIndex>>,
+}
+
+/// Same file, and the same index (not an equal one).
+impl PartialEq for ArchiveRead {
+    fn eq(&self, other: &Self) -> bool {
+        self.file == other.file
+            && match (&self.known, &other.known) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for ArchiveRead {}
 
 /// A directory's entries, unsorted.
 #[derive(Debug)]
@@ -29,16 +56,22 @@ pub struct Listing {
     /// The folder actually read; differs from the request after a fallback.
     pub path: PathBuf,
     pub entries: Vec<Entry>,
+    /// The archive's index, when `path` is inside one.
+    pub archive: Option<Arc<ArchiveIndex>>,
 }
 
 /// Reads the requested directory, or with a fallback, the first readable
 /// one of it, its parents and the fallback folder.
 pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
+    if let Some(archive) = &request.archive {
+        return read_archive(request, archive);
+    }
     let read = |path: &Path| {
         request.progress.store(0, Ordering::Relaxed);
         read_entries(path, &request.progress).map(|entries| Listing {
             path: path.to_path_buf(),
             entries,
+            archive: None,
         })
     };
     let Some(home) = &request.fallback else {
@@ -61,6 +94,18 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
     Err(first_error.expect("the fallback folder is always tried"))
 }
 
+/// The archive's index (read again only if the file changed) and the
+/// folder inside it that the request names, or its nearest existing parent.
+fn read_archive(request: &LoadRequest, archive: &ArchiveRead) -> io::Result<Listing> {
+    request.progress.store(0, Ordering::Relaxed);
+    let stamp = Stamp::read(&archive.file)?;
+    let index = match &archive.known {
+        Some(known) if known.stamp() == stamp => known.clone(),
+        _ => Arc::new(ArchiveIndex::read(&archive.file, &request.progress)?),
+    };
+    Ok(crate::archive::listing(index, &request.path))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -73,7 +118,92 @@ mod tests {
             path: path.to_path_buf(),
             fallback: fallback.map(Path::to_path_buf),
             progress: Arc::default(),
+            archive: None,
         }
+    }
+
+    fn archive_request(
+        target: &Path,
+        file: &Path,
+        known: Option<Arc<ArchiveIndex>>,
+    ) -> LoadRequest {
+        LoadRequest {
+            archive: Some(ArchiveRead {
+                file: file.to_path_buf(),
+                known,
+            }),
+            ..request(target, None)
+        }
+    }
+
+    #[test]
+    fn an_archive_read_lists_the_folder_inside_or_its_nearest_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        crate::test_archives::make_zip(&zip, &[("s/t/x", "1")]);
+        let req = archive_request(&zip.join("s/gone"), &zip, None);
+        let listing = read_listing(&req).unwrap();
+        assert_eq!(listing.path, zip.join("s"));
+        let labels: Vec<_> = listing.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["..", "t"]);
+        assert!(listing.archive.is_some());
+        assert_eq!(req.progress.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn an_unchanged_archive_keeps_its_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        crate::test_archives::make_zip(&zip, &[("x", "1")]);
+        let first = read_listing(&archive_request(&zip, &zip, None))
+            .unwrap()
+            .archive
+            .unwrap();
+        let again = read_listing(&archive_request(&zip, &zip, Some(first.clone()))).unwrap();
+        assert!(
+            Arc::ptr_eq(&first, again.archive.as_ref().unwrap()),
+            "not re-read"
+        );
+        crate::test_archives::make_zip(&zip, &[("x", "1"), ("y", "22")]);
+        let changed = read_listing(&archive_request(&zip, &zip, Some(first.clone()))).unwrap();
+        assert!(!Arc::ptr_eq(&first, changed.archive.as_ref().unwrap()));
+        assert_eq!(changed.entries.len(), 3);
+    }
+
+    #[test]
+    fn a_vanished_archive_is_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        let err = read_listing(&archive_request(&zip, &zip, None)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn archive_reads_compare_by_file_and_index() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        crate::test_archives::make_zip(&zip, &[("x", "1")]);
+        let index = read_listing(&archive_request(&zip, &zip, None))
+            .unwrap()
+            .archive
+            .unwrap();
+        let other = read_listing(&archive_request(&zip, &zip, None))
+            .unwrap()
+            .archive
+            .unwrap();
+        let read = |known: Option<&Arc<ArchiveIndex>>| ArchiveRead {
+            file: zip.clone(),
+            known: known.cloned(),
+        };
+        assert_eq!(read(Some(&index)), read(Some(&index)));
+        assert_ne!(read(Some(&index)), read(Some(&other)), "another read");
+        assert_ne!(read(Some(&index)), read(None));
+        assert_eq!(read(None), read(None));
+        let elsewhere = ArchiveRead {
+            file: tmp.path().join("b.zip"),
+            known: None,
+        };
+        assert_ne!(read(None), elsewhere);
     }
 
     #[test]
@@ -86,6 +216,7 @@ mod tests {
         let listing = read_listing(&req).unwrap();
         assert_eq!(listing.path, tmp.path());
         assert_eq!(listing.entries.len(), 4, "a, b, c and ..");
+        assert!(listing.archive.is_none());
         assert_eq!(req.progress.load(Ordering::Relaxed), 3);
     }
 

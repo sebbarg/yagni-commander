@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::entry::{Entry, EntryKind};
 use crate::fs_ops;
-use crate::listing::{Listing, LoadRequest, read_listing};
+use crate::listing::{ArchiveRead, Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
 use crate::panel::{Enter, Loading, Navigation, Panel, Refresh};
 use crate::quick_search::QuickSearch;
@@ -182,6 +182,7 @@ impl Commander {
                 Navigation {
                     target,
                     select: None,
+                    archive: None,
                 },
                 LoadKind::Startup,
             );
@@ -209,6 +210,23 @@ impl Commander {
     }
 
     fn request(&mut self, side: Side, nav: Navigation, kind: LoadKind) {
+        // Moving inside an archive whose index is at hand needs no read.
+        if kind == LoadKind::Navigate
+            && let Some(index) = nav.archive.as_ref().and_then(|a| a.known.clone())
+        {
+            let panel = self.panel_mut(side);
+            // Like a new read, this replaces a pending one (Alt-Z onto a
+            // loading panel). A quiet re-read means the archive changed:
+            // read it again for the new location.
+            panel.take_loading();
+            let reread = panel.take_refresh().is_some() || panel.stale;
+            panel.stale = false;
+            panel.browse(index, &nav);
+            if reread {
+                self.refresh(self.visible(side), None);
+            }
+            return;
+        }
         if kind == LoadKind::Reload && self.panel(side).loading().is_some() {
             // Re-read once the pending read is done: it may list the folder
             // before this change, or be cancelled, or fail.
@@ -219,7 +237,7 @@ impl Commander {
         // be dropped as stale.
         self.panel_mut(side).take_refresh();
         let fallback = (kind == LoadKind::Startup).then(|| self.home.clone());
-        let (id, progress) = self.push_request(nav.target.clone(), fallback);
+        let (id, progress) = self.push_request(nav.target.clone(), fallback, nav.archive);
         self.panel_mut(side).set_loading(Loading {
             id,
             path: nav.target,
@@ -234,6 +252,7 @@ impl Commander {
         &mut self,
         path: PathBuf,
         fallback: Option<PathBuf>,
+        archive: Option<ArchiveRead>,
     ) -> (u64, Arc<AtomicUsize>) {
         self.next_load += 1;
         let id = self.next_load;
@@ -243,6 +262,7 @@ impl Commander {
             path,
             fallback,
             progress: progress.clone(),
+            archive,
         });
         (id, progress)
     }
@@ -265,9 +285,13 @@ impl Commander {
             panel.stale = true;
             return;
         }
-        let path = gone.clone().unwrap_or_else(|| panel.path().to_path_buf());
+        // A vanished folder (or archive) is looked for from its real folder up.
+        let (path, archive) = match &gone {
+            Some(dir) => (dir.clone(), None),
+            None => (panel.path().to_path_buf(), panel.archive_read(true)),
+        };
         let fallback = gone.is_some().then(|| self.home.clone());
-        let (id, _) = self.push_request(path, fallback);
+        let (id, _) = self.push_request(path, fallback, archive);
         self.panel_at_mut(at).set_refresh(Refresh { id, gone });
     }
 
@@ -285,6 +309,7 @@ impl Commander {
             let nav = Navigation {
                 target,
                 select: None,
+                archive: None,
             };
             self.request(side, nav, LoadKind::Startup);
         }
@@ -316,7 +341,7 @@ impl Commander {
                         io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
                     ) =>
             {
-                let gone = panel.path().to_path_buf();
+                let gone = panel.real_dir().to_path_buf();
                 self.refresh(at, Some(gone));
                 return;
             }
@@ -410,6 +435,7 @@ impl Commander {
                 Navigation {
                     target,
                     select: None,
+                    archive: None,
                 },
                 LoadKind::Startup,
             );
@@ -434,6 +460,7 @@ impl Commander {
             Navigation {
                 target: dir,
                 select: None,
+                archive: None,
             },
             LoadKind::Navigate,
         );
@@ -603,6 +630,7 @@ impl Commander {
     /// F2: renames `from` in the active panel's directory to `to`, then
     /// puts the cursor on it.
     pub fn rename(&mut self, from: &OsStr, to: &str) -> io::Result<()> {
+        self.refuse_in_archive()?;
         let dir = self.panel(self.active).path().to_path_buf();
         let source = dir.join(from);
         let result = fs_ops::rename(&dir, from, to);
@@ -611,6 +639,14 @@ impl Commander {
         });
         result?;
         self.refresh_after_change(OsStr::new(to));
+        Ok(())
+    }
+
+    /// Nothing is written inside an archive.
+    fn refuse_in_archive(&self) -> io::Result<()> {
+        if self.panel(self.active).in_archive() {
+            return Err(io::Error::other(crate::archive::IN_ARCHIVE));
+        }
         Ok(())
     }
 
@@ -642,6 +678,7 @@ impl Commander {
     /// F7: creates `name` (possibly `a/b/c`) in the active panel's directory,
     /// then puts the cursor on it.
     pub fn make_directory(&mut self, name: &str) -> io::Result<()> {
+        self.refuse_in_archive()?;
         let dir = self.panel(self.active).path().to_path_buf();
         let result = fs_ops::make_directory(&dir, name);
         self.note("mkdir", &dir.join(name), &result, |path| {
@@ -656,6 +693,7 @@ impl Commander {
     /// one, puts the cursor on it (or on its first directory) and returns its
     /// path.
     pub fn create_file(&mut self, name: &str) -> io::Result<PathBuf> {
+        self.refuse_in_archive()?;
         let dir = self.panel(self.active).path().to_path_buf();
         let result = fs_ops::create_file(&dir, name);
         // Only a file that was created counts as touched.
@@ -858,6 +896,7 @@ impl Commander {
                 let nav = Navigation {
                     target: panel.path().to_path_buf(),
                     select: panel.cursor_entry().map(|e| e.name.clone()),
+                    archive: panel.archive_read(true),
                 };
                 self.request(active.other(), nav, LoadKind::Navigate);
                 Ok(())
@@ -2215,5 +2254,325 @@ mod tests {
     fn home_is_the_one_given_at_start() {
         let c = Commander::start("/".into(), "/".into(), false, "/home/me".into());
         assert_eq!(c.home(), Path::new("/home/me"));
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use crate::file_ops::Format;
+    use crate::test_archives::{T, make_tar, make_zip};
+    use std::fs;
+
+    fn run(c: &mut Commander, command: Command) -> Outcome {
+        let outcome = c.execute(command);
+        c.run_loads_now();
+        outcome
+    }
+
+    /// Both panels on a folder with `pkg.zip` (src/lib/a.rs, src/main.rs,
+    /// README) and a file `f`.
+    fn with_zip() -> (tempfile::TempDir, PathBuf, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("pkg.zip");
+        make_zip(
+            &zip,
+            &[("src/lib/a.rs", "a"), ("src/main.rs", "m"), ("README", "r")],
+        );
+        fs::write(tmp.path().join("f"), b"").unwrap();
+        let c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        (tmp, zip, c)
+    }
+
+    fn put_cursor(c: &mut Commander, label: &str) {
+        let side = c.active();
+        let ix = c
+            .panel(side)
+            .entries()
+            .iter()
+            .position(|e| e.label == label)
+            .unwrap();
+        c.execute(Command::CursorTo(side, ix));
+    }
+
+    fn labels(c: &Commander, side: Side) -> Vec<String> {
+        c.panel(side)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    /// `with_zip`, the left panel inside the zip.
+    fn inside() -> (tempfile::TempDir, PathBuf, Commander) {
+        let (tmp, zip, mut c) = with_zip();
+        put_cursor(&mut c, "pkg.zip");
+        run(&mut c, Command::Activate);
+        (tmp, zip, c)
+    }
+
+    #[test]
+    fn enter_opens_an_archive_and_moves_inside_without_reading() {
+        let (tmp, zip, mut c) = with_zip();
+        put_cursor(&mut c, "pkg.zip");
+        assert_eq!(run(&mut c, Command::Activate), Outcome::Done);
+        let left = c.panel(Side::Left);
+        assert_eq!(left.path(), zip);
+        assert!(left.in_archive());
+        assert_eq!(left.real_dir(), tmp.path());
+        assert_eq!(labels(&c, Side::Left), ["..", "src", "README"]);
+
+        put_cursor(&mut c, "src");
+        c.execute(Command::Activate);
+        assert!(c.take_requests().is_empty(), "no read inside");
+        assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
+        assert_eq!(c.panel(Side::Left).real_dir(), tmp.path());
+
+        c.execute(Command::GoUp);
+        assert!(c.take_requests().is_empty());
+        assert_eq!(c.panel(Side::Left).path(), zip);
+        assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "src");
+
+        run(&mut c, Command::GoUp);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(!c.panel(Side::Left).in_archive());
+        assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "pkg.zip");
+    }
+
+    #[test]
+    fn parent_entry_at_the_root_leaves_the_archive() {
+        let (tmp, _zip, mut c) = inside();
+        c.execute(Command::CursorHome);
+        run(&mut c, Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(!c.panel(Side::Left).in_archive());
+    }
+
+    #[test]
+    fn enter_on_a_file_inside_does_nothing() {
+        let (_tmp, _zip, mut c) = inside();
+        put_cursor(&mut c, "README");
+        assert_eq!(c.execute(Command::Activate), Outcome::Done);
+        assert!(c.take_requests().is_empty());
+    }
+
+    #[test]
+    fn a_damaged_archive_shows_an_error_and_the_panel_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("bad.zip"), b"nope").unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        put_cursor(&mut c, "bad.zip");
+        run(&mut c, Command::Activate);
+        assert!(c.error().is_some());
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(!c.panel(Side::Left).in_archive());
+    }
+
+    #[test]
+    fn alt_z_and_ctrl_t_share_the_index() {
+        let (_tmp, zip, mut c) = inside();
+        c.execute(Command::SyncOtherPanel);
+        assert!(
+            c.take_requests().is_empty(),
+            "the other panel takes the index"
+        );
+        let left = c.panel(Side::Left).archive().unwrap().clone();
+        let right = c.panel(Side::Right).archive().unwrap().clone();
+        assert!(Arc::ptr_eq(&left, &right));
+        assert_eq!(c.panel(Side::Right).path(), zip);
+        c.execute(Command::NewTab);
+        c.run_loads_now();
+        assert_eq!(c.tabs(Side::Left).count(), 2);
+        assert!(Arc::ptr_eq(c.panel(Side::Left).archive().unwrap(), &right));
+        assert_eq!(c.panel(Side::Left).path(), zip);
+    }
+
+    #[test]
+    fn quiet_rereads_keep_an_unchanged_index_and_follow_changes() {
+        let (_tmp, zip, mut c) = inside();
+        put_cursor(&mut c, "src");
+        c.execute(Command::Activate);
+        let before = c.panel(Side::Left).archive().unwrap().clone();
+
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert!(
+            Arc::ptr_eq(&before, c.panel(Side::Left).archive().unwrap()),
+            "unchanged"
+        );
+        assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
+
+        make_zip(&zip, &[("src/new.rs", "n"), ("README", "r")]);
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
+        assert_eq!(labels(&c, Side::Left), ["..", "new.rs"]);
+    }
+
+    #[test]
+    fn a_vanished_folder_inside_goes_to_its_nearest_parent() {
+        let (_tmp, zip, mut c) = inside();
+        put_cursor(&mut c, "src");
+        c.execute(Command::Activate);
+        make_zip(&zip, &[("README", "changed")]);
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), zip);
+    }
+
+    #[test]
+    fn a_damaged_rewrite_keeps_the_listing() {
+        let (_tmp, zip, mut c) = inside();
+        fs::write(&zip, b"half written").unwrap();
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(labels(&c, Side::Left), ["..", "src", "README"]);
+        assert!(c.error().is_none(), "quiet");
+    }
+
+    #[test]
+    fn a_vanished_archive_sends_the_panel_to_its_folder() {
+        let (tmp, zip, mut c) = inside();
+        fs::remove_file(&zip).unwrap();
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(!c.panel(Side::Left).in_archive());
+    }
+
+    #[test]
+    fn ctrl_r_inside_rereads_only_a_changed_archive() {
+        let (_tmp, zip, mut c) = inside();
+        let before = c.panel(Side::Left).archive().unwrap().clone();
+        run(&mut c, Command::Reload);
+        assert!(Arc::ptr_eq(&before, c.panel(Side::Left).archive().unwrap()));
+        assert_eq!(c.panel(Side::Left).path(), zip);
+        make_zip(&zip, &[("other", "o")]);
+        run(&mut c, Command::Reload);
+        assert_eq!(labels(&c, Side::Left), ["..", "other"]);
+    }
+
+    #[test]
+    fn writes_inside_an_archive_are_refused_and_stray_paths_touch_nothing() {
+        let (tmp, _zip, mut c) = inside();
+        let refused = [
+            c.make_directory("d").map(|_| ()),
+            c.create_file("n").map(|_| ()),
+            c.rename(OsStr::new("README"), "x"),
+        ];
+        for result in refused {
+            assert_eq!(result.unwrap_err().to_string(), crate::archive::IN_ARCHIVE);
+        }
+        // A command that slipped past the refusals gets a path through the
+        // archive file, which can't exist.
+        put_cursor(&mut c, "README");
+        let target = c.panel(Side::Left).cursor_path();
+        assert!(fs::symlink_metadata(&target).is_err());
+        let targets: Vec<_> = c
+            .panel(Side::Left)
+            .targets()
+            .iter()
+            .map(|e| c.panel(Side::Left).path().join(&e.name))
+            .collect();
+        assert!(targets.iter().all(|p| fs::symlink_metadata(p).is_err()));
+        assert!(tmp.path().join("f").exists());
+        assert!(!tmp.path().join("d").exists() && !tmp.path().join("n").exists());
+    }
+
+    #[test]
+    fn a_tar_gz_opens_too() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_tar(
+            &tmp.path().join("src.tar.gz"),
+            Format::TarGz,
+            &[T::File("x", "1", 0o644)],
+        );
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        put_cursor(&mut c, "src.tar.gz");
+        run(&mut c, Command::Activate);
+        assert_eq!(labels(&c, Side::Left), ["..", "x"]);
+    }
+
+    #[test]
+    fn a_folder_named_like_an_archive_is_a_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("dir.zip")).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        put_cursor(&mut c, "dir.zip");
+        run(&mut c, Command::Activate);
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("dir.zip"));
+        assert!(!c.panel(Side::Left).in_archive());
+    }
+
+    #[test]
+    fn real_dir_is_the_path_outside_archives() {
+        let (tmp, _zip, c) = with_zip();
+        assert_eq!(c.panel(Side::Left).real_dir(), tmp.path());
+        assert!(c.panel(Side::Left).archive().is_none());
+    }
+}
+
+#[cfg(test)]
+mod archive_fix_tests {
+    use super::*;
+    use crate::test_archives::make_zip;
+    use std::fs;
+
+    fn put_cursor(c: &mut Commander, label: &str) {
+        let side = c.active();
+        let ix = c
+            .panel(side)
+            .entries()
+            .iter()
+            .position(|e| e.label == label)
+            .unwrap();
+        c.execute(Command::CursorTo(side, ix));
+    }
+
+    fn labels(c: &Commander, side: Side) -> Vec<String> {
+        c.panel(side)
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    /// Both panels on a folder with `pkg.zip` (src/a) and a folder `d`; the
+    /// left panel inside the zip.
+    fn inside() -> (tempfile::TempDir, PathBuf, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("pkg.zip");
+        make_zip(&zip, &[("src/a", "a")]);
+        fs::create_dir(tmp.path().join("d")).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        put_cursor(&mut c, "pkg.zip");
+        c.execute(Command::Activate);
+        c.run_loads_now();
+        (tmp, zip, c)
+    }
+
+    #[test]
+    fn alt_z_onto_a_loading_panel_replaces_its_read() {
+        let (_tmp, zip, mut c) = inside();
+        c.execute(Command::SwitchPanel);
+        put_cursor(&mut c, "d");
+        c.execute(Command::Activate); // a read of `d`, still pending
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::SyncOtherPanel);
+        assert!(c.panel(Side::Right).loading().is_none(), "replaced");
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Right).path(), zip, "the read of d is dropped");
+    }
+
+    #[test]
+    fn moving_inside_keeps_a_pending_reread() {
+        let (_tmp, zip, mut c) = inside();
+        make_zip(&zip, &[("src/a", "a"), ("src/new", "n")]);
+        c.watch_reload(Side::Left); // quiet re-read, not run yet
+        put_cursor(&mut c, "src");
+        c.execute(Command::Activate);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
+        assert_eq!(labels(&c, Side::Left), ["..", "a", "new"]);
     }
 }

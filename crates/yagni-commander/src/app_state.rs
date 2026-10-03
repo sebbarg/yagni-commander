@@ -175,7 +175,7 @@ impl AppState {
         let commander = commander.read(cx);
         let side = |side: Side| {
             let tabs = commander.tabs(side);
-            let dirs: Vec<PathBuf> = tabs.iter().map(|p| p.path().to_path_buf()).collect();
+            let dirs: Vec<PathBuf> = tabs.iter().map(|p| p.real_dir().to_path_buf()).collect();
             (dirs, tabs.index())
         };
         let (left_tabs, left_tab) = side(Side::Left);
