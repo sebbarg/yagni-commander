@@ -5,6 +5,10 @@ use gpui_kit::{TestAppContext, VisualTestContext};
 fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
+        // Animations run on wall-clock time, not the test clock: a dialog
+        // sliding in would move between a test's frames, and clicks would
+        // miss under load. Reduced motion settles them on the first frame.
+        cx.set_reduce_motion(true);
         crate::icon_font::register(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
@@ -3562,4 +3566,25 @@ mod copy_message {
         assert!(dialog_open(cx));
         cx.simulate_keystrokes("escape");
     }
+}
+
+/// gpui animations run on wall-clock time: a dialog sliding in moves
+/// between frames, and under a loaded test run a click aimed at one frame's
+/// position lands somewhere else. Tests use reduced motion (`setup`).
+#[gpui_kit::test]
+fn dialogs_appear_in_place_so_clicks_land(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    let first = center(cx, "settings-sort");
+    // Longer than a loaded machine's gap between two frames.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert_eq!(center(cx, "settings-sort"), first, "the dialog moved");
+    click_at(cx, first, 1);
+    assert!(config(cx).case_sensitive_sort);
 }
