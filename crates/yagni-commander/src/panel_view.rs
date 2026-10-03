@@ -97,10 +97,11 @@ impl PanelView {
                     .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                             execute(&this.commander, Command::CursorTo(side, ix), cx);
                             if event.click_count == 2 {
-                                execute(&this.commander, Command::Activate, cx);
+                                // Like Enter, so a file opens too.
+                                window.dispatch_action(Box::new(crate::actions::Activate), cx);
                             }
                         }),
                     )

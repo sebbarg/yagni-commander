@@ -78,6 +78,9 @@ pub struct FileManager {
     job: Option<file_ops::RunningJob>,
     /// What F8 uses. Tests replace it so they never touch the real trash.
     trash: yagni_commander_core::file_ops::TrashFn,
+    /// The program Enter on a file runs with its path (xdg-open, open).
+    /// Tests replace it so they never start a real application.
+    pub(crate) opener: String,
     /// Runs directory reads; `None` reads them inline (tests).
     load: Option<loads::LoadFn>,
     /// Directory reads in progress.
@@ -193,6 +196,7 @@ impl FileManager {
             notice: notice.map(Into::into),
             job: None,
             trash: yagni_commander_core::file_ops::system_trash,
+            opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
@@ -633,7 +637,7 @@ impl Render for FileManager {
             .on_action(
                 cx.listener(|this, _: &CursorEnd, _, cx| this.execute(Command::CursorEnd, cx)),
             )
-            .on_action(cx.listener(|this, _: &Activate, _, cx| this.execute(Command::Activate, cx)))
+            .on_action(cx.listener(|this, _: &Activate, window, cx| this.activate(window, cx)))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| {
                 this.search_or(Commander::search_backspace, Command::GoUp, cx)
             }))

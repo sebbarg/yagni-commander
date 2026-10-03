@@ -10,11 +10,14 @@ use gpui_kit::{
     App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
     SharedString, Window,
 };
-use yagni_commander_core::{Commander, EntryKind, launch};
+use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch};
 
 use super::FileManager;
 use crate::button_row::{ButtonRow, OnPress};
 use crate::config_state::CurrentConfig;
+
+/// How often a started opener (Enter on a file) is checked for failure.
+const OPENER_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Handles the name typed into a prompt. An error keeps the dialog open.
 type Submit =
@@ -159,6 +162,61 @@ impl FileManager {
         self.end_search(cx);
         let path = self.active_panel(cx).cursor_path();
         cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+    }
+
+    /// Enter (or a double-click): enters a folder, runs a program, or hands
+    /// any other file to the system's opener, which picks the application.
+    pub(super) fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.notice = None;
+        let outcome = self.commander.update(cx, |commander, cx| {
+            let outcome = commander.execute(Command::Activate);
+            cx.notify();
+            outcome
+        });
+        if let Outcome::OpenFile(path) = outcome {
+            self.open_file(&path, window, cx);
+        }
+    }
+
+    /// A program (see `launch::is_program`) runs in its folder; anything
+    /// else goes to the opener. Decided on a thread of its own, since
+    /// reading the file's first bytes can hang on a dead mount. Errors come
+    /// back through a channel polled like file operations: a wake-up from
+    /// another thread would bypass gpui's executor.
+    fn open_file(&mut self, path: &std::path::Path, window: &mut Window, cx: &mut Context<Self>) {
+        let refocus = Some(self.focus.clone());
+        let (failed, failure) = std::sync::mpsc::channel::<String>();
+        let (path, opener) = (path.to_path_buf(), self.opener.clone());
+        std::thread::spawn(move || {
+            let started = if launch::is_program(&path) {
+                let dir = path.parent().unwrap_or(&path);
+                launch::run_program(&path, dir)
+            } else {
+                let failed = failed.clone();
+                launch::open_with(&opener, &path, move |message| {
+                    let _ = failed.send(message);
+                })
+            };
+            if let Err(e) = started {
+                let _ = failed.send(e.to_string());
+            }
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            loop {
+                cx.background_executor().timer(OPENER_POLL).await;
+                match failure.try_recv() {
+                    Ok(message) => {
+                        let _ = cx.update(|window, cx| {
+                            show_error("Cannot open file", message, refocus, window, cx)
+                        });
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                }
+            }
+        })
+        .detach();
     }
 
     /// Shift-F4: create a file (or pick an existing one) and open it in the

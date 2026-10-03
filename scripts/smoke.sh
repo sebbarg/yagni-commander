@@ -31,6 +31,12 @@ mkdir -p "$shots" "$work/xdg" "$work/config/yagni-commander" "$work/state" "$wor
 chmod 700 "$work/xdg"
 export DISPLAY=$display XDG_RUNTIME_DIR=$work/xdg XDG_CONFIG_HOME=$work/config \
     XDG_STATE_HOME=$work/state XDG_DATA_HOME=$work/data
+# A stand-in for xdg-open (Enter on a file): records its argument, opens
+# nothing.
+mkdir -p "$work/bin"
+printf '#!/bin/sh\necho "$1" >>"%s/opened"\n' "$work" >"$work/bin/xdg-open"
+chmod +x "$work/bin/xdg-open"
+export PATH="$work/bin:$PATH"
 # `true` stands in for an editor: it starts and exits at once.
 printf '# smoke config\neditor = "true"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
 # An old log file that startup must delete.
@@ -45,6 +51,8 @@ printf hello >"$left/notes.txt"
 printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
 printf move >"$left/movable.txt"
+printf '#!/bin/sh\necho ran >"%s/ran"\n' "$work" >"$left/run.sh"
+chmod +x "$left/run.sh"
 seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
 head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
 mkdir -p "$left/many"
@@ -113,6 +121,16 @@ echo "quick search"
 typed no
 shot 02-quick-search
 keys Escape
+
+echo "Enter on a file hands it to xdg-open"
+typed notes
+keys Escape Return
+check "xdg-open got notes.txt" has "$work/opened" "$left/notes.txt"
+echo "Enter on an executable script runs it"
+typed run
+keys Escape Return
+check "run.sh ran" has "$work/ran" ran
+check "run.sh not handed to xdg-open" has "$work/opened" "$left/notes.txt"
 
 echo "F7 new directory"
 keys F7

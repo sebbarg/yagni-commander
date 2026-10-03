@@ -20,8 +20,12 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
         let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
         gpui_kit::base::Root::new(view, window, cx)
     });
-    // No real watchers: tests report changes with `changed`.
-    file_manager(cx).update(cx, |this, _| this.watchers = None);
+    // No real watchers: tests report changes with `changed`. Enter on a
+    // file must never start a real application.
+    file_manager(cx).update(cx, |this, _| {
+        this.watchers = None;
+        this.opener = "true".into();
+    });
     cx
 }
 
@@ -3295,5 +3299,188 @@ mod hotlist {
         cx.run_until_parked();
         assert!(!dialog_open(cx), "a padded path is accepted");
         assert_eq!(saved_hotlist(&file)[1].path, "~/bin");
+    }
+}
+
+mod open_file {
+    use super::*;
+
+    /// A stand-in for xdg-open that writes its argument to `out`.
+    fn use_recording_opener(
+        dir: &std::path::Path,
+        cx: &mut VisualTestContext,
+    ) -> std::path::PathBuf {
+        let out = dir.join("opened");
+        let opener = dir.join("opener");
+        std::fs::write(
+            &opener,
+            format!("#!/bin/sh\necho \"$1\" > '{}'\n", out.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&opener, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        // A thread of another test may fork while the script is still open
+        // for writing; its exec then fails with "text file busy" until that
+        // child has exec'd. Run it once successfully before the app does.
+        for _ in 0..200 {
+            match std::process::Command::new(&opener).arg("warm-up").status() {
+                Err(e) if e.raw_os_error() == Some(26) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                _ => break,
+            }
+        }
+        std::fs::remove_file(&out).unwrap();
+        use_opener(opener.to_str().unwrap(), cx);
+        out
+    }
+
+    fn use_opener(opener: &str, cx: &mut VisualTestContext) {
+        file_manager(cx).update(cx, |this, _| this.opener = opener.into());
+    }
+
+    fn opened(out: &std::path::Path, cx: &mut VisualTestContext) -> String {
+        wait_until(cx, |_| {
+            std::fs::read_to_string(out).is_ok_and(|s| s.ends_with('\n'))
+        });
+        std::fs::read_to_string(out).unwrap().trim_end().to_owned()
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_file_hands_it_to_the_opener(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = use_recording_opener(scratch.path(), cx);
+        cx.simulate_keystrokes("end enter"); // on "f"
+        assert_eq!(opened(&out, cx), tmp.path().join("f").display().to_string());
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_double_click_on_a_file_opens_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = use_recording_opener(scratch.path(), cx);
+        click(cx, "row-left-3", 2);
+        assert_eq!(opened(&out, cx), tmp.path().join("f").display().to_string());
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_folder_still_enters_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = use_recording_opener(scratch.path(), cx);
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        cx.run_until_parked();
+        assert!(!out.exists());
+    }
+
+    #[gpui_kit::test]
+    fn an_opener_that_fails_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        use_opener("false", cx); // like xdg-open with no application for the type
+        cx.simulate_keystrokes("end enter");
+        wait_until(cx, dialog_open);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_missing_opener_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        use_opener("no-such-opener-xyz", cx);
+        cx.simulate_keystrokes("end enter");
+        wait_until(cx, dialog_open);
+    }
+
+    /// An executable file in the test folder, ready to exec, listed.
+    fn executable(
+        tmp: &tempfile::TempDir,
+        name: &str,
+        text: &str,
+        cx: &mut VisualTestContext,
+    ) -> std::path::PathBuf {
+        let path = tmp.path().join(name);
+        std::fs::write(&path, text).unwrap();
+        std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        // See use_recording_opener: wait out "text file busy".
+        for _ in 0..200 {
+            match std::process::Command::new(&path)
+                .arg("warm-up")
+                .current_dir(tmp.path())
+                .status()
+            {
+                Err(e) if e.raw_os_error() == Some(26) => {
+                    std::thread::sleep(std::time::Duration::from_millis(5))
+                }
+                _ => break,
+            }
+        }
+        cx.simulate_keystrokes("ctrl-r");
+        path
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_script_runs_it_in_the_panels_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let opened = use_recording_opener(scratch.path(), cx);
+        executable(
+            &tmp,
+            "run.sh",
+            "#!/bin/sh\n[ \"$1\" = warm-up ] || pwd > ran\n",
+            cx,
+        );
+        cx.simulate_keystrokes("end enter"); // on run.sh
+        let ran = tmp.path().join("ran");
+        wait_until(cx, |_| {
+            std::fs::read_to_string(&ran).is_ok_and(|s| s.ends_with('\n'))
+        });
+        let pwd = std::fs::read_to_string(&ran).unwrap();
+        assert_eq!(
+            std::path::Path::new(pwd.trim_end()).canonicalize().unwrap(),
+            tmp.path().canonicalize().unwrap()
+        );
+        assert!(!opened.exists(), "not handed to the opener");
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn an_executable_document_goes_to_the_opener(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = use_recording_opener(scratch.path(), cx);
+        // Like any file on an NTFS or SMB mount: executable, not a program.
+        executable(&tmp, "report.pdf", "%PDF-1.7\n", cx);
+        cx.simulate_keystrokes("end enter");
+        assert_eq!(
+            opened(&out, cx),
+            tmp.path().join("report.pdf").display().to_string()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_program_that_cannot_start_shows_an_error(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        executable(&tmp, "x-broken", "#!/no/such/interpreter\n", cx);
+        cx.simulate_keystrokes("end enter");
+        wait_until(cx, dialog_open);
+    }
+
+    #[gpui_kit::test]
+    fn a_successful_open_shows_nothing_later(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        // window_on's opener is `true`.
+        cx.simulate_keystrokes("end enter");
+        for _ in 0..20 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(50));
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!dialog_open(cx));
     }
 }
