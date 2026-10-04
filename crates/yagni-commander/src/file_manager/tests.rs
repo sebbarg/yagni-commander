@@ -6050,3 +6050,78 @@ mod zoom {
         );
     }
 }
+
+mod themes {
+    use super::*;
+    use gpui_kit::component::ActiveTheme as _;
+
+    fn theme_name(cx: &mut VisualTestContext) -> String {
+        cx.run_until_parked();
+        cx.update(|_, cx| Theme::get(cx).name.clone())
+    }
+
+    fn notice(cx: &mut VisualTestContext) -> Option<String> {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.notice.as_ref().map(|n| n.to_string()))
+    }
+
+    #[gpui_kit::test]
+    fn choosing_a_theme_switches_and_saves_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "# mine\n", cx);
+        change_setting(Setting::Theme("classic".into()), cx);
+        assert_eq!(theme_name(cx), "Classic");
+        assert!(
+            cx.update(|_, cx| !cx.theme().is_dark()),
+            "gpui-component in light mode"
+        );
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("theme = \"classic\"")
+        );
+        change_setting(Setting::Theme("catppuccin-mocha".into()), cx);
+        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert!(cx.update(|_, cx| cx.theme().is_dark()));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_applies_a_hand_edited_theme(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        std::fs::write(&path, "theme = \"classic\"\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(theme_name(cx), "Classic");
+    }
+
+    #[gpui_kit::test]
+    fn an_unknown_theme_falls_back_with_a_notice_every_time(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        std::fs::write(&path, "theme = \"solarized\"\nicons = false\n").unwrap();
+        let text = "Unknown theme \"solarized\", using Tokyo Night";
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(theme_name(cx), "Tokyo Night");
+        assert!(!config(cx).icons, "the other settings still apply");
+        assert_eq!(notice(cx).as_deref(), Some(text));
+        // Any command clears it; Ctrl-R with the same id shows it again.
+        cx.simulate_keystrokes("down");
+        assert_eq!(notice(cx), None);
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(notice(cx).as_deref(), Some(text));
+    }
+
+    #[gpui_kit::test]
+    fn a_theme_switch_keeps_the_zoom(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        cx.simulate_keystrokes("ctrl-= ctrl-=");
+        change_setting(Setting::Theme("classic".into()), cx);
+        cx.run_until_parked();
+        assert_eq!(cx.update(|_, cx| f32::from(cx.theme().font_size)), 18.0);
+    }
+}

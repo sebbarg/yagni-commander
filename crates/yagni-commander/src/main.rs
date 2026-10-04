@@ -69,7 +69,14 @@ fn main() {
     let log_dir = storage::log_dir();
     let (log, log_problem) = oplog::start(log_dir.as_deref(), config.log, config.log_keep_days);
     commander.set_log(log.map(std::sync::Arc::new));
-    let notice = current.problem.clone().or(log_problem);
+    let (theme, unknown_theme) = Theme::named(config.theme.as_deref());
+    let unknown_theme = unknown_theme.then(|| {
+        format!(
+            "Unknown theme \"{}\", using Tokyo Night",
+            config.theme.as_deref().unwrap_or_default()
+        )
+    });
+    let notice = current.problem.clone().or(log_problem).or(unknown_theme);
 
     // The icon SVGs (e.g. the menus' check mark).
     gpui_kit::application()
@@ -77,7 +84,7 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             fonts::register(cx);
-            Theme::named(None).0.install(cx);
+            theme.install(cx);
             cx.set_global(app_state.state.zoom());
             zoom::apply_ui(cx);
             cx.set_global(current);

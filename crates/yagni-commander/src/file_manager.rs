@@ -490,6 +490,22 @@ impl FileManager {
                 cx.notify();
             });
         }
+        // An unknown id shows its notice every time it is applied (Ctrl-R too).
+        if config.theme != old.theme || config.theme.is_some() {
+            let (theme, unknown) = Theme::named(config.theme.as_deref());
+            if config.theme != old.theme {
+                crate::theme::switch_theme(theme, cx);
+            }
+            if unknown {
+                self.notice = Some(
+                    format!(
+                        "Unknown theme \"{}\", using Tokyo Night",
+                        config.theme.as_deref().unwrap_or_default()
+                    )
+                    .into(),
+                );
+            }
+        }
         // Also when the log is on but failed to start: Ctrl-R tries again.
         let log_missing = config.log && self.commander.read(cx).log().is_none();
         if config.log != old.log || log_missing {

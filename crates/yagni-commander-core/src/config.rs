@@ -29,6 +29,9 @@ pub struct Config {
     pub show_permissions: bool,
     /// A Nerd Font icon in front of every name (see [`crate::icons`]).
     pub icons: bool,
+    /// The theme's id (`tokyo-night`, `catppuccin-mocha`, `classic`); none
+    /// means the default. Not checked here: the app knows the themes.
+    pub theme: Option<String>,
     /// Bookmarked folders (Ctrl-D), edited in the app.
     pub hotlist: Vec<HotlistEntry>,
 }
@@ -44,6 +47,7 @@ impl Default for Config {
             show_owner: true,
             show_permissions: true,
             icons: true,
+            theme: None,
             hotlist: Vec::new(),
         }
     }
@@ -72,6 +76,9 @@ show_permissions = true
 
 # An icon in front of every name.
 icons = true
+
+# Color theme: "tokyo-night" (the default), "catppuccin-mocha" or "classic".
+# theme = "tokyo-night"
 "#;
 
 impl Config {
@@ -96,6 +103,7 @@ pub enum Setting {
     ShowOwner(bool),
     ShowPermissions(bool),
     Icons(bool),
+    Theme(String),
 }
 
 impl Setting {
@@ -129,6 +137,7 @@ impl Config {
             Setting::ShowOwner(on) => self.show_owner = *on,
             Setting::ShowPermissions(on) => self.show_permissions = *on,
             Setting::Icons(on) => self.icons = *on,
+            Setting::Theme(id) => self.theme = Some(id.clone()),
         }
     }
 
@@ -173,6 +182,7 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
         Setting::ShowOwner(on) => doc["show_owner"] = toml_edit::value(*on),
         Setting::ShowPermissions(on) => doc["show_permissions"] = toml_edit::value(*on),
         Setting::Icons(on) => doc["icons"] = toml_edit::value(*on),
+        Setting::Theme(id) => doc["theme"] = toml_edit::value(id.as_str()),
     }
     let text = doc.to_string();
     let config: Config =
@@ -419,6 +429,7 @@ mod tests {
             show_owner: true,
             show_permissions: false,
             icons: false,
+            theme: Some("classic".into()),
             hotlist: vec![entry("&Src", "~/src")],
         };
         storage::save(&path, &config).unwrap();
@@ -635,5 +646,35 @@ case_sensitive_sort = false
                 .unwrap()
                 .starts_with("# my settings")
         );
+    }
+
+    #[test]
+    fn theme_round_trips_and_defaults_to_none() {
+        assert_eq!(toml::from_str::<Config>("").unwrap().theme, None);
+        let config: Config = toml::from_str("theme = \"classic\"\n").unwrap();
+        assert_eq!(config.theme.as_deref(), Some("classic"));
+    }
+
+    #[test]
+    fn saving_the_theme_keeps_comments() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "# mine\neditor = \"vim\"\n").unwrap();
+        let config = save_setting(&path, &Setting::Theme("classic".into())).unwrap();
+        assert_eq!(config.theme.as_deref(), Some("classic"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# mine\n"), "{text}");
+        assert!(text.contains("theme = \"classic\""), "{text}");
+    }
+
+    #[test]
+    fn a_non_string_theme_is_a_config_error() {
+        assert!(toml::from_str::<Config>("theme = 3\n").is_err());
+    }
+
+    #[test]
+    fn the_template_mentions_the_theme_and_still_means_the_default() {
+        assert!(TEMPLATE.contains("# theme = \"tokyo-night\""));
+        assert_eq!(toml::from_str::<Config>(TEMPLATE).unwrap().theme, None);
     }
 }

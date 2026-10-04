@@ -1269,3 +1269,12 @@ mod edit {
         assert!(!out.exists(), "the private copy is never edited");
     }
 }
+
+#[gpui_kit::test]
+fn viewer_windows_follow_a_theme_switch(cx: &mut TestAppContext) {
+    let (_tmp, _viewer, mut cx) = view(&numbered(10), cx);
+    cx.update(|_, cx| crate::theme::switch_theme(Theme::named(Some("classic")).0, cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("viewer-status").is_some(), "redrawn");
+    assert_eq!(cx.update(|_, cx| Theme::get(cx).name.clone()), "Classic");
+}

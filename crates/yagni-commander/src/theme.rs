@@ -59,7 +59,7 @@ pub struct Colors {
     pub window_bg: Rgba,
     /// Panel list background; also lists inside dialogs, and text fields in light themes.
     pub panel_bg: Rgba,
-    /// Dialogs (gpui-component's Dialog takes it through `themed_dialog`).
+    /// Dialog background, applied by `themed_dialog`.
     pub dialog_bg: Rgba,
     /// Path header and footer of the inactive panel.
     pub header_bg: Rgba,
@@ -107,6 +107,12 @@ impl Default for Theme {
     fn default() -> Self {
         Self::parse(TOKYO_NIGHT).expect("bundled theme is valid")
     }
+}
+
+/// Installs `theme` and redraws every window (viewers included).
+pub(crate) fn switch_theme(theme: Theme, cx: &mut App) {
+    theme.install(cx);
+    cx.refresh_windows();
 }
 
 impl Theme {
