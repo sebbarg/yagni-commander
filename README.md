@@ -32,7 +32,7 @@ On macOS (Apple Silicon and Intel) and Linux (x86_64):
 curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh
 ```
 
-It downloads the latest release, checks it against the release's `SHA256SUMS`, and installs it for you alone, no root needed: on macOS `yagni-commander.app` in `~/Applications`, on Linux the binary, a launcher entry and the icons in `~/.local`, so it shows in your app menu. Run it again to update. To remove it: `... | sh -s -- --uninstall`. The script is short; download it and read it first if you prefer.
+It downloads the latest release, checks it against the release's `SHA256SUMS`, and installs it for you alone, no root needed: on macOS `yagni-commander.app` in `~/Applications`, on Linux the binary, a launcher entry and the icons in `~/.local`, so it shows in your app menu. Run it again to update. It needs `curl` (Ubuntu 22.04 lacks it: `sudo apt install curl`). To remove it: `... | sh -s -- --uninstall`. The script is short; download it and read it first if you prefer.
 
 ### By hand
 
@@ -55,6 +55,15 @@ cd yagni-commander-*-linux-x86_64
 ```
 
 `./install.sh uninstall` removes it.
+
+**Without a GPU** (a virtual machine, or no working graphics driver), it renders through Mesa's software Vulkan driver (llvmpipe). Ubuntu 22.04's Mesa (23.2) draws an empty window there: the frame shows, the inside stays see-through. Newer Mesa works (Ubuntu 24.04's does); on 22.04 install it from the kisak PPA:
+
+```sh
+sudo add-apt-repository ppa:kisak/kisak-mesa
+sudo apt update && sudo apt upgrade
+```
+
+The newest Mesa has the opposite problem for now: built with LLVM 22 (Fedora 44, current Arch), llvmpipe crashes compiling a shader ("LLVM ERROR: Cannot select ... X86ISD::MGATHER"), an upstream Mesa/LLVM bug that also hits other apps. With a GPU, none of this applies.
 
 ## Building
 
