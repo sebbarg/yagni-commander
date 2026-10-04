@@ -28,7 +28,12 @@ use crate::file_manager::FileManager;
 use crate::theme::Theme;
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // gpui's macOS text system warns about every duplicate face in the system
+    // font family (harmless: it skips them), once per font key loaded.
+    env_logger::Builder::from_env(
+        env_logger::Env::default().default_filter_or("warn,gpui_macos::text_system=error"),
+    )
+    .init();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let app_state = AppState::load();
