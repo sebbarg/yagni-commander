@@ -4,24 +4,23 @@ What comes next. v1 is complete; what remains is verification on real machines, 
 
 ## To verify on real machines
 
-Everything so far was built and tested in a Linux container (X11 under Xvfb, no window manager).
+Built and tested in a Linux container (X11 under Xvfb, no window manager); the owner has also checked everything below on macOS (2026-10-04) and some of it on KDE under X11.
 
-- **Builds and tests:** `cargo test` on macOS (only ever run in the Linux container); `scripts/smoke.sh` on Kubuntu and Omarchy (packages in the README; names not yet verified there); whether macOS still needs the full Xcode app now that gpui-kit compiles Metal shaders at runtime (if the build asks for `metal`, install Xcode and `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`).
-- **Platforms:** native Wayland (Plasma, Hyprland), never tested; the native macOS menu (shortcut labels, check marks, About and Quit in the app menu); the file icons on macOS (CoreText font registration; whether it needs the `m` patch too) and native Wayland.
-- **Keys reaching the app** under KDE, Hyprland and macOS (a desktop shortcut could take them): Ctrl-Tab and Ctrl-W; Alt-F5/F6/F9; Alt-Enter; Alt-F7 (KWin binds it to "Move Window" in some Plasma versions; the menu item works either way); Ctrl-F and Shift-F3 in the viewer; Ctrl-C in the viewer; that no desktop shortcut takes Ctrl-Shift-T (none found in KDE's or Omarchy's defaults; secondary sources).
+- **Builds and tests:** `scripts/smoke.sh` on Kubuntu and Omarchy (packages in the README; names not yet verified there).
+- **Platforms:** Wayland (Plasma, Hyprland), never tested; the file icons on Wayland.
+- **Keys reaching the app** under KDE and Hyprland (a desktop shortcut could take them): Ctrl-Tab and Ctrl-W; Alt-F5/F6/F9; Alt-Enter; Alt-F7 (KWin binds it to "Move Window" in some Plasma versions; the menu item works either way); Ctrl-F and Shift-F3 in the viewer; Ctrl-C in the viewer; that no desktop shortcut takes Ctrl-Shift-T (none found in KDE's or Omarchy's defaults; secondary sources).
 - **Lone Alt and the menu:** lone Alt and Alt-Tab under KDE and Hyprland (Wayland reports a held Alt on refocus; Alt within 200 ms of activation is ignored for that reason); Alt+drag of a window on Plasma 5 (KWin grabs the click, so the app may open the menu on Alt release).
-- **Windows and focus:** that a new F3 viewer window gets keyboard focus under a real window manager (KDE, Hyprland, macOS), also the viewer of an archive entry; drag and auto-scroll in the viewer under KDE, Hyprland and macOS.
-- **Speed:** the viewer on a multi-GB file; a viewer search through one (speed, Escape); F5 byte progress on a real disk (the container clones files, so copies finish instantly); browsing a multi-GB `.tar.xz` (the listing read decompresses it all once); an Alt-F7 search of `/` or home (speed, Stop answering at once); the directory watcher's CPU when a panel shows `/` or home on macOS.
-- **Directory watcher:** on macOS (FSEvents; watched paths compared ignoring case), on native Wayland (KDE, Hyprland) and on a network mount (only changes made from that machine show).
+- **Windows and focus:** that a new F3 viewer window gets keyboard focus under KDE and Hyprland, also the viewer of an archive entry; drag and auto-scroll in the viewer under KDE and Hyprland.
+- **Speed:** the viewer on a multi-GB file; a viewer search through one (speed, Escape); F5 byte progress on a real disk (the container clones files, so copies finish instantly); browsing a multi-GB `.tar.xz` (the listing read decompresses it all once); an Alt-F7 search of `/` or home (speed, Stop answering at once).
+- **Directory watcher:** on Wayland (KDE, Hyprland) and on a network mount (only changes made from that machine show).
 - **Archives:** extracting a real-world `.tar.xz` and a Windows-made zip; a 7-Zip AES zip and a Windows Explorer ZipCrypto zip.
-- **Terminal (Ctrl-Shift-T):** Konsole on Kubuntu (`--workdir`, also when started through `x-terminal-emulator`), Omarchy (`$TERMINAL` = `xdg-terminal-exec` reaching an app started from the launcher), macOS (Terminal.app at the folder).
-- **Fonts:** JetBrains Mono NL in the F3 viewer on macOS and KDE; that the Size and Modified columns line up now that they use tabular figures (`tnum`; on macOS they did not before, 2026-10-04), also under KDE.
-- **Zoom:** Ctrl-= on keyboards where `=` needs Shift (macOS, KDE layouts), and the zoom items in the native macOS menu (labels, keys), on macOS and KDE. The macOS menu's Zoom items dispatch `ZoomIn` and friends, handled only in the `FileManager` context, so they probably do nothing while a viewer window has focus: check, and route them to the viewer if so.
+- **Terminal (Ctrl-Shift-T):** Konsole on Kubuntu (`--workdir`, also when started through `x-terminal-emulator`), Omarchy (`$TERMINAL` = `xdg-terminal-exec` reaching an app started from the launcher).
+- **Fonts:** JetBrains Mono NL in the F3 viewer on KDE; that the Size and Modified columns line up under KDE now that they use tabular figures (`tnum`).
+- **Zoom:** Ctrl-= on KDE keyboard layouts where `=` needs Shift.
 - **Clipboard:** pasting a large viewer copy (tens of MiB) into another app.
-- **macOS PATH:** F4 with `editor = "code"` when launched from Finder (apps started from Finder get a minimal `PATH`; a full path in the config is the workaround).
 - **Reported, unconfirmed:** the owner saw only Name sorting work; Size and Modified sort correctly in headless tests (owner/permissions sorts look like name sorts where those values are all equal).
 
-Verified by the owner: F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE).
+Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the native menu, file icons, keys, viewer focus, drag and auto-scroll, the watcher (FSEvents) and its CPU, Terminal.app, fonts and tabular figures, zoom keys and menu items, F4 from Finder; F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE, X11).
 
 ## Packaging
 
