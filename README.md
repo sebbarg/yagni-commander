@@ -99,14 +99,26 @@ Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `
 
 ### Releasing
 
-The version lives in one place, `version` under `[workspace.package]` in the root `Cargo.toml`. On a clean `main` that matches `origin/main`:
+The version lives in one place, `version` under `[workspace.package]` in the root `Cargo.toml`. Push your work first: the script runs only on a clean `main` that matches `origin/main`.
 
 ```sh
-scripts/release.sh 0.2.0                  # sets the version, updates Cargo.lock, runs the tests, commits and tags v0.2.0
-git push --atomic origin main v0.2.0      # the tag starts the release workflow
+git push
+scripts/release.sh 1.1.0                  # sets the version, updates Cargo.lock, runs the tests, commits and tags v1.1.0
+git push --atomic origin main v1.1.0      # the tag starts the release workflow
 ```
 
-The workflow builds the macOS zip and the Linux tarball and uploads them, with `install.sh` and `SHA256SUMS`, as a draft release. Try the files, then publish the draft on the Releases page (`gh release edit v0.2.0 --draft=false`); only then does `releases/latest` serve it. While on 0.x: the minor number for new features, the patch number for fixes only.
+`--atomic` pushes the release commit and the tag together or not at all, so a release is never built from a commit that isn't on `main`.
+
+The workflow builds the macOS zip and the Linux tarball and uploads them, with `install.sh` and `SHA256SUMS`, as a draft release. Try the files, then publish the draft on the Releases page (`gh release edit v1.1.0 --draft=false`); only then does `releases/latest` serve it.
+
+If the workflow fails: fix it, delete the draft (if one was made) and the tag, and tag the fixed commit again:
+
+```sh
+git push origin :v1.1.0 && git tag -d v1.1.0
+git tag -a v1.1.0 -m v1.1.0 && git push origin v1.1.0
+```
+
+Version numbers: the major number for changes that break habits or files (keys, config, state), the minor number for new features, the patch number for fixes only.
 
 ## License
 
