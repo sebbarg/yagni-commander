@@ -625,11 +625,11 @@ check "theme saved" grep -q '^theme = "gruvbox-dark"' "$cfg"
 shot 07t6-main-gruvbox
 
 echo "a narrow window drops Permissions (Owner is off), Name keeps its room"
-size=$(xdotool getwindowgeometry --shell "$window" | grep -E '^(WIDTH|HEIGHT)=' | cut -d= -f2 | xargs)
+eval "$(xdotool getwindowgeometry --shell "$window" | grep -E '^(WIDTH|HEIGHT)=')"
 xdotool windowsize "$window" 760 500
 sleep 0.5
 shot 07n-narrow-columns
-xdotool windowsize "$window" $size
+xdotool windowsize "$window" "$WIDTH" "$HEIGHT"
 sleep 0.5
 
 echo "zoom: 150% in the main window, a prompt, the Show menu and the viewer"

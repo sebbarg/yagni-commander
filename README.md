@@ -38,7 +38,12 @@ Then:
 cargo run --release -- [left-folder] [right-folder]
 ```
 
-Without folders it reopens the ones from the last run. `cargo install --path crates/yagni-commander` puts the binary in `~/.cargo/bin`.
+Without folders it reopens the ones from the last run.
+
+To install it as an app with its icon:
+
+- **Linux:** `scripts/install-linux.sh` puts the binary in `~/.local/bin`, plus a launcher entry and icons under `~/.local/share`, so it shows in the app menu. `scripts/install-linux.sh uninstall` removes them.
+- **macOS:** `scripts/bundle-mac.sh` builds `yagni-commander.app` and copies it to `~/Applications`, where Finder, Launchpad and Spotlight find it.
 
 ## Configuration
 
