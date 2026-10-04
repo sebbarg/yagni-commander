@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the app icon, packaging/icons/yagni-commander{,-macos,-small}.svg.
+"""Writes the app icon, everything in packaging/icons/.
 
 Drawn from scratch by construction (no fonts, no traced artwork), so the
 icon is the project's own and MIT like the rest:
@@ -13,11 +13,19 @@ icon is the project's own and MIT like the rest:
   strokes, like the fonts of 8-bit games).
 
 The output is plain filled paths (no masks, clip paths or strokes), which
-every SVG renderer draws the same, including Qt's for KDE icons.
-Also writes the PNGs packaging needs, rendered with cairo:
-hicolor/<n>x<n>/apps/yagni-commander.png (Linux icon theme layout; the
-small SVG below 32 px) and yagni-commander.iconset/ (macOS, the input of
-`iconutil -c icns`). Needs shapely and cairosvg
+every SVG renderer draws the same, including Qt's for KDE icons. Files:
+
+- yagni-commander.svg: the icon (installed as Linux hicolor/scalable);
+- hicolor/<n>x<n>/apps/yagni-commander.png: 16 to 512 px (installed in
+  the Linux icon theme; below 32 px from the small SVG);
+- yagni-commander.iconset/: macOS, the input of `iconutil -c icns`
+  (up to 32 px with the small "y");
+- yagni-commander-small.svg: a single pixel "y", the source of the
+  16 to 24 px PNGs (not installed);
+- yagni-commander-macos.svg: the art on Apple's rounded-square grid, the
+  source of the iconset (not installed).
+
+PNGs are rendered with cairo. Needs shapely and cairosvg
 (`pip install shapely cairosvg`, e.g. in a venv).
 """
 from pathlib import Path
