@@ -1078,6 +1078,60 @@ fn dragging_the_divider_resizes_the_panels(cx: &mut TestAppContext) {
     assert_eq!(bounds(cx, "row-left-0".into()).unwrap().size.width, after);
 }
 
+fn drag_divider_to(cx: &mut VisualTestContext, x: f32) {
+    let start = center(cx, "divider");
+    let target = gpui_kit::point(gpui_kit::px(x), start.y);
+    let modifiers = gpui_kit::Modifiers::default();
+    let left = gpui_kit::MouseButton::Left;
+    cx.simulate_mouse_down(start, left, modifiers);
+    cx.simulate_mouse_move(target, left, modifiers);
+    cx.simulate_mouse_up(target, left, modifiers);
+}
+
+#[gpui_kit::test]
+fn a_narrow_panel_drops_optional_columns_before_name(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let shown = |cx: &mut VisualTestContext, side: &str| {
+        ["Modified", "Owner", "Permissions"]
+            .into_iter()
+            .filter(|key| bounds(cx, format!("header-{side}-{key}")).is_some())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(shown(cx, "left"), ["Modified", "Owner", "Permissions"]);
+    let start = center(cx, "divider").x;
+
+    // About 370 px: Name, Size and Modified fit, Owner and Permissions don't.
+    drag_divider_to(cx, 380.0);
+    assert_eq!(shown(cx, "left"), ["Modified"]);
+    let name = bounds(cx, "header-left-Name".into()).unwrap().size.width;
+    assert!(
+        name >= gpui_kit::px(crate::columns::NAME_MIN_WIDTH),
+        "{name:?}"
+    );
+    // The rows follow the header.
+    assert!(bounds(cx, "row-left-0".into()).is_some());
+    assert_eq!(shown(cx, "right"), ["Modified", "Owner", "Permissions"]);
+
+    // Far left: Name and Size only.
+    drag_divider_to(cx, 60.0);
+    assert!(shown(cx, "left").is_empty());
+    assert!(bounds(cx, "header-left-Size".into()).is_some());
+
+    // Back: they all return.
+    drag_divider_to(cx, f32::from(start));
+    assert_eq!(shown(cx, "left"), ["Modified", "Owner", "Permissions"]);
+}
+
+#[gpui_kit::test]
+fn the_right_panel_drops_columns_too(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let panels = bounds(cx, "list-right".into()).unwrap();
+    drag_divider_to(cx, f32::from(panels.right()) - 380.0);
+    assert!(bounds(cx, "header-right-Modified".into()).is_some());
+    assert!(bounds(cx, "header-right-Owner".into()).is_none());
+    assert!(bounds(cx, "header-left-Permissions".into()).is_some());
+}
+
 // Jobs with a fake trash: deletes, but first waits while a file named `hold`
 // exists next to the entry, so a test can keep a job running.
 
@@ -6008,6 +6062,30 @@ mod zoom {
         cursor_row_is_inside_the_list(cx, row);
         cx.simulate_keystrokes("ctrl-0");
         cursor_row_is_inside_the_list(cx, row);
+    }
+
+    /// `panel_width` is what decides the columns: it must match the layout.
+    #[gpui_kit::test]
+    fn panel_width_matches_the_drawn_panels(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        for zoom_in in [0, 8] {
+            for _ in 0..zoom_in {
+                cx.simulate_keystrokes("ctrl-=");
+            }
+            drag_divider_to(cx, 300.0);
+            let split = file_manager(cx).read_with(cx, |fm, _| fm.split_ratio);
+            let (viewport, ui) =
+                cx.update(|window, cx| (f32::from(window.viewport_size().width), Zoom::get(cx).ui));
+            for (side, list) in [(Side::Left, "list-left"), (Side::Right, "list-right")] {
+                // The list sits inside the panel's 1 px border.
+                let drawn = f32::from(bounds(cx, list.into()).unwrap().size.width) + 2.0;
+                let computed = crate::file_manager::panel_width(side, viewport, split, ui);
+                assert!(
+                    (drawn - computed).abs() < 0.5,
+                    "{side:?} at {ui}: {drawn} vs {computed}"
+                );
+            }
+        }
     }
 
     #[gpui_kit::test]

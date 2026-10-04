@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::zoom::rems_from_px;
+use crate::zoom::{rems_from_px, scaled};
 use gpui_kit::{Div, FontFeatures, div, prelude::*};
 use yagni_commander_core::{
     Commander, Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
@@ -57,10 +57,38 @@ pub const COLUMNS: [Column; 5] = [
     },
 ];
 
+/// Space between two cells, in px at the 16 px base.
+pub const CELL_SPACING: f32 = 10.0;
+
+/// The narrowest Name gets before optional columns make way for it.
+pub const NAME_MIN_WIDTH: f32 = 120.0;
+
 /// The columns the panels show: Name and Size, then the optional ones the
-/// config turns on (see `Commander::hide_columns`).
-pub fn visible_columns(commander: &Commander) -> impl Iterator<Item = &'static Column> + '_ {
-    COLUMNS.iter().filter(|c| commander.shows_column(c.key))
+/// config turns on (see `Commander::hide_columns`), as many as fit.
+/// `width` is the cells' room in a row, in px at UI level `ui`.
+pub fn visible_columns(commander: &Commander, width: f32, ui: f32) -> Vec<&'static Column> {
+    fit(
+        COLUMNS
+            .iter()
+            .filter(|c| commander.shows_column(c.key))
+            .collect(),
+        width,
+        ui,
+    )
+}
+
+/// Drops optional columns from the end until Name keeps `NAME_MIN_WIDTH`.
+/// Name and Size always stay, even if Name gets narrower.
+fn fit(mut columns: Vec<&'static Column>, width: f32, ui: f32) -> Vec<&'static Column> {
+    let needed = |columns: &[&Column]| {
+        let fixed: f32 = columns.iter().filter_map(|c| c.width).sum();
+        let gaps = columns.len().saturating_sub(1) as f32 * CELL_SPACING;
+        scaled(NAME_MIN_WIDTH + fixed + gaps, ui)
+    };
+    while columns.len() > 2 && needed(&columns) > width {
+        columns.pop();
+    }
+    columns
 }
 
 impl Column {
@@ -149,6 +177,53 @@ mod tests {
         assert_eq!(COLUMNS[0].key, SortKey::Name);
         assert!(COLUMNS[0].width.is_none());
         assert!(COLUMNS[1..].iter().all(|c| c.width.is_some()));
+    }
+
+    fn keys(columns: &[&Column]) -> Vec<SortKey> {
+        columns.iter().map(|c| c.key).collect()
+    }
+
+    /// Room for Name at its minimum plus `columns`, at the 16 px base.
+    fn room(columns: &[SortKey]) -> f32 {
+        let fixed: f32 = columns.iter().map(|&k| column(k).width.unwrap()).sum();
+        NAME_MIN_WIDTH + fixed + columns.len() as f32 * CELL_SPACING
+    }
+
+    #[test]
+    fn optional_columns_make_way_for_name_from_the_last() {
+        use SortKey::*;
+        let all = || COLUMNS.iter().collect::<Vec<_>>();
+        let full = room(&[Size, Modified, Owner, Permissions]);
+        assert_eq!(keys(&fit(all(), full, 16.0)).len(), 5);
+        assert_eq!(
+            keys(&fit(all(), full - 1.0, 16.0)),
+            [Name, Size, Modified, Owner]
+        );
+        assert_eq!(
+            keys(&fit(all(), room(&[Size, Modified]), 16.0)),
+            [Name, Size, Modified]
+        );
+        // Name and Size stay however narrow the panel gets.
+        assert_eq!(keys(&fit(all(), 0.0, 16.0)), [Name, Size]);
+    }
+
+    #[test]
+    fn fitting_counts_at_the_ui_level() {
+        use SortKey::*;
+        let all = || COLUMNS.iter().collect::<Vec<_>>();
+        let full = room(&[Size, Modified, Owner, Permissions]);
+        assert_eq!(keys(&fit(all(), full * 2.0, 32.0)).len(), 5);
+        assert_eq!(keys(&fit(all(), full * 2.0 - 1.0, 32.0)).len(), 4);
+    }
+
+    #[test]
+    fn a_column_turned_off_frees_its_room() {
+        use SortKey::*;
+        let some = COLUMNS.iter().filter(|c| c.key != Owner).collect();
+        assert_eq!(
+            keys(&fit(some, room(&[Size, Modified, Permissions]), 16.0)),
+            [Name, Size, Modified, Permissions]
+        );
     }
 
     #[test]

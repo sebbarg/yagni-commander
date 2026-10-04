@@ -31,7 +31,7 @@ Verified by the owner: F8 trash on Kubuntu lands in `~/.local/share/Trash/files`
 
 - **Settings:** a "Browse..." button for the editor field that picks the program with a file dialog and fills in its path; the field stays editable for arguments like `--wait` (decided 2026-10-01). Choosing the terminal emulator for Ctrl-Shift-T (a Settings field used instead of the detection).
 - **Themes:** theme selection (`theme` key, Settings dropdown) and five built-ins (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic) are done. Remaining: more built-in themes, user themes in `~/.config/yagni-commander/themes/*.toml`, and following the system light/dark appearance.
-- **File list:** resizable columns (moved from v1 on 2026-10-02; until then, hiding columns in Settings gives Name more room).
+- **File list:** resizable columns (moved from v1 on 2026-10-02; until then, a narrow panel drops optional columns so Name keeps its room).
 - **Zoom:** our own menu popup, so menu rows scale with the zoom (gpui-component's `PopupMenu` rows are a fixed 26 px). Fit dialogs to the window (clamp the width, scroll the body): at large zoom in a small window some overflow (24 px in 1200x800: Settings clips at the bottom; 32 px: the hotlist Configure dialog is wider than the window).
 - **Toolbar:** with e.g. drive icons.
 - **Quick search:** fuzzy matching (if ever).

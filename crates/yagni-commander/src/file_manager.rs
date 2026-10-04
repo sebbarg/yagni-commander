@@ -221,7 +221,7 @@ impl FileManager {
             left,
             right,
             focus,
-            split_ratio: 0.5,
+            split_ratio: START_SPLIT,
             dragging_split: false,
             notice: notice.map(Into::into),
             job: None,
@@ -638,11 +638,29 @@ impl FileManager {
             let width = f32::from(window.viewport_size().width) - 2.0 * padding;
             let x = f32::from(event.position.x) - padding - scaled(DIVIDER_WIDTH, ui) / 2.0;
             self.split_ratio = (x / width).clamp(0.1, 0.9);
+            let split = self.split_ratio;
+            for panel in [&self.left, &self.right] {
+                panel.update(cx, |panel, _| panel.split = split);
+            }
         } else {
             // Released outside the window.
             self.dragging_split = false;
         }
         cx.notify();
+    }
+}
+
+/// The left panel's share of the width at startup.
+pub(crate) const START_SPLIT: f32 = 0.5;
+
+/// A panel's outer width in px at UI level `ui`, laid out as `render`
+/// does: the left one takes `split` of the room between the window
+/// padding, the right one the rest after the divider.
+pub(crate) fn panel_width(side: Side, viewport: f32, split: f32, ui: f32) -> f32 {
+    let room = viewport - 2.0 * scaled(PADDING, ui);
+    match side {
+        Side::Left => room * split,
+        Side::Right => room * (1.0 - split) - scaled(DIVIDER_WIDTH, ui),
     }
 }
 

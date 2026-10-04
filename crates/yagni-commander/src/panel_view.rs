@@ -15,8 +15,8 @@ use yagni_commander_core::{
 
 use yagni_commander_core::{icons, label};
 
-use crate::columns::{Column, visible_columns};
-use crate::file_manager::execute;
+use crate::columns::{CELL_SPACING, Column, visible_columns};
+use crate::file_manager::{execute, panel_width};
 use crate::theme::{Colors, Theme};
 use crate::zoom::{Zoom, rems_from_px, scaled};
 
@@ -36,7 +36,8 @@ const COLUMN_HEADER_HEIGHT: f32 = 26.0;
 /// opens there, over the path header.
 pub(crate) const BELOW_TABS: f32 = TAB_HEIGHT;
 const FOOTER_HEIGHT: f32 = 24.0;
-const CELL_SPACING: f32 = 10.0;
+/// Space between a row's edge and its first and last cell.
+const ROW_PADDING: f32 = 10.0;
 
 pub struct PanelView {
     commander: Entity<Commander>,
@@ -48,6 +49,8 @@ pub struct PanelView {
     revealed: Option<Revealed>,
     /// The UI level the scroll offset (in px) was last valid for.
     level: f32,
+    /// The left panel's share of the width (`FileManager`'s divider).
+    pub split: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -73,6 +76,7 @@ impl PanelView {
             scroll: UniformListScrollHandle::new(),
             revealed: None,
             level: Zoom::get(cx).ui,
+            split: crate::file_manager::START_SPLIT,
             _subscriptions: vec![subscription, zoom],
         }
     }
@@ -139,13 +143,28 @@ impl PanelView {
         (top..=top + rows).contains(&ix)
     }
 
-    fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Div> {
+    /// The columns that fit this panel's width in `window`.
+    fn columns(&self, window: &Window, cx: &App) -> Vec<&'static Column> {
+        let ui = Zoom::get(cx).ui;
+        let viewport = f32::from(window.viewport_size().width);
+        // Inside the 1 px border and the row padding.
+        let width =
+            panel_width(self.side, viewport, self.split, ui) - 2.0 - 2.0 * scaled(ROW_PADDING, ui);
+        visible_columns(self.commander.read(cx), width, ui)
+    }
+
+    fn render_rows(
+        &mut self,
+        range: Range<usize>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Div> {
+        let columns = self.columns(window, cx);
         let side = self.side;
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let panel = commander.panel(side);
         let is_active = commander.active() == side;
-        let columns: Vec<_> = visible_columns(commander).collect();
         let icons = commander.shows_icons();
         range
             .map(|ix| {
@@ -236,16 +255,16 @@ impl PanelView {
     }
 
     /// Clickable column titles; clicking sorts the panel by that column.
-    fn render_column_headers(&self, cx: &mut Context<Self>) -> Div {
+    fn render_column_headers(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let columns = self.columns(window, cx);
         let side = self.side;
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let sort = commander.panel(side).sort();
-        let columns: Vec<_> = visible_columns(commander).collect();
         div()
             .h(rems_from_px(COLUMN_HEADER_HEIGHT))
             .flex_none()
-            .px(rems_from_px(10.0))
+            .px(rems_from_px(ROW_PADDING))
             .flex()
             .items_center()
             .gap(rems_from_px(CELL_SPACING))
@@ -275,7 +294,7 @@ impl PanelView {
 }
 
 impl Render for PanelView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.render_tabs(cx);
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
@@ -396,7 +415,7 @@ impl Render for PanelView {
         let list = uniform_list(
             ("entries", self.side as usize),
             entry_count,
-            cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
+            cx.processor(|this, range, window, cx| this.render_rows(range, window, cx)),
         )
         .track_scroll(&self.scroll)
         .debug_selector({
@@ -419,7 +438,7 @@ impl Render for PanelView {
             .border_color(border)
             .bg(panel_bg)
             .child(header)
-            .child(self.render_column_headers(cx))
+            .child(self.render_column_headers(window, cx))
             .child(list)
             .child(footer);
 
@@ -480,7 +499,7 @@ fn entry_row(
     div()
         .w_full()
         .h(rems_from_px(ROW_HEIGHT))
-        .px(rems_from_px(10.0))
+        .px(rems_from_px(ROW_PADDING))
         .flex()
         .items_center()
         .gap(rems_from_px(CELL_SPACING))
