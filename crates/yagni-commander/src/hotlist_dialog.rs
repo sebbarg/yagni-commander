@@ -290,7 +290,7 @@ impl FileManager {
             let (view, me, focus) = (view.clone(), me.clone(), focus.clone());
             Rc::new(move |window: &mut Window, cx: &mut App| -> bool {
                 if let Some((ix, why)) = view.read(cx).invalid() {
-                    let name = hotlist::display_label(&view.read(cx).entries[ix]).text;
+                    let name = entry_name(&view.read(cx).entries[ix], ix);
                     view.update(cx, |v, cx| v.select(ix, window, cx));
                     let path_field = view.read(cx).path.focus_handle(cx);
                     show_error(
@@ -372,5 +372,32 @@ impl FileManager {
                     true
                 })
         });
+    }
+}
+
+/// How the error box names entry `ix`: its label, or its number when it
+/// has neither a name nor a path.
+fn entry_name(entry: &HotlistEntry, ix: usize) -> String {
+    let text = hotlist::display_label(entry).text;
+    if text.trim().is_empty() {
+        format!("Entry {}", ix + 1)
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_entry_without_name_or_path_is_named_by_its_number() {
+        let entry = |name: &str, path: &str| HotlistEntry {
+            name: name.into(),
+            path: path.into(),
+        };
+        assert_eq!(entry_name(&entry("&Src", "src"), 0), "Src");
+        assert_eq!(entry_name(&entry("", "src"), 0), "src");
+        assert_eq!(entry_name(&entry("", ""), 2), "Entry 3");
     }
 }

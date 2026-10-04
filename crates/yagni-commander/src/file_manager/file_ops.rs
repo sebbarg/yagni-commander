@@ -25,7 +25,7 @@ use yagni_commander_core::file_ops::{
     Report, Settings, is_archive,
 };
 use yagni_commander_core::{
-    Command, Commander, Entry, EntryKind, Panel, Side, format_modified, format_size,
+    Command, Commander, Entry, EntryKind, Panel, PanelId, Side, format_modified, format_size,
 };
 
 use super::FileManager;
@@ -95,8 +95,8 @@ struct FromArchive {
 pub(super) struct RunningJob {
     job: Job,
     kind: Kind,
-    /// The panel the sources came from.
-    source: Side,
+    /// The tab the sources came from.
+    source: PanelId,
     /// The folder the sources came from.
     source_dir: PathBuf,
     view: Entity<ProgressView>,
@@ -530,8 +530,9 @@ impl FileManager {
         };
         let job = Job::spawn(operation, settings)?;
         let commander = self.commander.read(cx);
-        let source = commander.active();
-        let source_dir = commander.panel(source).path().to_path_buf();
+        let panel = commander.panel(commander.active());
+        let source = panel.id();
+        let source_dir = panel.path().to_path_buf();
         self.job = Some(RunningJob {
             job,
             kind,

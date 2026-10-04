@@ -10,9 +10,9 @@
 use gpui_kit::base::actions::{SelectLeft, SelectRight};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    Context, DismissEvent, Entity, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Window,
-    anchored, deferred, div, prelude::FluentBuilder, px,
+    Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 
 use crate::menus::{MenuDef, popup};
@@ -26,6 +26,11 @@ pub struct MenuBar {
     action_context: FocusHandle,
     open: Option<OpenMenu>,
 }
+
+/// A menu opened, by key or mouse: the file manager ends its quick search.
+pub struct Opened;
+
+impl EventEmitter<Opened> for MenuBar {}
 
 struct OpenMenu {
     index: usize,
@@ -98,6 +103,7 @@ impl MenuBar {
             _dismissed: dismissed,
             _blurred: blurred,
         });
+        cx.emit(Opened);
         cx.notify();
     }
 

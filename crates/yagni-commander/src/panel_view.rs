@@ -1,6 +1,7 @@
 //! One side of the file manager: the tab header, then the tab in front:
 //! path header, column headers, the entry list and a summary footer. Reads its panel from the shared [`Commander`].
 
+use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
@@ -34,12 +35,18 @@ pub struct PanelView {
     commander: Entity<Commander>,
     side: Side,
     scroll: UniformListScrollHandle,
-    /// Tab, directory and cursor last scrolled into view. Scrolling only
-    /// follows actual cursor moves (or a tab switch), so mouse-wheel
-    /// scrolling isn't undone by unrelated updates such as activity in the
-    /// other panel.
-    revealed: Option<(usize, PathBuf, usize)>,
+    /// The cursor last scrolled into view. Scrolling only follows actual
+    /// cursor moves (or a tab switch), so mouse-wheel scrolling isn't undone
+    /// by unrelated updates such as activity in the other panel.
+    revealed: Option<Revealed>,
     _subscriptions: Vec<Subscription>,
+}
+
+struct Revealed {
+    tab: usize,
+    path: PathBuf,
+    cursor: usize,
+    name: Option<OsString>,
 }
 
 impl PanelView {
@@ -65,16 +72,41 @@ impl PanelView {
 
     fn reveal_cursor(&mut self, cx: &mut Context<Self>) {
         let commander = self.commander.read(cx);
-        let tab = commander.tabs(self.side).index();
         let panel = commander.panel(self.side);
-        if self.revealed.as_ref().is_some_and(|(t, path, cursor)| {
-            *t == tab && path == panel.path() && *cursor == panel.cursor()
-        }) {
-            return;
+        let now = Revealed {
+            tab: commander.tabs(self.side).index(),
+            path: panel.path().to_path_buf(),
+            cursor: panel.cursor(),
+            name: panel.cursor_entry().map(|e| e.name.clone()),
+        };
+        if let Some(last) = &self.revealed
+            && last.tab == now.tab
+            && last.path == now.path
+        {
+            if last.cursor == now.cursor {
+                return;
+            }
+            // The same entry, moved by a re-read (entries came or went
+            // above it, maybe once a second): follow it only if it was in
+            // view, so a wheel-scrolled view stays where it was put.
+            if last.name == now.name && !self.in_view(last.cursor) {
+                self.revealed = Some(now);
+                return;
+            }
         }
         self.scroll
-            .scroll_to_item(panel.cursor(), ScrollStrategy::Nearest);
-        self.revealed = Some((tab, panel.path().to_path_buf(), panel.cursor()));
+            .scroll_to_item(now.cursor, ScrollStrategy::Nearest);
+        self.revealed = Some(now);
+    }
+
+    /// Whether row `ix` is on screen (true before the list's first layout).
+    fn in_view(&self, ix: usize) -> bool {
+        let Some(rows) = self.visible_rows() else {
+            return true;
+        };
+        let offset = f32::from(self.scroll.0.borrow().base_handle.offset().y);
+        let top = (-offset / ROW_HEIGHT).floor().max(0.0) as usize;
+        (top..=top + rows).contains(&ix)
     }
 
     fn render_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<Div> {

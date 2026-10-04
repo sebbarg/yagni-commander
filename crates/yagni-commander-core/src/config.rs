@@ -182,7 +182,7 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
 }
 
 /// Comment above the first `[[hotlist]]` table.
-const HOTLIST_COMMENT: &str = "\n# Directory hotlist (Ctrl-D), edited in the app.\n";
+const HOTLIST_COMMENT: &str = "\n# Directory hotlist (Ctrl-D), edited in the app. Keep it at the end of\n# the file: a setting written below it would belong to its last entry.\n";
 
 /// Saves the whole hotlist, like [`save_setting`]: only the `hotlist`
 /// tables change (comments inside the old ones are lost), a broken file is
@@ -297,6 +297,17 @@ mod tests {
         assert!(!saved.contains("/old"), "{saved}");
         assert!(saved.contains("# Directory hotlist (Ctrl-D), edited in the app."));
         assert_eq!(toml::from_str::<Config>(&saved).unwrap(), config);
+    }
+
+    #[test]
+    fn a_setting_saved_after_the_hotlist_goes_above_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "").unwrap();
+        save_hotlist(&path, &[entry("&Src", "~/src")]).unwrap();
+        let config = save_setting(&path, &Setting::editor("vim")).unwrap();
+        assert_eq!(config.editor.as_deref(), Some("vim"));
+        assert_eq!(config.hotlist, [entry("&Src", "~/src")]);
     }
 
     #[test]

@@ -15,8 +15,8 @@ use crate::actions::{HOTLIST_CONTEXT, hotlist as act};
 use crate::theme::Theme;
 
 pub enum HotlistEvent {
-    /// The entry at this index.
-    Pick(usize),
+    /// This entry's folder, as stored (the popup's own copy of the list).
+    Pick(String),
     Add,
     Configure,
     Dismiss,
@@ -75,7 +75,7 @@ impl HotlistPopup {
     fn pick(&mut self, row: usize, cx: &mut Context<Self>) {
         let count = self.entries.len();
         cx.emit(match row {
-            r if r < count => HotlistEvent::Pick(r),
+            r if r < count => HotlistEvent::Pick(self.entries[r].path.clone()),
             r if r == count => HotlistEvent::Add,
             _ => HotlistEvent::Configure,
         });
@@ -93,7 +93,7 @@ impl HotlistPopup {
         if let (Some(ch), None) = (chars.next(), chars.next())
             && let Some(ix) = hotlist::find_letter(&self.entries, ch)
         {
-            cx.emit(HotlistEvent::Pick(ix));
+            cx.emit(HotlistEvent::Pick(self.entries[ix].path.clone()));
         }
     }
 }

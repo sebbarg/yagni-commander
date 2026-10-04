@@ -38,6 +38,11 @@ pub fn label(name: &str) -> Label {
         }
         match chars.next() {
             Some('&') => text.push('&'),
+            // A space can't be typed as a letter: `& x` shows as is.
+            Some(next) if next.is_whitespace() => {
+                text.push('&');
+                text.push(next);
+            }
             Some(next) => {
                 if letter.is_none() {
                     letter = next.to_lowercase().next();
@@ -142,6 +147,15 @@ mod tests {
         assert_eq!(l.text, "My docs");
         assert_eq!(l.letter, Some('d'));
         assert_eq!(l.underline, Some(3..4));
+    }
+
+    #[test]
+    fn an_ampersand_before_a_space_marks_nothing() {
+        let l = label("R & D &x");
+        assert_eq!(l.text, "R & D x");
+        assert_eq!(l.letter, Some('x'));
+        assert_eq!(l.underline, Some(6..7));
+        assert_eq!(label("& x").letter, None);
     }
 
     #[test]

@@ -100,6 +100,7 @@ impl Results {
             entries,
             archive: None,
             results: Some(self.clone()),
+            modified: None,
         }
     }
 

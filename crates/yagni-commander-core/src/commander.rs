@@ -3,13 +3,14 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::time::SystemTime;
 
 use crate::entry::{Entry, EntryKind};
 use crate::find::Results;
 use crate::fs_ops;
 use crate::listing::{ArchiveRead, Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
-use crate::panel::{Cancel, Enter, Loading, Navigation, Panel, Refresh};
+use crate::panel::{Cancel, Enter, Loading, Navigation, Panel, PanelId, Refresh};
 use crate::quick_search::QuickSearch;
 use crate::sort::SortKey;
 use crate::tabs::Tabs;
@@ -257,6 +258,7 @@ impl Commander {
             nav.archive,
             nav.results,
             nav.up_if_missing,
+            false,
         );
         self.panel_mut(side).set_loading(Loading {
             id,
@@ -276,6 +278,7 @@ impl Commander {
         archive: Option<ArchiveRead>,
         results: Option<Arc<Results>>,
         up_if_missing: bool,
+        quiet: bool,
     ) -> (u64, Arc<AtomicUsize>, Arc<AtomicBool>) {
         self.next_load += 1;
         let id = self.next_load;
@@ -290,8 +293,32 @@ impl Commander {
             archive,
             results,
             up_if_missing,
+            quiet,
         });
         (id, progress, cancel)
+    }
+
+    /// The directory watcher saw a change in `dir`: re-reads quietly each
+    /// side whose front tab shows it.
+    pub fn watch_changed(&mut self, dir: &Path) {
+        for side in [Side::Left, Side::Right] {
+            if self.panel(side).real_dir() == dir {
+                self.watch_reload(side);
+            }
+        }
+    }
+
+    /// The watcher is now watching `dir`, which was last modified at
+    /// `modified`. A change made after a side's listing was read but before
+    /// the watch began would otherwise be missed: re-read quietly each side
+    /// showing `dir` whose listing is older or of unknown age.
+    pub fn watch_started(&mut self, dir: &Path, modified: Option<SystemTime>) {
+        for side in [Side::Left, Side::Right] {
+            let panel = self.panel(side);
+            if panel.real_dir() == dir && (modified.is_none() || panel.modified() != modified) {
+                self.watch_reload(side);
+            }
+        }
     }
 
     /// The directory watcher saw a change in `side`'s folder: re-read it
@@ -325,7 +352,7 @@ impl Commander {
             ),
         };
         let fallback = gone.is_some().then(|| self.home.clone());
-        let (id, _, cancel) = self.push_request(path, fallback, archive, results, false);
+        let (id, _, cancel) = self.push_request(path, fallback, archive, results, false, true);
         self.panel_at_mut(at).set_refresh(Refresh {
             id,
             gone,
@@ -336,6 +363,10 @@ impl Commander {
     /// A tab came to the front: re-read it quietly, or read it for the
     /// first time (a tab restored at startup) with the startup fallback.
     fn bring_to_front(&mut self, side: Side) {
+        // A read of this tab failed while it was in the background.
+        if let Some(error) = self.panel_mut(side).error.take() {
+            self.error = Some(error);
+        }
         let panel = self.panel(side);
         if panel.loading().is_some() {
             return;
@@ -373,6 +404,10 @@ impl Commander {
                     Some(_) => None,
                 };
                 panel.apply(listing, select.as_deref());
+                // The folder vanished: a quick search there is over.
+                if refresh.gone.is_some() && at == self.visible(self.active) {
+                    self.search.clear();
+                }
             }
             Err(e)
                 if refresh.gone.is_none()
@@ -429,11 +464,19 @@ impl Commander {
         let Some(at) = self.loading_tab(id) else {
             return false;
         };
+        let in_front = at == self.visible(at.0);
         let panel = self.panel_at_mut(at);
         let loading = panel.take_loading().expect("loading_tab found it");
         match result {
             Ok(listing) => panel.apply(listing, loading.select.as_deref()),
-            Err(e) => self.error = Some(format!("{}: {e}", loading.path.display())),
+            Err(e) => {
+                let error = format!("{}: {e}", loading.path.display());
+                if in_front {
+                    self.error = Some(error);
+                } else {
+                    panel.error = Some(error);
+                }
+            }
         }
         self.reread_if_stale(at);
         true
@@ -464,9 +507,16 @@ impl Commander {
 
     /// Escape while loading: stop waiting and stay on the old listing. A
     /// panel that has none yet (startup) goes to the home folder instead.
+    /// Also stops a quiet re-read (one hung on a dead mount), without
+    /// starting another.
     pub fn cancel_load(&mut self, side: Side) -> bool {
         if self.panel_mut(side).take_loading().is_none() {
-            return false;
+            let panel = self.panel_mut(side);
+            if panel.take_refresh().is_none() {
+                return false;
+            }
+            panel.stale = false;
+            return true;
         }
         if !self.panel(side).is_loaded() {
             let target = self.home.clone();
@@ -811,11 +861,13 @@ impl Commander {
         }
     }
 
-    /// Deselects everything in `side`'s front tab, if it still shows `dir`
-    /// (a copy's sources; tabs may have changed while it ran).
-    pub fn clear_selection(&mut self, side: Side, dir: &Path) {
-        let panel = self.panel_mut(side);
-        if panel.path() == dir {
+    /// Deselects everything in the tab `id`, wherever it is now, if it
+    /// still shows `dir` (a copy's sources; tabs may have changed while it
+    /// ran). Nothing if that tab was closed.
+    pub fn clear_selection(&mut self, id: PanelId, dir: &Path) {
+        if let Some(panel) = self.all_panels_mut().find(|p| p.id() == id)
+            && panel.path() == dir
+        {
             panel.clear_selection();
         }
     }
@@ -1282,7 +1334,7 @@ mod tests {
         c.execute(Command::SwitchPanel);
         c.execute(Command::SelectAll);
         let left = c.panel(Side::Left).path().to_path_buf();
-        c.clear_selection(Side::Left, &left);
+        c.clear_selection(c.panel(Side::Left).id(), &left);
         assert_eq!(c.panel(Side::Left).summary().selected(), 0);
         assert_eq!(c.panel(Side::Right).summary().selected(), 4);
     }
@@ -1976,6 +2028,89 @@ mod tests {
     }
 
     #[test]
+    fn a_change_reloads_every_side_showing_that_folder() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.watch_changed(&tmp.path().join("a"));
+        assert!(!c.panel(Side::Left).is_refreshing());
+        assert!(!c.panel(Side::Right).is_refreshing());
+        c.watch_changed(tmp.path());
+        assert!(c.panel(Side::Left).is_refreshing());
+        assert!(c.panel(Side::Right).is_refreshing());
+    }
+
+    #[test]
+    fn a_watch_start_rereads_a_listing_older_than_the_folder() {
+        let tmp = tree();
+        let a = tmp.path().join("a");
+        let mut c = Commander::new(tmp.path(), &a, false).unwrap();
+        run(&mut c, Command::Reload); // listings with their folder times
+        let now = crate::listing::dir_modified(tmp.path());
+        assert!(now.is_some());
+        assert_eq!(c.panel(Side::Left).modified(), now);
+        c.watch_started(tmp.path(), now);
+        assert!(!c.panel(Side::Left).is_refreshing(), "up to date");
+        c.watch_started(tmp.path(), Some(std::time::SystemTime::UNIX_EPOCH));
+        assert!(c.panel(Side::Left).is_refreshing(), "changed in between");
+        assert!(!c.panel(Side::Right).is_refreshing(), "another folder");
+        c.watch_started(&a, None);
+        assert!(c.panel(Side::Right).is_refreshing(), "time unknown");
+    }
+
+    #[test]
+    fn escape_stops_a_quiet_read_without_starting_another() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        c.watch_reload(Side::Left);
+        c.watch_reload(Side::Left); // stale: another read would follow
+        let id = c.take_requests()[0].id;
+        assert!(c.cancel_load(Side::Left));
+        assert!(!c.is_pending(id));
+        assert!(!c.panel(Side::Left).is_refreshing());
+        assert!(c.take_requests().is_empty());
+        assert!(!c.cancel_load(Side::Left), "nothing left to stop");
+    }
+
+    #[test]
+    fn a_read_failing_in_a_background_tab_shows_its_error_in_front() {
+        let tmp = tree();
+        let mut c = on_a(&tmp);
+        run(&mut c, Command::NewTab);
+        c.execute(Command::PrevTab);
+        c.execute(Command::Activate); // into "a", pending
+        fs::remove_dir(tmp.path().join("a")).unwrap();
+        c.execute(Command::NextTab);
+        c.run_loads_now();
+        assert_eq!(c.error(), None, "not the tab in front");
+        c.execute(Command::PrevTab);
+        assert!(
+            c.error().is_some_and(|e| e.contains("/a: ")),
+            "{:?}",
+            c.error()
+        );
+        c.execute(Command::CursorDown);
+        assert_eq!(c.error(), None, "cleared like any error");
+    }
+
+    #[test]
+    fn a_vanished_folder_ends_the_quick_search_there() {
+        let tmp = tree();
+        let deep = tmp.path().join("a/deep");
+        fs::create_dir(&deep).unwrap();
+        fs::write(deep.join("x"), b"").unwrap();
+        let mut c = Commander::new(&deep, &deep, false).unwrap();
+        assert!(c.search_type('x'));
+        fs::remove_dir_all(&deep).unwrap();
+        c.watch_reload(Side::Right); // the other side: the search stays
+        c.run_loads_now();
+        assert_eq!(c.search(), Some("x"));
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(c.search(), None);
+    }
+
+    #[test]
     fn check_dir_refuses_once_the_panel_left_the_folder() {
         let tmp = tree();
         fs::create_dir(tmp.path().join("a/sub")).unwrap();
@@ -2291,24 +2426,46 @@ mod tests {
         }
     }
     #[test]
-    fn clear_selection_needs_the_same_folder_in_front() {
+    fn clear_selection_finds_its_tab_wherever_it_went() {
+        let tmp = tree();
+        let mut c = on_a(&tmp); // left active, in `tmp`
+        c.execute(Command::ToggleSelection);
+        let source = c.panel(Side::Left).id();
+        // A same-folder tab comes to the front, also with a selection.
+        run(&mut c, Command::NewTab);
+        c.execute(Command::ToggleSelection);
+        c.clear_selection(source, tmp.path());
+        assert_eq!(c.panel(Side::Left).selection().count(), 1, "the new tab");
+        let first = c.tabs(Side::Left).get(0).unwrap();
+        assert_eq!(first.selection().count(), 0, "the copy's own tab");
+        // Swapped to the other side, it is still found.
+        c.execute(Command::PrevTab);
+        c.execute(Command::ToggleSelection);
+        run(&mut c, Command::SwapPanels);
+        c.clear_selection(source, tmp.path());
+        assert_eq!(c.panel(Side::Right).selection().count(), 0);
+        // Not when the folder differs.
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::ToggleSelection);
+        c.clear_selection(source, &tmp.path().join("a"));
+        assert_eq!(
+            c.panel(Side::Right).selection().count(),
+            1,
+            "another folder"
+        );
+    }
+
+    #[test]
+    fn a_tab_copy_has_its_own_id() {
         let tmp = tree();
         let mut c = on_a(&tmp);
-        c.execute(Command::ToggleSelection);
+        let first = c.panel(Side::Left).id();
         run(&mut c, Command::NewTab);
-        c.execute(Command::PrevTab); // the selection's tab is in front again
-        c.execute(Command::SwitchPanel);
-        c.clear_selection(Side::Left, &tmp.path().join("a"));
-        assert_eq!(c.panel(Side::Left).selection().count(), 1, "another folder");
-        c.execute(Command::SwitchPanel);
-        c.execute(Command::NextTab);
-        c.execute(Command::ToggleSelection); // the copy selects too
-        c.execute(Command::PrevTab);
-        c.clear_selection(Side::Left, tmp.path());
-        assert_eq!(c.panel(Side::Left).selection().count(), 0);
-        let copy = c.tabs(Side::Left).get(1).unwrap();
-        assert_eq!(copy.selection().count(), 1, "other tabs keep theirs");
+        assert_ne!(c.panel(Side::Left).id(), first);
+        assert_eq!(c.tabs(Side::Left).get(0).unwrap().id(), first);
+        assert_ne!(c.panel(Side::Right).id(), first);
     }
+
     #[test]
     fn go_to_navigates_the_active_panel_only() {
         let tmp = tree();

@@ -3,7 +3,8 @@ use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 use crate::archive::ArchiveIndex;
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
@@ -21,6 +22,9 @@ use crate::sort::{Sort, SortKey, sort_entries};
 /// selection, targets) sees only the visible entries.
 #[derive(Debug)]
 pub struct Panel {
+    /// Tells this tab from every other one, wherever it moves (Ctrl-U,
+    /// closing tabs before it).
+    id: PanelId,
     path: PathBuf,
     /// Visible entries in display order.
     entries: Vec<Entry>,
@@ -48,6 +52,22 @@ pub struct Panel {
     /// panel"). `path` is then the search's root, and every entry's name
     /// is its path relative to it.
     results: Option<Arc<Results>>,
+    /// The folder's modification time when its listing was read.
+    modified: Option<SystemTime>,
+    /// A read that failed while this tab was in the background: shown when
+    /// it comes to the front.
+    pub(crate) error: Option<String>,
+}
+
+/// A panel's identity for the session. A Ctrl-T copy gets a new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PanelId(u64);
+
+impl PanelId {
+    fn next() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
 }
 
 /// Counts and sizes for the panel footer. Directory sizes are unknown, so
@@ -154,6 +174,7 @@ impl Panel {
     /// A panel on `path` with no listing yet (startup).
     pub(crate) fn empty(path: PathBuf, show_hidden: bool) -> Self {
         Self {
+            id: PanelId::next(),
             path,
             entries: Vec::new(),
             hidden: Vec::new(),
@@ -167,6 +188,8 @@ impl Panel {
             stale: false,
             archive: None,
             results: None,
+            modified: None,
+            error: None,
         }
     }
 
@@ -174,6 +197,7 @@ impl Panel {
     /// without its selection or any read in progress.
     pub(crate) fn duplicate(&self) -> Self {
         Self {
+            id: PanelId::next(),
             path: self.path.clone(),
             entries: self.entries.clone(),
             hidden: self.hidden.clone(),
@@ -187,6 +211,8 @@ impl Panel {
             stale: false,
             archive: self.archive.clone(),
             results: self.results.clone(),
+            modified: self.modified,
+            error: None,
         }
     }
 
@@ -201,10 +227,15 @@ impl Panel {
                 entries,
                 archive: None,
                 results: None,
+                modified: None,
             },
             None,
         );
         Ok(panel)
+    }
+
+    pub fn id(&self) -> PanelId {
+        self.id
     }
 
     pub fn loading(&self) -> Option<&Loading> {
@@ -239,6 +270,12 @@ impl Panel {
 
     pub(crate) fn take_refresh(&mut self) -> Option<Refresh> {
         self.refresh.take()
+    }
+
+    /// The folder's modification time when the listing was read (plain
+    /// folders only).
+    pub fn modified(&self) -> Option<SystemTime> {
+        self.modified
     }
 
     /// Whether a listing has arrived yet (false only at startup).
@@ -375,6 +412,7 @@ impl Panel {
             entries,
             archive,
             results,
+            modified,
         } = listing;
         // The search decided what to show: nothing is hidden there.
         let (mut entries, hidden) = split_hidden(entries, self.show_hidden || results.is_some());
@@ -402,6 +440,7 @@ impl Panel {
         self.entries = entries;
         self.hidden = hidden;
         self.cursor = cursor;
+        self.modified = modified;
         self.loaded = true;
     }
 
@@ -640,6 +679,7 @@ impl Panel {
             archive: nav.archive.clone(),
             results: nav.results.clone(),
             up_if_missing: false,
+            quiet: false,
         })?;
         self.apply(listing, nav.select.as_deref());
         Ok(())
@@ -1232,6 +1272,7 @@ mod tests {
                 entries,
                 archive: None,
                 results: None,
+                modified: None,
             },
             Some(OsStr::new("beta")),
         );

@@ -93,14 +93,18 @@ pub struct FileManager {
     loads: Vec<loads::RunningLoad>,
     /// Whether the timer that collects their results is running.
     polling_loads: bool,
+    /// How long the last quiet re-read of each folder took, and when it
+    /// ended (see `loads::rest`).
+    quiet_reads: std::collections::HashMap<PathBuf, (std::time::Instant, std::time::Duration)>,
     /// Watches each panel's folder (left, right); `None` in tests, which
     /// report changes through `changes` by hand.
     watchers: Option<[yagni_commander_core::watch::PanelWatcher; 2]>,
-    /// The folder each watcher was last pointed at.
+    /// The folder each watcher was last pointed at. Watchers aren't tied
+    /// to a side: their reports name the folder.
     watched: [Option<PathBuf>; 2],
     /// Where the watchers report changes; tests report through it by hand.
     #[cfg(test)]
-    changes: futures::channel::mpsc::UnboundedSender<Side>,
+    changes: futures::channel::mpsc::UnboundedSender<yagni_commander_core::watch::Report>,
     /// The open settings dialog's view.
     pub(crate) settings: Option<Entity<crate::settings_dialog::SettingsView>>,
     /// Where the operation log goes. Tests replace it.
@@ -145,7 +149,7 @@ impl FileManager {
             .then(|| cx.new(|_| MenuBar::new(Vec::new(), focus.clone())));
 
         let this = cx.weak_entity();
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
                 this.watch_panels(cx);
@@ -163,13 +167,15 @@ impl FileManager {
                 this.activated_at = Some(cx.background_executor().now());
                 if !window.is_window_active() {
                     this.alt_armed = false;
+                    // Like the menu, the hotlist popup closes.
+                    this.close_hotlist(window, cx);
                     if let Some(bar) = this.menu_bar.clone() {
                         bar.update(cx, |bar, cx| bar.close(window, cx));
                     }
                 }
             }),
             // While a menu or the hotlist popup is open, keys other than its
-            // own are ignored. This runs before key bindings, which matters:
+            // own (and Quit) are ignored. This runs before key bindings, which matters:
             // the open popup has focus, but the file manager's bindings (F5,
             // ...) are on the same dispatch path.
             cx.intercept_keystrokes({
@@ -177,6 +183,9 @@ impl FileManager {
                 let this = this.clone();
                 let handle = window.window_handle();
                 move |event, window, cx| {
+                    if crate::actions::quits(&event.keystroke) {
+                        return;
+                    }
                     if window.window_handle() == handle
                         && let Some(this) = this.upgrade()
                         && this.read(cx).hotlist.is_some()
@@ -197,6 +206,11 @@ impl FileManager {
                 }
             }),
         ];
+        if let Some(bar) = &menu_bar {
+            // Opening a menu with the mouse ends the quick search too.
+            subscriptions
+                .push(cx.subscribe(bar, |this, _, _: &menu_bar::Opened, cx| this.end_search(cx)));
+        }
         AppState::remember_window(window.window_bounds(), cx);
         AppState::remember_panels(&commander, cx);
 
@@ -216,7 +230,10 @@ impl FileManager {
             load: Some(loads::spawn_load),
             loads: Vec::new(),
             polling_loads: false,
-            watchers: Some(watch::spawn_watchers(&changes)),
+            quiet_reads: Default::default(),
+            // Tests report changes by hand: a real watcher reporting from
+            // its own thread would upset gpui's test scheduler.
+            watchers: (!cfg!(test)).then(|| watch::spawn_watchers(&changes)),
             watched: [None, None],
             #[cfg(test)]
             changes,
@@ -319,13 +336,9 @@ impl FileManager {
 
     fn on_hotlist(&mut self, event: &HotlistEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.close_hotlist(window, cx);
-        match *event {
-            HotlistEvent::Pick(ix) => {
-                let config = &cx.global::<CurrentConfig>().config;
-                let Some(entry) = config.hotlist.get(ix) else {
-                    return;
-                };
-                let entry_path = entry.path.clone();
+        match event {
+            HotlistEvent::Pick(entry_path) => {
+                let entry_path = entry_path.clone();
                 self.notice = None;
                 self.commander.update(cx, |c, cx| {
                     let dir = yagni_commander_core::hotlist::expand(&entry_path, c.home());
@@ -476,7 +489,9 @@ impl FileManager {
                 cx.notify();
             });
         }
-        if config.log != old.log {
+        // Also when the log is on but failed to start: Ctrl-R tries again.
+        let log_missing = config.log && self.commander.read(cx).log().is_none();
+        if config.log != old.log || log_missing {
             let (log, problem) = if config.log {
                 oplog::start(self.log_dir.as_deref(), true, config.log_keep_days)
             } else {
@@ -682,6 +697,9 @@ impl Render for FileManager {
                 this.execute(Command::SyncOtherPanel, cx)
             }))
             .on_action(cx.listener(|this, _: &Reload, _, cx| {
+                // Watch both folders again: a symlinked one may point
+                // elsewhere now.
+                this.watched = [None, None];
                 this.execute(Command::Reload, cx);
                 this.reload_config(cx);
             }))

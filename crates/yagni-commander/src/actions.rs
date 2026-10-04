@@ -149,16 +149,25 @@ actions!(
     ]
 );
 
+const QUIT: &str = if cfg!(target_os = "macos") {
+    "cmd-q"
+} else {
+    "alt-f4"
+};
+
+/// Whether `keystroke` is the Quit key, which works even while a menu or
+/// the hotlist popup holds every other key back.
+pub fn quits(keystroke: &gpui_kit::Keystroke) -> bool {
+    gpui_kit::Keystroke::parse(QUIT)
+        .is_ok_and(|quit| quit.modifiers == keystroke.modifiers && quit.key == keystroke.key)
+}
+
 pub fn bind_default_keys(cx: &mut App) {
     let context = Some(FILE_MANAGER_CONTEXT);
     // gpui-component's menus (Linux) show an action's last-registered
     // binding, the native macOS menu its first. So an action with a second
     // key has its primary key registered both before and after it.
-    let quit = if cfg!(target_os = "macos") {
-        "cmd-q"
-    } else {
-        "alt-f4"
-    };
+    let quit = QUIT;
     let copy_path = if cfg!(target_os = "macos") {
         "cmd-c"
     } else {

@@ -1,41 +1,45 @@
-//! Feeds the panel watchers' changes to the commander as quiet reloads (see
-//! core `watch` and `Commander::watch_reload`). The watchers call back on
-//! their own threads; a channel brings each change to one task on the UI
-//! thread, which waits without polling.
+//! Feeds the folder watchers' reports to the commander as quiet reloads
+//! (see core `watch`, `Commander::watch_changed` and
+//! `Commander::watch_started`). The watchers call back on their own
+//! threads; a channel brings each report to one task on the UI thread,
+//! which waits without polling.
+
+use std::path::PathBuf;
 
 use futures::StreamExt;
 use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender};
 use gpui_kit::{App, Context, Window};
 use yagni_commander_core::Side;
-use yagni_commander_core::watch::PanelWatcher;
+use yagni_commander_core::watch::{PanelWatcher, Report};
 
 use super::FileManager;
 
-const SIDES: [Side; 2] = [Side::Left, Side::Right];
-
-/// One watcher per panel (left, right), each reporting its side.
-pub(super) fn spawn_watchers(changes: &UnboundedSender<Side>) -> [PanelWatcher; 2] {
-    SIDES.map(|side| {
-        let changes = changes.clone();
-        PanelWatcher::spawn(move || {
-            let _ = changes.unbounded_send(side);
+/// Two watchers, enough for the two front tabs. Each report names its
+/// folder, so a watcher isn't tied to a side.
+pub(super) fn spawn_watchers(reports: &UnboundedSender<Report>) -> [PanelWatcher; 2] {
+    [(), ()].map(|_| {
+        let reports = reports.clone();
+        PanelWatcher::spawn(move |report| {
+            let _ = reports.unbounded_send(report);
         })
     })
 }
 
 impl FileManager {
-    /// Turns each reported change into a quiet reload, until the window
-    /// closes.
+    /// Turns each report into quiet reloads, until the window closes.
     pub(super) fn receive_changes(
-        mut received: UnboundedReceiver<Side>,
+        mut received: UnboundedReceiver<Report>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         cx.spawn_in(window, async move |this, cx| {
-            while let Some(side) = received.next().await {
+            while let Some(report) = received.next().await {
                 let alive = this.update(cx, |this, cx| {
                     this.commander.update(cx, |c, cx| {
-                        c.watch_reload(side);
+                        match report {
+                            Report::Changed(dir) => c.watch_changed(&dir),
+                            Report::Started(dir, modified) => c.watch_started(&dir, modified),
+                        }
                         cx.notify();
                     });
                 });
@@ -47,18 +51,42 @@ impl FileManager {
         .detach();
     }
 
-    /// Points each watcher at its panel's folder, when that changed
-    /// (navigation, Ctrl-U, Alt-Z, the fallback to a parent).
+    /// Points the watchers at the front tabs' folders, when those changed
+    /// (navigation, a tab switch, the fallback to a parent). A watcher
+    /// already on a needed folder keeps it, so Ctrl-U moves no watch and
+    /// loses no change; a folder shown on both sides is watched once.
     pub(super) fn watch_panels(&mut self, cx: &App) {
-        for (i, side) in SIDES.into_iter().enumerate() {
-            let path = self.commander.read(cx).panel(side).real_dir();
-            if self.watched[i].as_deref() == Some(path) {
+        let commander = self.commander.read(cx);
+        let mut needed: Vec<PathBuf> = Vec::new();
+        for side in [Side::Left, Side::Right] {
+            let panel = commander.panel(side);
+            // Not before its first listing (a restored tab): the folder may
+            // be on a dead mount, and the read decides where the tab goes.
+            if !panel.is_loaded() {
                 continue;
             }
-            self.watched[i] = Some(path.to_path_buf());
-            if let Some(watchers) = &self.watchers {
-                watchers[i].watch(path.to_path_buf());
+            let dir = panel.real_dir();
+            if !needed.iter().any(|d| d == dir) {
+                needed.push(dir.to_path_buf());
             }
+        }
+        let mut claimed = [false; 2];
+        let mut unwatched = Vec::new();
+        for dir in needed {
+            match (0..2).find(|&i| !claimed[i] && self.watched[i].as_ref() == Some(&dir)) {
+                Some(i) => claimed[i] = true,
+                None => unwatched.push(dir),
+            }
+        }
+        for dir in unwatched {
+            let Some(i) = (0..2).find(|&i| !claimed[i]) else {
+                break;
+            };
+            claimed[i] = true;
+            if let Some(watchers) = &mut self.watchers {
+                watchers[i].watch(dir.clone());
+            }
+            self.watched[i] = Some(dir);
         }
     }
 }

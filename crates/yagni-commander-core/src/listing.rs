@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::SystemTime;
 
 use crate::archive::{ArchiveIndex, Stamp};
 use crate::entry::{Entry, read_entries};
@@ -34,6 +35,9 @@ pub struct LoadRequest {
     /// A missing `path` (not an unreadable one) is replaced by its nearest
     /// existing parent: go to file, leaving search results.
     pub up_if_missing: bool,
+    /// A quiet re-read (the watcher, a tab coming to the front): the UI
+    /// may hold it back a little (see `file_manager/loads.rs`).
+    pub quiet: bool,
 }
 
 /// An archive to list for a [`LoadRequest`].
@@ -69,6 +73,9 @@ pub struct Listing {
     pub archive: Option<Arc<ArchiveIndex>>,
     /// The search results shown instead of the folder's entries.
     pub results: Option<Arc<Results>>,
+    /// The folder's modification time, read just before its entries (a
+    /// plain folder only). See [`crate::Commander::watch_started`].
+    pub modified: Option<SystemTime>,
 }
 
 /// Reads the requested directory, or with a fallback, the first readable
@@ -82,11 +89,15 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
     }
     let read = |path: &Path| {
         request.progress.store(0, Ordering::Relaxed);
+        // Before the entries: a change made during the read leaves a newer
+        // time than this.
+        let modified = dir_modified(path);
         read_entries(path, &request.progress).map(|entries| Listing {
             path: path.to_path_buf(),
             entries,
             archive: None,
             results: None,
+            modified,
         })
     };
     if request.up_if_missing {
@@ -110,6 +121,11 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
         }
     }
     Err(first_error.expect("the fallback folder is always tried"))
+}
+
+/// A folder's modification time, if it can be read.
+pub fn dir_modified(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// `path`, or its nearest parent where `path` is missing. Any other error
@@ -165,6 +181,7 @@ mod tests {
             archive: None,
             results: None,
             up_if_missing: false,
+            quiet: false,
         }
     }
 

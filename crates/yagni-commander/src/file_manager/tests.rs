@@ -1,5 +1,6 @@
 use super::*;
 use gpui_kit::{TestAppContext, VisualTestContext};
+use yagni_commander_core::watch::Report;
 
 /// The globals and keymap a file manager window needs.
 fn setup(cx: &mut TestAppContext) {
@@ -24,10 +25,9 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
         let view = cx.new(|cx| FileManager::new(commander, None, window, cx));
         gpui_kit::base::Root::new(view, window, cx)
     });
-    // No real watchers: tests report changes with `changed`. Enter on a
-    // file must never start a real application.
+    // No real watchers (see `FileManager::new`): tests report changes with
+    // `changed`. Enter on a file must never start a real application.
     file_manager(cx).update(cx, |this, _| {
-        this.watchers = None;
         this.opener = "true".into();
         this.terminal = Some("true".into());
         this.temp_dir = None;
@@ -139,13 +139,17 @@ fn a_background_tab_shows_changes_when_it_comes_to_the_front(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn the_watcher_follows_the_tab_in_front(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
+    // The right side shows `b`, so each watched folder is one side's.
+    cx.simulate_keystrokes("tab down down enter tab");
     cx.simulate_keystrokes("ctrl-t down enter");
-    let watched = |cx: &mut VisualTestContext| {
-        file_manager(cx).read_with(cx, |this, _| this.watched[0].clone())
+    let watches = |cx: &mut VisualTestContext, dir: std::path::PathBuf| {
+        file_manager(cx).read_with(cx, |this, _| this.watched.contains(&Some(dir)))
     };
-    assert_eq!(watched(cx), Some(tmp.path().join("a")));
+    assert!(watches(cx, tmp.path().join("a")));
+    assert!(!watches(cx, tmp.path().to_path_buf()));
     cx.simulate_keystrokes("ctrl-tab");
-    assert_eq!(watched(cx), Some(tmp.path().to_path_buf()));
+    assert!(watches(cx, tmp.path().to_path_buf()));
+    assert!(watches(cx, tmp.path().join("b")));
 }
 
 #[gpui_kit::test]
@@ -1016,6 +1020,47 @@ fn wheel_scrolls_the_list_without_moving_the_cursor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_reload_shifting_the_cursor_keeps_a_wheel_scrolled_view(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    for i in 0..200 {
+        std::fs::write(tmp.path().join(format!("file{i:03}")), b"").unwrap();
+    }
+    cx.simulate_keystrokes("ctrl-r end");
+    assert!(
+        bounds(cx, "row-left-0".into()).is_none(),
+        "the cursor at the end"
+    );
+    let position = center(cx, "row-left-190");
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position,
+        delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 400.0)),
+        ..Default::default()
+    });
+    assert!(
+        bounds(cx, "row-left-0".into()).is_some(),
+        "scrolled to the top"
+    );
+    // Entries before the cursor's: its index changes, its entry doesn't.
+    std::fs::write(tmp.path().join("aaa"), b"").unwrap();
+    changed(cx, Side::Left);
+    assert_eq!(
+        commander.read_with(cx, |c, _| c
+            .panel(Side::Left)
+            .cursor_entry()
+            .unwrap()
+            .label
+            .clone()),
+        "file199"
+    );
+    assert!(bounds(cx, "row-left-0".into()).is_some(), "the view stays");
+    // A cursor in view is followed.
+    cx.simulate_keystrokes("home");
+    std::fs::write(tmp.path().join("aab"), b"").unwrap();
+    changed(cx, Side::Left);
+    assert!(bounds(cx, "row-left-0".into()).is_some());
+}
+
+#[gpui_kit::test]
 fn dragging_the_divider_resizes_the_panels(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let before = bounds(cx, "row-left-0".into()).unwrap().size.width;
@@ -1420,7 +1465,12 @@ fn loading(commander: &Entity<Commander>, cx: &VisualTestContext) -> bool {
 
 /// The watcher reports a change in `side`'s folder.
 fn changed(cx: &mut VisualTestContext, side: Side) {
-    file_manager(cx).update(cx, |this, _| this.changes.unbounded_send(side).unwrap());
+    let dir = commander_of(cx).read_with(cx, |c, _| c.panel(side).real_dir().to_path_buf());
+    report(cx, Report::Changed(dir));
+}
+
+fn report(cx: &mut VisualTestContext, report: Report) {
+    file_manager(cx).update(cx, |this, _| this.changes.unbounded_send(report).unwrap());
     cx.run_until_parked();
 }
 
@@ -1441,6 +1491,7 @@ fn refreshing(commander: &Entity<Commander>, cx: &VisualTestContext) -> bool {
 #[gpui_kit::test]
 fn a_change_outside_reloads_the_panel(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("tab down enter tab"); // right in `a`
     std::fs::write(tmp.path().join("new"), b"").unwrap();
     changed(cx, Side::Left);
     assert!(labels(&commander, Side::Left, cx).contains(&"new".to_owned()));
@@ -1479,16 +1530,116 @@ fn keys_and_dialogs_work_during_a_quiet_reload(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_watch_start_rereads_a_folder_changed_since_its_listing(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("tab down enter tab"); // right in `a`
+    let a = tmp.path().join("a");
+    std::fs::write(a.join("new"), b"").unwrap();
+    let modified = yagni_commander_core::dir_modified(&a);
+    report(cx, Report::Started(a, modified));
+    assert!(labels(&commander, Side::Right, cx).contains(&"new".to_owned()));
+}
+
+#[gpui_kit::test]
+fn escape_stops_a_hung_quiet_read(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("tab down enter tab"); // right in `a`
+    use_held_loads(cx);
+    std::fs::write(tmp.path().join("hold"), b"").unwrap();
+    changed(cx, Side::Left);
+    assert!(refreshing(&commander, cx));
+    cx.simulate_keystrokes("escape");
+    assert!(!refreshing(&commander, cx));
+    wait_until(cx, |cx| {
+        file_manager(cx).read_with(cx, |this, _| this.loads.is_empty())
+    });
+    std::fs::remove_file(tmp.path().join("hold")).unwrap();
+}
+
+#[gpui_kit::test]
+fn after_a_slow_quiet_read_the_next_one_waits(cx: &mut TestAppContext) {
+    let (tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("tab down enter tab"); // right in `a`
+    use_held_loads(cx);
+    let hold = tmp.path().join("hold");
+    std::fs::write(&hold, b"").unwrap();
+    changed(cx, Side::Left);
+    for _ in 0..10 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+    }
+    std::fs::remove_file(&hold).unwrap();
+    wait_until(cx, |cx| !refreshing(&commander, cx));
+    // The next one is held back about as long (500 ms on the test clock).
+    std::fs::write(tmp.path().join("new"), b"").unwrap();
+    changed(cx, Side::Left);
+    for _ in 0..4 {
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(50));
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(refreshing(&commander, cx), "still waiting");
+    assert!(!labels(&commander, Side::Left, cx).contains(&"new".to_owned()));
+    wait_until(cx, |cx| !refreshing(&commander, cx));
+    assert!(labels(&commander, Side::Left, cx).contains(&"new".to_owned()));
+}
+
+#[gpui_kit::test]
+fn a_restored_tab_is_watched_only_once_read(cx: &mut TestAppContext) {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("a");
+    std::fs::create_dir(&a).unwrap();
+    setup(cx);
+    let commander = Commander::start_tabs(
+        yagni_commander_core::StartTabs {
+            dirs: vec![tmp.path().to_path_buf(), a.clone()],
+            active: 0,
+        },
+        yagni_commander_core::StartTabs::one(tmp.path().to_path_buf()),
+        false,
+        tmp.path().to_path_buf(),
+    );
+    let commander = cx.new(|_| commander);
+    let cx = window_on(commander.clone(), cx);
+    use_held_loads(cx);
+    let loads_done = |cx: &mut VisualTestContext| {
+        file_manager(cx).read_with(cx, |this, _| this.loads.is_empty())
+    };
+    wait_until(cx, loads_done);
+    let watches = |cx: &mut VisualTestContext| {
+        file_manager(cx).read_with(cx, |this, _| this.watched.contains(&Some(a.clone())))
+    };
+    std::fs::write(a.join("hold"), b"").unwrap();
+    cx.simulate_keystrokes("ctrl-tab"); // its first read, held
+    assert!(loading(&commander, cx));
+    assert!(!watches(cx), "not before its read");
+    std::fs::remove_file(a.join("hold")).unwrap();
+    wait_until(cx, loads_done);
+    assert!(watches(cx));
+}
+
+#[gpui_kit::test]
 fn the_watchers_follow_the_panels(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     let watched =
         |cx: &mut VisualTestContext| file_manager(cx).read_with(cx, |this, _| this.watched.clone());
     let root = Some(tmp.path().to_path_buf());
     let a = Some(tmp.path().join("a"));
-    assert_eq!(watched(cx), [root.clone(), root.clone()]);
+    // One folder on both sides is watched once.
+    assert_eq!(watched(cx), [root.clone(), None]);
     cx.simulate_keystrokes("down enter");
-    assert_eq!(watched(cx), [a.clone(), root.clone()]);
+    assert_eq!(watched(cx), [root.clone(), a.clone()]);
+    // Ctrl-U moves no watch, so a change seen just before isn't lost.
     cx.simulate_keystrokes("ctrl-u");
+    assert_eq!(watched(cx), [root.clone(), a.clone()]);
+    // Ctrl-R watches both again (a symlinked folder may point elsewhere):
+    // crossed watchers are assigned afresh, in side order.
+    let crossed = [a.clone(), root.clone()];
+    file_manager(cx).update(cx, |this, _| this.watched = crossed);
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
     assert_eq!(watched(cx), [root, a]);
 }
 
@@ -2051,6 +2202,23 @@ fn turning_logging_on_and_off_takes_effect_at_once(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn ctrl_r_retries_a_log_that_failed_to_start(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let logs = tempfile::tempdir().unwrap();
+    let not_a_folder = logs.path().join("file");
+    std::fs::write(&not_a_folder, b"").unwrap();
+    use_config(cfg.path(), "", cx);
+    use_log_dir(&not_a_folder, cx);
+    change_setting(Setting::Log(true), cx);
+    assert!(commander.read_with(cx, |c, _| c.log().is_none()));
+    use_log_dir(logs.path(), cx);
+    cx.simulate_keystrokes("ctrl-r");
+    cx.run_until_parked();
+    assert!(commander.read_with(cx, |c, _| c.log().is_some()));
+}
+
+#[gpui_kit::test]
 fn the_editor_setting_is_used_by_f4_at_once(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
@@ -2602,6 +2770,30 @@ mod menu_bar {
     }
 
     #[gpui_kit::test]
+    fn clicking_a_title_ends_the_quick_search(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("b");
+        assert!(search(&commander, cx).is_some());
+        click(cx, "menu-Files", 1);
+        assert_eq!(menu_open(cx), Some(0));
+        assert_eq!(search(&commander, cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn alt_f4_quits_while_a_menu_is_open(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let quit = std::rc::Rc::new(std::cell::Cell::new(false));
+        cx.update(|_, cx| {
+            let quit = quit.clone();
+            cx.on_action(move |_: &crate::actions::Quit, _| quit.set(true));
+        });
+        cx.simulate_keystrokes("f10");
+        assert_eq!(menu_open(cx), Some(0));
+        cx.simulate_keystrokes("alt-f4");
+        assert!(quit.get());
+    }
+
+    #[gpui_kit::test]
     fn hovering_another_title_switches_an_open_menu(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         click(cx, "menu-Files", 1);
@@ -2974,6 +3166,76 @@ mod hotlist {
         assert!(hotlist_open(cx));
         click(cx, "row-right-1", 1);
         assert!(!hotlist_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn deactivating_the_window_closes_it(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(hotlist_open(cx));
+        cx.deactivate_window();
+        assert!(!hotlist_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_quit_key_still_quits_while_it_is_open(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        let quit = std::rc::Rc::new(std::cell::Cell::new(false));
+        cx.update(|_, cx| {
+            let quit = quit.clone();
+            cx.on_action(move |_: &crate::actions::Quit, _| quit.set(true));
+        });
+        cx.simulate_keystrokes("ctrl-d");
+        assert!(hotlist_open(cx));
+        cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+            "cmd-q"
+        } else {
+            "alt-f4"
+        });
+        assert!(quit.get());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui_kit::test]
+    fn the_menu_bar_opens_it_from_the_keyboard(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        activate(cx);
+        // Commands > Directory hotlist, the fourth item.
+        cx.simulate_keystrokes("f10 right down down down down enter");
+        assert!(hotlist_open(cx), "the closing menu leaves it open");
+        cx.simulate_keystrokes("b");
+        assert!(!hotlist_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_save_shows_why_and_keeps_the_entry_for_the_session(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        let before = std::fs::read_to_string(&file).unwrap();
+        // The atomic write puts a temporary file next to the config.
+        std::fs::set_permissions(cfg.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        cx.simulate_keystrokes("ctrl-d up up enter");
+        cx.simulate_input("&Here");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        std::fs::set_permissions(cfg.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(
+            box_text(cx).starts_with("Hotlist not saved\n"),
+            "{}",
+            box_text(cx)
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+        assert_eq!(config(cx).hotlist.len(), 3, "used until the app quits");
     }
 
     #[gpui_kit::test]

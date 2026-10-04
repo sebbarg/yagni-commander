@@ -4,8 +4,10 @@
 //! hang only that panel's watcher.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
@@ -13,6 +15,21 @@ use notify::{Event, EventKind, RecursiveMode, Watcher};
 pub const FIRST_DELAY: Duration = Duration::from_millis(100);
 /// Least time between two reloads while changes keep coming.
 pub const MIN_INTERVAL: Duration = Duration::from_secs(1);
+/// A `watch` or `unwatch` call running this long is taken as hung (a dead
+/// mount): the next folder gets a new thread.
+pub const HUNG_AFTER: Duration = Duration::from_secs(2);
+
+/// What a [`PanelWatcher`] reports. The folder is named as it was given
+/// to [`PanelWatcher::watch`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Report {
+    /// The folder's listing changed (throttled, see [`Throttle`]).
+    Changed(PathBuf),
+    /// The watch is in place, and the folder was last modified at this
+    /// time, read just after. A listing read before the watch began may
+    /// miss a change made in between; its folder time tells.
+    Started(PathBuf, Option<SystemTime>),
+}
 
 /// When to reload, given the changes seen: [`FIRST_DELAY`] after the first
 /// change, then at most once per [`MIN_INTERVAL`]. Every change is followed
@@ -69,7 +86,19 @@ pub fn is_relevant(event: &Event, dir: &Path) -> bool {
         && event
             .paths
             .iter()
-            .any(|p| p == dir || p.parent() == Some(dir))
+            .any(|p| same_path(p, dir) || p.parent().is_some_and(|p| same_path(p, dir)))
+}
+
+/// macOS folders are usually case-insensitive, and FSEvents may name a
+/// path in its on-disk case while the panel's differs. A false match costs
+/// a re-read; a missed one, a stale panel.
+fn same_path(a: &Path, b: &Path) -> bool {
+    same_path_ignoring_case(a, b, cfg!(target_os = "macos"))
+}
+
+fn same_path_ignoring_case(a: &Path, b: &Path, ignore_case: bool) -> bool {
+    a == b
+        || ignore_case && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase()
 }
 
 enum Msg {
@@ -83,46 +112,97 @@ enum Msg {
 /// Forwards a notify watcher's events to the watcher thread.
 type Forward = Box<dyn FnMut(notify::Result<Event>) + Send>;
 
-/// Watches one panel's folder on its own thread and calls `on_change`
-/// (throttled, see [`Throttle`]) when its listing changes. Only that thread
-/// ever calls notify's `watch`, which can hang on a dead mount.
-#[derive(Debug)]
+/// Shared with a watcher thread.
+#[derive(Default)]
+struct Busy {
+    /// Since when the thread has been inside a `watch` or `unwatch` call,
+    /// if it is.
+    since: Mutex<Option<Instant>>,
+    /// Given up as hung: if its call ever returns, it reports nothing.
+    abandoned: std::sync::atomic::AtomicBool,
+}
+
+type Shared = Arc<Busy>;
+
+/// Starts a watcher thread.
+type Spawn = Box<dyn Fn() -> (Sender<Msg>, Shared) + Send>;
+
+/// Watches one panel's folder on its own thread and calls `on_report` when
+/// its listing changes (throttled) or a watch begins. Only that thread ever
+/// calls notify's `watch`, which can hang on a dead mount; a thread hung
+/// there is left behind and the next folder gets a new one.
 pub struct PanelWatcher {
     tx: Sender<Msg>,
+    busy: Shared,
+    spawn: Spawn,
+}
+
+impl std::fmt::Debug for PanelWatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PanelWatcher").finish_non_exhaustive()
+    }
 }
 
 impl PanelWatcher {
-    pub fn spawn(on_change: impl Fn() + Send + 'static) -> Self {
-        Self::start(notify::recommended_watcher, on_change)
+    pub fn spawn(on_report: impl Fn(Report) + Send + Sync + 'static) -> Self {
+        Self::start(notify::recommended_watcher, on_report)
     }
 
-    /// `make` builds the notify watcher on the new thread, from a handler
+    /// `make` builds the notify watcher on each new thread, from a handler
     /// that forwards its events to that thread.
     fn start<W: Watcher>(
-        make: impl FnOnce(Forward) -> notify::Result<W> + Send + 'static,
-        on_change: impl Fn() + Send + 'static,
+        make: impl Fn(Forward) -> notify::Result<W> + Send + Sync + 'static,
+        on_report: impl Fn(Report) + Send + Sync + 'static,
     ) -> Self {
-        let (tx, rx) = mpsc::channel();
-        let events = tx.clone();
-        // If the thread can't start, `rx` is dropped with the closure and
-        // `watch` sends go nowhere: the panel is simply not watched.
-        let _ = std::thread::Builder::new()
-            .name("dir-watch".into())
-            .spawn(move || {
-                let forward: Forward = Box::new(move |event| {
-                    let _ = events.send(Msg::Fs(event));
+        let make = Arc::new(make);
+        let on_report = Arc::new(on_report);
+        let spawn: Spawn = Box::new(move || {
+            let (tx, rx) = mpsc::channel();
+            let busy = Shared::default();
+            let events = tx.clone();
+            let (make, on_report, thread_busy) = (make.clone(), on_report.clone(), busy.clone());
+            // If the thread can't start, `rx` is dropped with the closure and
+            // `watch` sends go nowhere: the panel is simply not watched.
+            let _ = std::thread::Builder::new()
+                .name("dir-watch".into())
+                .spawn(move || {
+                    let forward: Forward = Box::new(move |event| {
+                        let _ = events.send(Msg::Fs(event));
+                    });
+                    // No watcher (e.g. inotify instance limit): nothing to do.
+                    if let Ok(watcher) = make(forward) {
+                        serve(&rx, watcher, &thread_busy, |report| {
+                            if !thread_busy.abandoned.load(Ordering::SeqCst) {
+                                on_report(report);
+                            }
+                        });
+                    }
                 });
-                // No watcher (e.g. inotify instance limit): nothing to do.
-                if let Ok(watcher) = make(forward) {
-                    serve(&rx, watcher, on_change);
-                }
-            });
-        Self { tx }
+            (tx, busy)
+        });
+        let (tx, busy) = spawn();
+        Self { tx, busy, spawn }
     }
 
     /// Watches `path` from now on, instead of the previous folder.
-    pub fn watch(&self, path: PathBuf) {
-        let _ = self.tx.send(Msg::Watch(path, None));
+    pub fn watch(&mut self, path: PathBuf) {
+        self.send_watch(path, None);
+    }
+
+    fn send_watch(&mut self, path: PathBuf, done: Option<Sender<()>>) {
+        let hung = self
+            .busy
+            .since
+            .lock()
+            .map(|since| since.is_some_and(|since| since.elapsed() >= HUNG_AFTER))
+            .unwrap_or(true);
+        if hung {
+            // It stops, silently, if its call ever returns.
+            self.busy.abandoned.store(true, Ordering::SeqCst);
+            let _ = self.tx.send(Msg::Stop);
+            (self.tx, self.busy) = (self.spawn)();
+        }
+        let _ = self.tx.send(Msg::Watch(path, done));
     }
 }
 
@@ -135,8 +215,20 @@ impl Drop for PanelWatcher {
 }
 
 /// The watcher thread: follows `Watch` messages, throttles relevant events,
-/// calls `on_change` when a reload is due.
-fn serve<W: Watcher>(rx: &Receiver<Msg>, mut watcher: W, on_change: impl Fn()) {
+/// reports a change when a reload is due. `busy` holds when a `watch` or
+/// `unwatch` call began, while one runs.
+fn serve<W: Watcher>(rx: &Receiver<Msg>, mut watcher: W, busy: &Busy, report: impl Fn(Report)) {
+    let calling = |f: &mut dyn FnMut()| {
+        if let Ok(mut since) = busy.since.lock() {
+            *since = Some(Instant::now());
+        }
+        f();
+        if let Ok(mut since) = busy.since.lock() {
+            *since = None;
+        }
+    };
+    // The folder as given (what reports name) and as watched (canonical).
+    let mut given: Option<PathBuf> = None;
     let mut dir: Option<PathBuf> = None;
     let mut throttle = Throttle::default();
     // The folder itself was deleted or moved: its watch died with it (inotify
@@ -151,19 +243,22 @@ fn serve<W: Watcher>(rx: &Receiver<Msg>, mut watcher: W, on_change: impl Fn()) {
         let now = Instant::now();
         if throttle.deadline().is_some_and(|due| now >= due) {
             if lost && let Some(dir) = &dir {
-                lost = !rewatch(&mut watcher, dir);
+                calling(&mut || lost = !rewatch(&mut watcher, dir));
                 retry = lost.then(|| now + MIN_INTERVAL);
             }
             throttle.fire(now);
-            on_change();
+            if let Some(given) = &given {
+                report(Report::Changed(given.clone()));
+            }
         }
         if retry.is_some_and(|at| now >= at)
-            && let Some(dir) = &dir
+            && let (Some(dir), Some(given)) = (&dir, &given)
         {
-            lost = !rewatch(&mut watcher, dir);
+            calling(&mut || lost = !rewatch(&mut watcher, dir));
             retry = lost.then(|| now + MIN_INTERVAL);
             if !lost {
-                on_change(); // the folder is back, maybe with entries
+                // The folder is back, maybe with entries.
+                report(Report::Changed(given.clone()));
             }
         }
         let wake = [throttle.deadline(), retry].into_iter().flatten().min();
@@ -173,15 +268,27 @@ fn serve<W: Watcher>(rx: &Receiver<Msg>, mut watcher: W, on_change: impl Fn()) {
         };
         match msg {
             Ok(Msg::Watch(path, done)) => {
+                given = None;
                 if let Some(old) = dir.take() {
-                    let _ = watcher.unwatch(&old);
+                    calling(&mut || {
+                        let _ = watcher.unwatch(&old);
+                    });
                 }
                 throttle.reset();
                 (lost, retry) = (false, None);
                 // Events name the real path (macOS: /private/tmp for /tmp).
-                let path = path.canonicalize().unwrap_or(path);
-                if watcher.watch(&path, RecursiveMode::NonRecursive).is_ok() {
-                    dir = Some(path);
+                let real = path.canonicalize().unwrap_or_else(|_| path.clone());
+                let mut watching = false;
+                calling(&mut || {
+                    watching = watcher.watch(&real, RecursiveMode::NonRecursive).is_ok()
+                });
+                if watching {
+                    // After the watch: a later change is seen, an earlier
+                    // one shows in this time.
+                    let modified = crate::listing::dir_modified(&real);
+                    report(Report::Started(path.clone(), modified));
+                    dir = Some(real);
+                    given = Some(path);
                 }
                 if let Some(done) = done {
                     let _ = done.send(());
@@ -204,7 +311,7 @@ fn is_self_loss(event: &Event, dir: &Path) -> bool {
     matches!(
         event.kind,
         EventKind::Remove(_) | EventKind::Modify(notify::event::ModifyKind::Name(_))
-    ) && event.paths.iter().any(|p| p == dir)
+    ) && event.paths.iter().any(|p| same_path(p, dir))
 }
 
 /// Watches `dir` again after its watch died. Returns whether that worked.
@@ -216,15 +323,15 @@ fn rewatch<W: Watcher>(watcher: &mut W, dir: &Path) -> bool {
 #[cfg(test)]
 impl PanelWatcher {
     /// Like [`PanelWatcher::watch`], but returns once the watch is in place.
-    fn watch_and_wait(&self, path: PathBuf) {
+    fn watch_and_wait(&mut self, path: PathBuf) {
         let (done, rx) = mpsc::channel();
-        self.tx.send(Msg::Watch(path, Some(done))).unwrap();
+        self.send_watch(path, Some(done));
         rx.recv_timeout(Duration::from_secs(5)).unwrap();
     }
 
     /// A watcher that sees no real events; feed it with `send_event`.
-    fn with_null_watcher(on_change: impl Fn() + Send + 'static) -> Self {
-        Self::start(|_| Ok(notify::NullWatcher), on_change)
+    fn with_null_watcher(on_report: impl Fn(Report) + Send + Sync + 'static) -> Self {
+        Self::start(|_| Ok(notify::NullWatcher), on_report)
     }
 
     fn send_event(&self, event: Event) {
@@ -363,7 +470,7 @@ mod tests {
     }
 
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc::{self, Receiver};
 
     const WAIT: Duration = Duration::from_secs(5);
@@ -371,8 +478,10 @@ mod tests {
     /// A real watcher whose changes arrive on the receiver.
     fn watcher() -> (PanelWatcher, Receiver<()>) {
         let (tx, rx) = mpsc::channel();
-        let w = PanelWatcher::spawn(move || {
-            let _ = tx.send(());
+        let w = PanelWatcher::spawn(move |report| {
+            if matches!(report, Report::Changed(_)) {
+                let _ = tx.send(());
+            }
         });
         (w, rx)
     }
@@ -393,7 +502,7 @@ mod tests {
     #[test]
     fn creating_deleting_and_renaming_a_file_fire() {
         let tmp = tempfile::tempdir().unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
         std::fs::write(tmp.path().join("f"), b"").unwrap();
         assert!(changed(&rx), "create");
@@ -408,7 +517,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("d");
         std::fs::create_dir(&dir).unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(dir.clone());
         std::fs::remove_dir(&dir).unwrap();
         assert!(changed(&rx));
@@ -418,7 +527,7 @@ mod tests {
     fn reading_the_folder_fires_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("f"), b"x").unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
         let request = crate::LoadRequest {
             id: 1,
@@ -429,6 +538,7 @@ mod tests {
             archive: None,
             results: None,
             up_if_missing: false,
+            quiet: false,
         };
         crate::read_listing(&request).unwrap();
         std::fs::read(tmp.path().join("f")).unwrap(); // F3 opens files too
@@ -439,7 +549,7 @@ mod tests {
     fn changes_in_subfolders_fire_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
         std::fs::write(tmp.path().join("sub/f"), b"").unwrap();
         assert!(quiet(&rx));
@@ -449,7 +559,7 @@ mod tests {
     fn watching_a_new_folder_ignores_the_old_one() {
         let one = tempfile::tempdir().unwrap();
         let two = tempfile::tempdir().unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(one.path().to_path_buf());
         w.watch_and_wait(two.path().to_path_buf());
         std::fs::write(one.path().join("f"), b"").unwrap();
@@ -463,7 +573,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("real")).unwrap();
         std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("link")).unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().join("link"));
         std::fs::write(tmp.path().join("real/f"), b"").unwrap();
         assert!(changed(&rx));
@@ -472,7 +582,7 @@ mod tests {
     #[test]
     fn a_missing_folder_is_simply_not_watched() {
         let tmp = tempfile::tempdir().unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().join("gone"));
         std::fs::create_dir(tmp.path().join("gone")).unwrap();
         std::fs::write(tmp.path().join("gone/f"), b"").unwrap();
@@ -485,7 +595,7 @@ mod tests {
     #[test]
     fn dropping_the_watcher_ends_its_thread() {
         let tmp = tempfile::tempdir().unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
         drop(w);
         // The thread owned the only sender: it is gone once the thread ends.
@@ -498,10 +608,12 @@ mod tests {
     #[test]
     fn a_flood_of_events_fires_about_once_a_second() {
         let count = Arc::new(AtomicUsize::new(0));
-        let w = PanelWatcher::with_null_watcher({
+        let mut w = PanelWatcher::with_null_watcher({
             let count = count.clone();
-            move || {
-                count.fetch_add(1, Ordering::SeqCst);
+            move |report| {
+                if matches!(report, Report::Changed(_)) {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
             }
         });
         let dir = tempfile::tempdir().unwrap();
@@ -528,7 +640,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("d");
         std::fs::create_dir(&dir).unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(dir.clone());
         std::fs::remove_dir(&dir).unwrap();
         std::fs::create_dir(&dir).unwrap();
@@ -542,7 +654,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("d");
         std::fs::create_dir(&dir).unwrap();
-        let (w, rx) = watcher();
+        let (mut w, rx) = watcher();
         w.watch_and_wait(dir.clone());
         std::fs::remove_dir(&dir).unwrap();
         assert!(changed(&rx), "the delete");
@@ -550,5 +662,107 @@ mod tests {
         assert!(changed(&rx), "the folder is back");
         std::fs::write(dir.join("f"), b"").unwrap();
         assert!(changed(&rx), "a change in the new folder");
+    }
+
+    #[test]
+    fn reports_name_the_folder_as_given() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("real")).unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("real"), tmp.path().join("link")).unwrap();
+        let link = tmp.path().join("link");
+        let (tx, rx) = mpsc::channel();
+        let mut w = PanelWatcher::spawn(move |report| {
+            let _ = tx.send(report);
+        });
+        w.watch_and_wait(link.clone());
+        assert!(format!("{w:?}").starts_with("PanelWatcher"));
+        let modified = crate::listing::dir_modified(&link);
+        assert!(modified.is_some());
+        assert_eq!(
+            rx.recv_timeout(WAIT).unwrap(),
+            Report::Started(link.clone(), modified)
+        );
+        std::fs::write(tmp.path().join("real/f"), b"").unwrap();
+        assert_eq!(rx.recv_timeout(WAIT).unwrap(), Report::Changed(link));
+    }
+
+    #[test]
+    fn a_folder_that_cannot_be_watched_reports_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let mut w = PanelWatcher::spawn(move |report| {
+            let _ = tx.send(report);
+        });
+        w.watch_and_wait(tmp.path().join("gone"));
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    /// Hangs in `watch` on any folder named `hang`, until `release` is set.
+    struct HangingWatcher {
+        release: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Watcher for HangingWatcher {
+        fn new<F: notify::EventHandler>(_: F, _: notify::Config) -> notify::Result<Self> {
+            unreachable!("built by the test")
+        }
+
+        fn watch(&mut self, path: &Path, _: RecursiveMode) -> notify::Result<()> {
+            while path.ends_with("hang") && !self.release.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(())
+        }
+
+        fn unwatch(&mut self, _: &Path) -> notify::Result<()> {
+            Ok(())
+        }
+
+        fn kind() -> notify::WatcherKind {
+            notify::WatcherKind::NullWatcher
+        }
+    }
+
+    #[test]
+    fn a_watch_hung_on_a_dead_mount_gets_a_new_thread_for_the_next_folder() {
+        let release = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let threads = Arc::new(AtomicUsize::new(0));
+        let (tx, rx) = mpsc::channel();
+        let mut w = PanelWatcher::start(
+            {
+                let (release, threads) = (release.clone(), threads.clone());
+                move |_| {
+                    threads.fetch_add(1, Ordering::SeqCst);
+                    Ok(HangingWatcher {
+                        release: release.clone(),
+                    })
+                }
+            },
+            move |report| {
+                let _ = tx.send(report);
+            },
+        );
+        w.watch(PathBuf::from("/dead/hang"));
+        // Soon after: still taken as busy, not hung, so no new thread yet.
+        std::thread::sleep(Duration::from_millis(100));
+        let ok = PathBuf::from("/ok");
+        w.watch(ok.clone());
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+        std::thread::sleep(HUNG_AFTER);
+        w.watch(ok.clone());
+        assert_eq!(rx.recv_timeout(WAIT).unwrap(), Report::Started(ok, None));
+        assert_eq!(threads.load(Ordering::SeqCst), 2);
+        // The old thread gets to its queued folder, but says nothing.
+        release.store(true, Ordering::SeqCst);
+        assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn paths_match_ignoring_case_only_where_asked() {
+        let (a, b) = (Path::new("/Users/Me/Src"), Path::new("/users/me/src"));
+        assert!(same_path_ignoring_case(a, b, true));
+        assert!(!same_path_ignoring_case(a, b, false));
+        assert!(same_path_ignoring_case(a, a, false));
+        assert!(!same_path_ignoring_case(a, Path::new("/users/me"), true));
     }
 }
