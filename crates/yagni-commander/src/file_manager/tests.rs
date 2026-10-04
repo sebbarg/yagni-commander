@@ -2370,13 +2370,37 @@ fn ctrl_comma_opens_settings_with_the_current_values(cx: &mut TestAppContext) {
     assert!(!settings_open(cx));
 }
 
+/// Ctrl-, then Tab twice from Close (focused on opening): Theme, Editor.
+fn open_settings_at_editor(cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab tab");
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn settings_open_with_close_focused(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    assert!(
+        bounds(cx, "focus-ring-button".into()).is_some(),
+        "Close has focus"
+    );
+    cx.simulate_keystrokes("enter");
+    assert!(!settings_open(cx), "Enter on Close closes");
+}
+
 #[gpui_kit::test]
 fn typing_an_editor_saves_it_on_close(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
     let path = use_config(cfg.path(), "# keep me\n", cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
+    open_settings_at_editor(cx);
     cx.simulate_input("code --wait");
     cx.simulate_keystrokes("enter");
     assert!(!settings_open(cx));
@@ -2392,7 +2416,7 @@ fn escape_also_keeps_what_was_typed(cx: &mut TestAppContext) {
     let cfg = tempfile::tempdir().unwrap();
     use_config(cfg.path(), "", cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
+    open_settings_at_editor(cx);
     cx.simulate_input("zed");
     cx.simulate_keystrokes("escape");
     assert!(!settings_open(cx));
@@ -2419,8 +2443,7 @@ fn tab_reaches_the_switches_and_space_toggles_them(cx: &mut TestAppContext) {
     use_config(cfg.path(), "", cx);
     use_log_dir(logs.path(), cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
-    cx.run_until_parked();
+    open_settings_at_editor(cx);
     cx.simulate_keystrokes("tab"); // sort switch
     press(cx, "space");
     assert!(config(cx).case_sensitive_sort);
@@ -2437,8 +2460,7 @@ fn enter_on_a_switch_closes_without_toggling(cx: &mut TestAppContext) {
     let cfg = tempfile::tempdir().unwrap();
     use_config(cfg.path(), "", cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
-    cx.run_until_parked();
+    open_settings_at_editor(cx);
     cx.simulate_keystrokes("tab");
     press(cx, "enter");
     assert!(!settings_open(cx));
@@ -2534,8 +2556,7 @@ fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
     let cfg = tempfile::tempdir().unwrap();
     let path = use_config(cfg.path(), "log_keep_days = 30\n", cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
-    cx.run_until_parked();
+    open_settings_at_editor(cx);
     cx.simulate_keystrokes("tab tab tab"); // editor -> sort -> log -> days
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("0");
@@ -2564,8 +2585,7 @@ fn the_close_button_closes(cx: &mut TestAppContext) {
     activate(cx);
     cx.simulate_keystrokes("ctrl-,");
     cx.run_until_parked();
-    // editor -> sort -> log -> days -> icons -> modified -> owner -> permissions -> Close
-    cx.simulate_keystrokes("tab tab tab tab tab tab tab tab");
+    // Close has focus on opening.
     press(cx, "space");
     assert!(!settings_open(cx));
 }
@@ -2614,7 +2634,7 @@ fn a_save_failing_on_close_shows_its_error_after_closing(cx: &mut TestAppContext
     let path = use_config(cfg.path(), "", cx);
     std::fs::write(&path, "log = maybe\n").unwrap(); // broken since startup
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
+    open_settings_at_editor(cx);
     cx.simulate_input("zed");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -2647,8 +2667,7 @@ fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
     let cfg = tempfile::tempdir().unwrap();
     use_config(cfg.path(), "", cx);
     activate(cx);
-    cx.simulate_keystrokes("ctrl-,");
-    cx.run_until_parked();
+    open_settings_at_editor(cx);
     cx.simulate_keystrokes("tab tab tab ctrl-a");
     cx.simulate_input("0");
     cx.simulate_keystrokes("enter");
@@ -6131,13 +6150,13 @@ mod themes {
         view.read_with(cx, |this, cx| this.theme_value(cx))
     }
 
-    /// Ctrl-, then Shift-Tab from the editor (focused on opening) to the
-    /// Theme dropdown, the first control, and Enter to open it.
+    /// Ctrl-, then Tab from Close (focused on opening) round to the Theme
+    /// dropdown, the first control, and Enter to open it.
     fn open_theme_dropdown(cx: &mut VisualTestContext) {
         activate(cx);
         cx.simulate_keystrokes("ctrl-,");
         cx.run_until_parked();
-        cx.simulate_keystrokes("shift-tab");
+        cx.simulate_keystrokes("tab");
         cx.run_until_parked();
         assert!(!dropdown_open(cx));
         cx.simulate_keystrokes("enter");
@@ -6174,7 +6193,7 @@ mod themes {
         activate(cx);
         cx.simulate_keystrokes("ctrl-,");
         cx.run_until_parked();
-        cx.simulate_keystrokes("shift-tab");
+        cx.simulate_keystrokes("tab"); // Close -> Theme
         press(cx, "space");
         assert!(dropdown_open(cx));
         cx.simulate_keystrokes("down");

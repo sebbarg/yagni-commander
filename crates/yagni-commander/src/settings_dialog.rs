@@ -13,9 +13,9 @@ use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::{
-    App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window, div, prelude::FluentBuilder,
+    App, AppContext, ClipboardItem, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    WeakEntity, Window, div, prelude::FluentBuilder,
 };
 use yagni_commander_core::Setting;
 use yagni_commander_core::config::parse_keep_days;
@@ -34,7 +34,7 @@ pub struct SettingsView {
     /// The Theme dropdown: the built-ins' display names.
     theme: Entity<SelectState<Vec<SharedString>>>,
     #[cfg(test)]
-    theme_trigger: FocusHandle,
+    theme_trigger: gpui_kit::FocusHandle,
     days_error: Option<&'static str>,
     /// Where the operation log is written, if there is a state folder.
     log_dir: Option<PathBuf>,
@@ -169,10 +169,6 @@ impl SettingsView {
     #[cfg(test)]
     pub fn days_text(&self, cx: &App) -> String {
         self.days.read(cx).value().to_string()
-    }
-
-    fn editor_focus(&self, cx: &App) -> FocusHandle {
-        self.editor.focus_handle(cx)
     }
 
     fn change(&self, setting: Setting, window: &mut Window, cx: &mut App) {
@@ -402,7 +398,9 @@ impl FileManager {
             }
         });
         let buttons = ButtonRow::build([("Close", on_close)], 0, cx);
-        focus_when_open(view.read(cx).editor_focus(cx), window, cx);
+        // Close has focus, so Enter or Space closes at once (owner,
+        // 2026-10-04); Tab reaches the controls.
+        focus_when_open(buttons.read(cx).focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let (commit_ok, closed_ok) = (commit.clone(), closed.clone());
             let (commit_cancel, closed_cancel) = (commit.clone(), closed.clone());

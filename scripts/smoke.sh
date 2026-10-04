@@ -402,7 +402,8 @@ echo "settings: Ctrl-, opens it; Space toggles the sort switch; Escape closes"
 cfg=$work/config/yagni-commander/config.toml
 keys ctrl+comma
 shot 07e-settings
-keys Tab space
+# Close has focus on opening; Tab goes round to Theme, then Editor.
+keys Tab Tab Tab space
 shot 07f-settings-toggled
 keys Escape
 check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
@@ -430,20 +431,20 @@ shot 07i-hotlist-back
 keys ctrl+d Up Return  # Configure...
 shot 07j-hotlist-configure
 keys Escape
-keys ctrl+comma Tab space Escape
+keys ctrl+comma Tab Tab Tab space Escape
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab space
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space
 shot 07g-owner-hidden
 keys Escape
 check "show_owner saved" grep -q "^show_owner = false" "$cfg"
 
 echo "settings: the Icons switch turns icons off and on"
-keys ctrl+comma Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab space Escape
 check "icons = false saved" grep -q "^icons = false" "$cfg"
 shot 07h-icons-off
-keys ctrl+comma Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab space Escape
 check "icons = true saved" grep -q "^icons = true" "$cfg"
 
 echo "a big folder loads in the background"
@@ -603,7 +604,7 @@ xdotool windowfocus "$window"
 sleep 0.5
 
 echo "themes: Classic through the dropdown, then Gruvbox Dark (kept through the restart)"
-keys ctrl+comma shift+Tab Return
+keys ctrl+comma Tab Return
 sleep 0.5
 shot 07t1-theme-dropdown
 keys Down Down Return
@@ -618,7 +619,7 @@ keys Escape
 keys alt+F7
 shot 07t5-find-classic
 keys Escape
-keys ctrl+comma shift+Tab Return Up Return Escape
+keys ctrl+comma Tab Return Up Return Escape
 sleep 0.5
 check "theme saved" grep -q '^theme = "gruvbox-dark"' "$cfg"
 shot 07t6-main-gruvbox
