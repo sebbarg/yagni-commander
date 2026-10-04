@@ -6114,6 +6114,157 @@ mod themes {
         assert_eq!(notice(cx).as_deref(), Some(text));
     }
 
+    fn settings_view(cx: &mut VisualTestContext) -> Entity<crate::settings_dialog::SettingsView> {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.settings.clone())
+            .expect("settings open")
+    }
+
+    fn dropdown_open(cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        let view = settings_view(cx);
+        view.read_with(cx, |this, cx| this.theme_open(cx))
+    }
+
+    fn dropdown_value(cx: &mut VisualTestContext) -> Option<String> {
+        let view = settings_view(cx);
+        view.read_with(cx, |this, cx| this.theme_value(cx))
+    }
+
+    /// Ctrl-, then Shift-Tab from the editor (focused on opening) to the
+    /// Theme dropdown, the first control, and Enter to open it.
+    fn open_theme_dropdown(cx: &mut VisualTestContext) {
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-tab");
+        cx.run_until_parked();
+        assert!(!dropdown_open(cx));
+        cx.simulate_keystrokes("enter");
+        assert!(
+            settings_open(cx),
+            "Enter opens the list, not the dialog's OK"
+        );
+        assert!(dropdown_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_theme_dropdown_switches_with_the_keyboard(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        cx.simulate_keystrokes("down down enter");
+        assert_eq!(theme_name(cx), "Classic");
+        assert_eq!(config(cx).theme.as_deref(), Some("classic"));
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("theme = \"classic\"")
+        );
+        assert!(settings_open(cx));
+        assert_eq!(dropdown_value(cx).as_deref(), Some("Classic"));
+    }
+
+    #[gpui_kit::test]
+    fn space_opens_the_theme_dropdown(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-tab");
+        press(cx, "space");
+        assert!(dropdown_open(cx));
+        cx.simulate_keystrokes("down");
+        press(cx, "space");
+        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert!(settings_open(cx));
+        assert!(!dropdown_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn enter_in_the_theme_dropdown_picks_without_closing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert!(settings_open(cx));
+        assert!(!dropdown_open(cx));
+        // Enter on the closed dropdown opens it again, still not the OK.
+        cx.simulate_keystrokes("enter");
+        assert!(settings_open(cx));
+        assert!(dropdown_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_the_dropdown_before_the_dialog(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        cx.simulate_keystrokes("down escape");
+        assert!(settings_open(cx));
+        assert!(!dropdown_open(cx));
+        assert_eq!(theme_name(cx), "Tokyo Night");
+        assert_eq!(config(cx).theme, None);
+        cx.simulate_keystrokes("escape");
+        assert!(!settings_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_theme_dropdown_works_with_the_mouse(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        click(cx, "settings-theme", 1);
+        assert!(dropdown_open(cx));
+        // The list sits under the trigger: its second row is about two
+        // trigger heights down.
+        let trigger = cx.debug_bounds("settings-theme").unwrap();
+        let second = gpui_kit::point(
+            trigger.center().x,
+            trigger.bottom() + trigger.size.height * 1.5,
+        );
+        click_at(cx, second, 1);
+        cx.run_until_parked();
+        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert!(settings_open(cx));
+        assert!(!dropdown_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_theme_dropdown_shows_the_current_theme(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "theme = \"catppuccin-mocha\"\n", cx);
+        cx.simulate_keystrokes("ctrl-r");
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        assert!(settings_open(cx));
+        assert_eq!(dropdown_value(cx).as_deref(), Some("Catppuccin Mocha"));
+    }
+
+    #[gpui_kit::test]
+    fn the_theme_dropdown_is_disabled_with_a_config_problem(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "log = maybe\n", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("settings-problem").is_some());
+        click(cx, "settings-theme", 1);
+        assert!(!dropdown_open(cx));
+        assert_eq!(theme_name(cx), "Tokyo Night");
+    }
+
     #[gpui_kit::test]
     fn a_theme_switch_keeps_the_zoom(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);

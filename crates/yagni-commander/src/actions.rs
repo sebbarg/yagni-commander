@@ -1,6 +1,7 @@
 //! Actions and the default keymap. The keymap is data, so a user config file
 //! can later add or override bindings without touching the views.
 
+use gpui_kit::base::actions as base_actions;
 use gpui_kit::component::input;
 use gpui_kit::{App, KeyBinding, actions};
 
@@ -8,6 +9,10 @@ use gpui_kit::{App, KeyBinding, actions};
 pub const FILE_MANAGER_CONTEXT: &str = "FileManager";
 /// Key context of gpui-base's text fields.
 const INPUT_CONTEXT: &str = "Input";
+/// Key context of gpui-base's select (gpui-component's `Select`), and of
+/// its open list.
+const SELECT_CONTEXT: &str = "Select";
+const SELECT_LIST_CONTEXT: &str = "Select > List";
 /// Key context of a dialog's [`crate::button_row::ButtonRow`].
 pub const BUTTON_ROW_CONTEXT: &str = "ButtonRow";
 
@@ -107,6 +112,12 @@ pub mod viewer {
 
 /// Key context of the directory hotlist popup (Ctrl-D).
 pub const HOTLIST_CONTEXT: &str = "Hotlist";
+
+/// The Settings Theme dropdown (gpui-component's `Select`): Enter or Space
+/// opens the closed list.
+pub mod select {
+    gpui_kit::actions!(select, [Open]);
+}
 
 /// Hotlist popup actions; a module of their own because the names repeat.
 pub mod hotlist {
@@ -263,6 +274,24 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-insert", input::Copy, input),
         KeyBinding::new("shift-delete", input::Cut, input),
         KeyBinding::new("shift-insert", input::Paste, input),
+    ]);
+    // gpui-component's Select (the Settings Theme dropdown). On the closed
+    // dropdown gpui-base turns Enter into `Confirm`, opens the list and
+    // propagates, so the dialog's `Confirm` (OK) would close the dialog.
+    // Its other opening actions propagate too, and gpui then tries the
+    // key's next binding, the same `Confirm`. So Enter and Space are our
+    // `select::Open`, which the view handles without propagating
+    // (`settings_dialog`). In the open list (`List` inside the Select)
+    // Enter is the list's own pick, and Space picks too.
+    let select = Some(SELECT_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("enter", select::Open, select),
+        KeyBinding::new("space", select::Open, select),
+        KeyBinding::new(
+            "space",
+            base_actions::Confirm { secondary: false },
+            Some(SELECT_LIST_CONTEXT),
+        ),
     ]);
     // More specific than the dialog's own Enter (always OK) and Root's Tab.
     let row = Some(BUTTON_ROW_CONTEXT);

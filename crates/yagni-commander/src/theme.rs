@@ -22,7 +22,6 @@ pub const BUILTIN: [(&str, &str); 3] = [
 ];
 
 /// (id, display name) of every built-in, in `BUILTIN` order.
-#[allow(dead_code)] // the Settings dropdown (a later task) uses it
 pub fn ids_and_names() -> Vec<(&'static str, String)> {
     BUILTIN
         .iter()

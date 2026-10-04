@@ -6,27 +6,35 @@ use crate::file_manager::commands::themed_dialog;
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use gpui_kit::base::actions::SelectDown;
+use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, WeakEntity, Window, div, prelude::FluentBuilder,
 };
 use yagni_commander_core::Setting;
 use yagni_commander_core::config::parse_keep_days;
 
+use crate::actions::select;
 use crate::button_row::{ButtonRow, OnPress};
 use crate::config_state::CurrentConfig;
 use crate::file_manager::FileManager;
 use crate::file_manager::commands::{focus_when_open, text_field};
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 pub struct SettingsView {
     file_manager: WeakEntity<FileManager>,
     editor: Entity<InputState>,
     days: Entity<InputState>,
+    /// The Theme dropdown: the built-ins' display names.
+    theme: Entity<SelectState<Vec<SharedString>>>,
+    #[cfg(test)]
+    theme_trigger: FocusHandle,
     days_error: Option<&'static str>,
     /// Where the operation log is written, if there is a state folder.
     log_dir: Option<PathBuf>,
@@ -62,7 +70,27 @@ impl SettingsView {
             state.set_disabled(disabled, cx);
             state
         });
+        let themes = theme::ids_and_names();
+        let current_name = Theme::named(config.theme.as_deref()).0.name;
+        let selected = themes
+            .iter()
+            .position(|(_, name)| *name == current_name)
+            .map(|row| IndexPath::default().row(row));
+        let names: Vec<SharedString> = themes.iter().map(|(_, n)| n.clone().into()).collect();
+        let theme = cx.new(|cx| SelectState::new(names, selected, window, cx));
         let subscriptions = vec![
+            cx.subscribe_in(
+                &theme,
+                window,
+                move |this, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
+                    let SelectEvent::Confirm(Some(name)) = event else {
+                        return;
+                    };
+                    if let Some((id, _)) = themes.iter().find(|(_, n)| n == name.as_ref()) {
+                        this.change(Setting::Theme((*id).into()), window, cx);
+                    }
+                },
+            ),
             cx.subscribe_in(
                 &editor,
                 window,
@@ -86,6 +114,9 @@ impl SettingsView {
             file_manager,
             editor,
             days,
+            #[cfg(test)]
+            theme_trigger: theme.focus_handle(cx),
+            theme,
             days_error: None,
             log_dir,
             log_dir_copied: false,
@@ -116,6 +147,18 @@ impl SettingsView {
             self.log_dir_copied = true;
             cx.notify();
         }
+    }
+
+    /// The dropdown's list is open. While open, its focus handle is the
+    /// list's, not the trigger's.
+    #[cfg(test)]
+    pub fn theme_open(&self, cx: &App) -> bool {
+        self.theme.focus_handle(cx) != self.theme_trigger
+    }
+
+    #[cfg(test)]
+    pub fn theme_value(&self, cx: &App) -> Option<String> {
+        self.theme.read(cx).selected_value().map(|v| v.to_string())
     }
 
     #[cfg(test)]
@@ -204,6 +247,23 @@ impl Render for SettingsView {
                         .child(format!("{problem}. Fix the file, then press Ctrl-R.")),
                 )
             })
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(crate::zoom::rems_from_px(4.0))
+                    .child("Theme")
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-theme".into())
+                            .w(crate::zoom::rems_from_px(200.0))
+                            // Opens the closed list (see `actions::select`).
+                            .on_action(|_: &select::Open, window, cx| {
+                                window.dispatch_action(Box::new(SelectDown), cx)
+                            })
+                            .child(Select::new(&self.theme).disabled(disabled)),
+                    ),
+            )
             .child(
                 div()
                     .flex()
