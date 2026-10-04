@@ -17,6 +17,8 @@ and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Co
 
 Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and Wayland) and Omarchy (Hyprland). Early days.
 
+A personal project. Bug reports are welcome; feature requests will mostly get a YAGNI.
+
 ## Features
 
 - Two panels, Tab switches between them. Columns Name, Size, Modified, Owner, Permissions; click a header to sort.
