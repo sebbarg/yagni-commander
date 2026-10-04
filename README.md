@@ -1,8 +1,16 @@
 # yagni-commander
 
-A keyboard-first, dual-pane file manager in the spirit of Total Commander, for macOS and Linux (KDE Plasma, Hyprland). Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI framework behind the Zed editor.
+A YAGNI-minded, keyboard-first, dual-pane file manager for macOS and Linux. It does the part of a classic commander that I actually use, not all of it ("you aren't gonna need it"). Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI framework behind the Zed editor.
 
-It does the part of Total Commander that I actually use, not all of it ("you aren't gonna need it"). Early days: no releases yet, build it from source.
+More than a little inspired by these GOATs:
+
+- [DOS Navigator](https://en.wikipedia.org/wiki/DOS_Navigator)
+- [Total Commander](https://en.wikipedia.org/wiki/Total_Commander)
+- [Double Commander](https://en.wikipedia.org/wiki/Double_Commander)
+
+and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
+
+Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X11; Hyprland and Wayland are untested so far. Early days: no releases yet, build it from source.
 
 ## Features
 
