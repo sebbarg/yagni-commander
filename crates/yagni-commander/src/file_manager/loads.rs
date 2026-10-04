@@ -1,5 +1,5 @@
 //! Runs the commander's directory reads off the UI thread (see
-//! `Requirements.md`, Directory loading). One plain thread per read, not
+//! `SPEC.md`, Directory loading). One plain thread per read, not
 //! gpui's background pool: a read on a dead network mount may never return,
 //! and must not hold a pool thread. A timer collects the results while any
 //! read runs: every 10 ms at first, every 100 ms once a read is slow (as

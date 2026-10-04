@@ -1,5 +1,5 @@
 //! Watches a panel's folder for changes made outside the app (see
-//! `Requirements.md`, File operations). One plain thread per panel, never
+//! `SPEC.md`, File operations). One plain thread per panel, never
 //! gpui's pool: watching a folder on a dead network mount can hang, and must
 //! hang only that panel's watcher.
 

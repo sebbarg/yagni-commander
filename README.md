@@ -8,7 +8,7 @@ It does the part of Total Commander that I actually use, not all of it ("you are
 
 - Two panels, Tab switches between them. Columns Name, Size, Modified, Owner, Permissions; click a header to sort.
 - File icons by name and extension (like `eza --icons`), from a bundled Nerd Font.
-- Total Commander keys: F3 view, F4 edit (in your editor), F5 copy, F6 move, F7 new folder, F8 trash, Shift-F8 delete, F2 rename, Shift-F4 new file, Alt-Z, Ctrl-U, Ctrl-R. The full keymap is in [Requirements.md](Requirements.md#keyboard).
+- Total Commander keys: F3 view, F4 edit (in your editor), F5 copy, F6 move, F7 new folder, F8 trash, Shift-F8 delete, F2 rename, Shift-F4 new file, Alt-Z, Ctrl-U, Ctrl-R. The full keymap is in [SPEC.md](SPEC.md#keyboard).
 - Copy, move and delete run in the background with progress, Cancel and a prompt per conflict.
 - Type to jump: a quick search box finds names starting with what you type.
 - A viewer (F3) that opens multi-GB files instantly.
@@ -43,7 +43,12 @@ Set `editor` to the command F4 runs, for example `editor = "code --wait"`.
 
 ## Development
 
-`cargo test --workspace`, `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh` (drives the real app under Xvfb). How the code is organized and how we work on it is in [CLAUDE.md](CLAUDE.md); what the app should do, and why, is in [Requirements.md](Requirements.md).
+`cargo test --workspace`, `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
+
+- [SPEC.md](SPEC.md): what the app does, and why.
+- [ARCHITECTURE.md](ARCHITECTURE.md): how the code is organized, technical decisions, known issues.
+- [ROADMAP.md](ROADMAP.md): what comes next.
+- [CLAUDE.md](CLAUDE.md): how we work on it (with Claude Code).
 
 ## License
 

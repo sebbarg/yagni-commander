@@ -1,6 +1,6 @@
-# Requirements
+# Spec
 
-Working document for what yagni-commander should do. Items are v1 unless marked (v2) or (v3, later than v2).
+How yagni-commander behaves, and why: keys, dialogs, file operations and the decisions behind them. Everything here is built (v1). Future work is in [ROADMAP.md](ROADMAP.md); a "(v2)" note here points there. How the code is organized is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Decisions
 
@@ -25,7 +25,6 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 - Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
 - Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Alt-F opens Files (also from another open menu; it doesn't close it); Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back; other keys are ignored while it is open, except Quit (Alt-F4). Opening a menu, by key or mouse, ends the quick search. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10, lone Alt and Alt-F do nothing.
 - About: a dialog with the name and version (`CARGO_PKG_VERSION`) and an OK button.
-- Right-click context menu (v3; postponed by the owner on 2026-10-03, nothing useful to put in it yet): it reuses the menu's item model and popup builder with its own item list. Open decision: whether right-click selects, as in TC's default on Linux and Windows.
 
 ### Config
 
@@ -50,16 +49,16 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 
 ### Themes
 
-- v1: all colors come from a theme file; one built-in theme (Tokyo Night). No hardcoded colors in views.
-- Theme selection in the config (`theme = "..."`), more built-in themes, and user themes in `~/.config/yagni-commander/themes/*.toml` (v2).
-- Following the system light/dark appearance (v2).
+- All colors come from a theme file; one built-in theme (Tokyo Night). No hardcoded colors in views. Theme selection, user themes and following the system appearance are v2.
 
 ### File list
 
+- Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Modified, Owner and Permissions can be turned off (see Config). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
+- Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
+- Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change.
+- Mouse: a click moves the cursor (and focuses that panel), a double-click activates, the wheel scrolls the view without moving the cursor. The divider between the panels can be dragged.
 - Directories show as `[name]` when icons are off (display only: sorting and quick search use the bare name). ".." has no brackets.
 - File icons (decided 2026-10-02, spec `docs/superpowers/specs/2026-10-02-file-icons-design.md`): a Nerd Font glyph before every name, chosen by exact file name, then the name in lowercase, then extension (longest compound first), like `eza --icons`. Folders: the home folder itself gets a home glyph (decided 2026-10-02: by path, so a symlink to home does not; ".." stays an arrow), then a small special list (`.git`, `src`, `Documents`, ...), else a plain folder; ".." an up arrow; executables without a match a terminal; symlinks follow their target, broken ones a generic file. The icon takes the row's text color. With icons on, folders lose their `[ ]` brackets. On by default; `icons = false` or the Settings switch turns them off. The font (Symbols Nerd Font Mono) is bundled; the table is generated from nvim-web-devicons.
-- New and updated files pulse briefly (v3; discussed 2026-10-02, parked). Leanings so far: every reload of the folder a panel already shows pulses (watcher, Ctrl-R, the reload after F5/F6), never a navigation or a first listing; "updated" means same name, different size or modified time (compared in `Panel::apply`); a file that keeps changing pulses about once a second. Look not decided: a background tint in a new theme role `changed`, fading out over about 1.5 s, was proposed; no pulse with reduce motion on. Drive it from a per-name timestamp, not gpui's per-element animation state, since list rows are recreated on scroll.
-- Resizable columns (v2, moved from v1 on 2026-10-02). Until then, hiding columns in Settings gives Name more room.
 
 ### Directory loading
 
@@ -75,10 +74,6 @@ Working document for what yagni-commander should do. Items are v1 unless marked 
 ### Tabs
 
 Tabs per side (v1; pulled forward from v2 on 2026-10-02; design: `docs/superpowers/specs/2026-10-02-tabs-design.md`). Ctrl-T clones the visible tab into a new one after it, Ctrl-W closes the active tab (never the last one), Ctrl-Tab/Ctrl-Shift-Tab cycle with wrap-around; all on the active side. The tab header is always shown above the path header; a tab's label is its folder's last component, tabs shrink evenly and truncate. A click activates a tab; only Ctrl-W closes one. Background tabs keep their listing; only the visible tab per side is watched, and a tab re-reads quietly when it comes to the front. Ctrl-U swaps whole sides. Tabs and each side's active tab are restored on restart; a command-line folder replaces the active tab's folder.
-
-### Toolbar (v2)
-
-Toolbar with e.g. drive icons.
 
 ### Error messages
 
@@ -122,15 +117,12 @@ Toolbar with e.g. drive icons.
 | Alt-F7 | Find files by name and content (see Find files). Also Commands > Find files.... |
 | Ctrl-Shift-T | Open a terminal in the active panel's folder (an archive's folder inside one; the folder searched in search results). Also Commands > Open terminal here. The default terminal: `$TERMINAL` (Omarchy sets it to `xdg-terminal-exec`), else on KDE the System Settings choice (`TerminalApplication` in `kdeglobals`, Konsole when unset), else `xdg-terminal-exec`, `x-terminal-emulator`, then the first of konsole, gnome-terminal, kitty, alacritty, foot, wezterm, xterm on PATH; macOS: Terminal.app. Started in the folder; Konsole also gets `--workdir`, gnome-terminal `--working-directory=`, xdg-terminal-exec `--dir=`. Not waited for; only a failure to start shows an error. Choosing the terminal emulator (a Settings field used instead of the detection) is v2. Decided with the owner 2026-10-03. |
 
-- Archives later: creating password-protected zips, writing into an opened archive, F6 out of one, nested archives, Ctrl-PgDn, packing other formats (`.tar.gz` first), Alt-Shift-F5 (move into an archive).
-
 ### Quick search
 
 - Typing any printable character except space (letters, digits, `.`, `-`, ...) opens a small box in the active panel's footer showing the typed text, and moves the cursor to the first entry whose name starts with it, case-insensitively.
 - While the box is open, Down and Up move to the next and previous match, wrapping around at the ends. Backspace removes the last character (removing the last one closes the box); Escape closes it.
 - If no entry matches the longer text, the keystroke is ignored: the box and the cursor stay as they are.
 - Any other key, and any mouse click in a panel, closes the box. Enter closes it and opens the entry as usual. There is no timeout.
-- Fuzzy matching (v2, if ever).
 
 ### Hidden files
 
@@ -153,10 +145,8 @@ Toolbar with e.g. drive icons.
 - Giant lines (e.g. minified JSON): inside a line longer than 64 KiB, rows also break at every 64 KiB-aligned offset, so scrolling up never scans more than one block back. The visible effect is one short row every 64 KiB.
 - Keys: Escape or `q` close (not F3, which is find next); Escape during a search stops it instead; Up/Down one row; PageUp/PageDown one screen; Home/Ctrl-Home start of file; End/Ctrl-End end of file; `W` wrap toggle; `H` hex mode; Left/Right in no-wrap and hex mode. Mouse wheel scrolls rows; the scrollbar can be dragged.
 - Status line: file name, size, percentage (by byte), wrap or no wrap, and "line N of M" (of the top row). Line numbers need a full scan; it runs in the background ("counting lines..." until done) and stops when the window closes. The viewer is usable at once.
-- Go to line (v2; the line scan already keeps per-MiB line counts for it).
 - Search (v1, pulled forward from v2 and decided with the owner 2026-10-03; spec `docs/superpowers/specs/2026-10-03-viewer-search-design.md`): Ctrl-F opens a Find dialog (text, Case-sensitive, Regular expression, Whole words; starts with the session's last search from any viewer or Alt-F7; not saved across restarts). F3 (or Enter, owner 2026-10-03) finds the next match, Shift-F3 the previous one; without a search in that window they open the dialog. With the current match on screen, F3 starts just after its start (overlapping matches count) and Shift-F3 looks before it; otherwise they start at the top (F3) or end (Shift-F3) of the screen. The match is drawn in the accent colors; the view stays if it is on screen, else its row goes a third down the screen; without wrap the columns follow it. No match: a "... not found." box, no wrap-around. A long search shows "searching... N%" in the status line after ~300 ms and Escape stops it. Matching is Alt-F7's (UTF-8, a match never spans lines, 1 MiB blocks cut at line ends). From Alt-F7: F3 on a result of a search with "Containing text" opens the viewer at the first match of that text, with the same options (not for "Not containing"), so F3 in the viewer goes on to the next match; so does F3 in a "Feed to panel" results panel of such a search (owner, 2026-10-03).
 - Selection and copy (v1, pulled forward from v2 and decided with the owner 2026-10-03; spec `docs/superpowers/specs/2026-10-03-viewer-selection-design.md`), like TC's Lister: no keyboard cursor. Drag selects (auto-scrolling past the edges), Shift-click extends, double-click selects a word, triple-click a line, Ctrl-A selects all, Ctrl-C or Ctrl-Ins copies (also Cmd-C on macOS), a click clears. The selection is a byte range in the file, so it survives scrolling, `W`, `H` and resizing. Copy takes the original bytes (tabs and `\r\n` kept; invalid UTF-8 becomes U+FFFD) and is capped at 64 MiB (an error box above that). Hex mode: a drag in the codes or the characters selects the same bytes, shown in both; Ctrl-C copies the column the drag started in (codes as `4F 6B 0A`, 16 per line). A found search match becomes the selection, as in TC. Ctrl-F starts with the selected text when it is one line of at most 256 bytes and not just the match last found (then it keeps the search pattern). No paste (read-only). Keyboard selection only if it turns out to be missing.
-- Other encodings, following a growing file (v2).
 - Hex mode (v1, pulled forward from v2 and decided with the owner 2026-10-03; spec `docs/superpowers/specs/2026-10-03-viewer-hex-design.md`): `H` toggles text and hex (back to the wrap mode it came from; `W` does nothing in hex; every F3 opens in text, hex is per window and not saved). Classic layout, 16 bytes per row at multiples of 16: the offset (uppercase hex, 8 digits, more from 4 GiB on so all rows align), the 16 codes with an extra space after the 8th, then the same bytes as characters (printable ASCII as is, anything else a dim `.`). Switching keeps the top byte. Left/Right scroll a window narrower than a row. A search match is highlighted in both the codes and the characters. Status line: `hex · offset 1A2F0` in place of the wrap mode and line number.
 
 ## File operations
@@ -183,7 +173,6 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 - One operation at a time (the queue is v2).
 - After a copy that finished without errors, the source panel's selection is cleared (like TC). Errors are listed in one error box at the end (the first 10, then "and N more").
 - A move deletes each original only after it was copied; skipped or failed entries (and the directories holding them) stay behind.
-- Queue of operations, like TC's F2 queue (v2).
 - A directory watcher reloads a panel automatically when its directory changes outside the app (v1; was v2). Decided 2026-10-02 (design: `docs/superpowers/specs/2026-10-02-directory-watcher-design.md`):
   - Each panel watches its own folder, not subfolders. Reloads are throttled: 100 ms after the first change, then at most once per second while changes continue, and a final one at most 1 s after the last. A folder whose quiet re-read took 200 ms or more waits as long again before the next one, so a flood can't keep it reading back to back (2026-10-04).
   - A watcher reload is quiet: no "Loading..." indicator, no dimming, and keys and dialogs keep working on the old listing. Cursor, selection and quick search stay. Escape stops a quiet re-read too (one hung on a dead mount). The view follows the cursor's entry when a re-read moves it only if it was on screen, so a wheel-scrolled view stays (2026-10-04).
@@ -213,7 +202,6 @@ Alt-F7 or Commands > Find files.... Pulled forward from v2 and decided with the 
 - The dialog is resizable from its bottom-right corner, never smaller than it opens; the size is kept until the app quits. Focus shows on one control at a time: text fields their ring, option boxes and the selected button an accent ring, the results list an accent border and a bright cursor (muted while another control has focus).
 - Results list: arrows, Home/End, PageUp/PageDown; Enter or a double-click goes to the file (the panel opens its folder with the cursor on it, or the nearest existing parent of a folder that is gone; an unreadable folder shows its error); F3 views it, the dialog stays. Errors (folder, regex) in an error box; the dialog stays.
 - Feed to panel (Alt-L anywhere in the dialog, like TC's Feed to listbox; only with finished results): the other side lists the results and becomes the active one, so the side searched from keeps its folder (owner, 2026-10-03) with their relative paths, header `Results: <masks> in <folder>`, tab "Results". F3, F4, F5, F6, F8, Shift-F8, Alt-F5, Alt-F6, Ctrl-C, Alt-Enter, Compare and selection work on them (F5/F6 targets take the file name; several go flat into the target folder); F2, F7 and Shift-F4 say "Not available in search results." Hidden files always show there. ".." and Backspace go to the folder searched; Enter on a folder result enters it. Not watched; Ctrl-R and the reload after an operation re-check the entries and drop the ones gone, never search again. Alt-Z, Ctrl-T and Ctrl-U carry them; a restart opens the folder searched.
-- To verify on real machines: Alt-F7 reaching the app (KWin binds Alt-F7 to "Move Window" in some Plasma versions; the menu item works either way).
 
 ## Operation log
 
@@ -222,14 +210,3 @@ Alt-F7 or Commands > Find files.... Pulled forward from v2 and decided with the 
 - One line per file or directory the app creates, copies, moves, renames, trashes or deletes, plus skips ("exists") and failures, with a timestamp. Copy/move/trash/delete also log a start line (with each selected source) and a finish line (failed and skipped counts). F2, F7 and Shift-F4 log one line each; Shift-F4 on an existing file logs nothing.
 - At startup, log files older than `log_keep_days` (default 7) are deleted, even when logging is off. Only files named like log files are touched.
 - Logging problems never stop an operation. A log that can't be opened at startup is reported in the status line and the app runs without it.
-
-## Build order (v1)
-
-1. ~~Adopt gpui-component; config and state storage.~~ Done (settings dialog: step 8).
-2. ~~Selection model in core.~~ Done.
-3. ~~F2, F4, F7, Alt-Z, Ctrl-U, Ctrl-R, quick search.~~ Done.
-4. ~~Ctrl-. hidden files toggle.~~ Done.
-5. ~~File-operation engine in core (copy, move, trash), with tests.~~ Done.
-6. ~~F5/F6/F8 dialogs and progress.~~ Done.
-7. ~~F3 viewer.~~ Done.
-8. ~~Menu, About and the settings page.~~ Done.
