@@ -10,7 +10,7 @@ More than a little inspired by these GOATs:
 
 and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
 
-Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE (X11 and Wayland); Hyprland is untested so far. Early days.
+Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and Wayland) and Omarchy (Hyprland). Early days.
 
 ## Features
 
