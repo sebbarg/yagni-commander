@@ -72,12 +72,13 @@ pub fn open(
     cx: &mut App,
 ) -> io::Result<()> {
     let source = FileSource::open(&path)?;
+    let bounds = cx.global::<AppState>().viewer_bounds(main, cx);
     let options = WindowOptions {
-        window_bounds: Some(cx.global::<AppState>().viewer_bounds(main, cx)),
+        window_bounds: Some(bounds),
         app_id: Some(crate::windows::APP_ID.into()),
         ..Default::default()
     };
-    gpui_kit::open_window(options, cx, |window, cx| {
+    let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| {
             let mut view = ViewerView::new(path, source, temp, window, cx);
             if let Some(text) = search {
@@ -87,6 +88,7 @@ pub fn open(
         })
     })
     .map_err(io::Error::other)?;
+    crate::windows::maximize_late(window, bounds, cx);
     Ok(())
 }
 

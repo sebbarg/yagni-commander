@@ -44,6 +44,8 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 ### Window position and size, panel folders
 
 - Saved automatically on exit and restored on start.
+- A maximized (or fullscreen) window saves the size it had before, not the display's, and reopens maximized over it, so un-maximizing gives that size back. A tiling compositor floats a window at the size it asked for: Hyprland reports a lone tiled window as maximized, so a saved screen size floated it under Omarchy's top bar (owner, 2026-10-04).
+- First start: 60% of the display's width and 75% of its height, at least 900x600 and never more than the display, centered (owner, 2026-10-04). On a small display (below 1500x800 logical, where those shares would fall under the minimum) it opens maximized over that size instead, so the window manager fits it to the room the panels leave (owner, 2026-10-04). On KDE under X11 the window manager places the window itself, so it may not be centered, and a saved position is not restored (see ARCHITECTURE, Known issues; accepted by the owner).
 - Kept in a state file separate from the config, so the config stays hand-editable.
 - Each panel reopens the folder it showed at exit, and the active panel stays active. A folder that is gone or unreadable falls back to its nearest readable parent, then to the home folder. First start (no state): both panels show the home folder.
 - Command-line folders override the saved ones: `yagni-commander a b` opens `a` and `b`; with one argument the right panel keeps its saved folder.

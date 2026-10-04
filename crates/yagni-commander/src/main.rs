@@ -99,8 +99,9 @@ fn main() {
             // gpui has no built-in quit. The menus are set by the FileManager.
             cx.on_action(|_: &Quit, cx| cx.quit());
 
+            let bounds = app_state.initial_bounds(cx);
             let options = WindowOptions {
-                window_bounds: Some(app_state.initial_bounds(cx)),
+                window_bounds: Some(bounds),
                 app_id: Some(windows::APP_ID.into()),
                 ..Default::default()
             };
@@ -117,6 +118,7 @@ fn main() {
                 cx.new(|cx| FileManager::new(commander, notice, window, cx))
             })
             .expect("failed to open window");
+            windows::maximize_late(main_window, bounds, cx);
             windows::close_all_when_main_closes(main_window, cx).detach();
             cx.activate(true);
         });

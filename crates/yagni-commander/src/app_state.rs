@@ -4,12 +4,39 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{App, Bounds, Entity, Global, Pixels, WindowBounds, point, px, size};
+use gpui_kit::{App, Bounds, Entity, Global, Pixels, Size, WindowBounds, point, px, size};
 use serde::{Deserialize, Serialize};
 use yagni_commander_core::{Commander, Side, StartTabs, storage};
 
+/// A new window's size without a display to go by.
 const DEFAULT_WIDTH: f32 = 1200.0;
 const DEFAULT_HEIGHT: f32 = 800.0;
+
+/// A new window takes these shares of its display's width and height, at
+/// least `MIN_WIDTH` x `MIN_HEIGHT` and never more than the display. On
+/// Wayland gpui divides the mode by the output's integer scale, which a
+/// compositor rounds up from a fractional one, so the display can seem
+/// smaller than it is (1920x1080 at 1.5 gives 960x540, not 1280x720); the
+/// minimum keeps the window usable there.
+const WIDTH_SHARE: f32 = 0.6;
+const HEIGHT_SHARE: f32 = 0.75;
+const MIN_WIDTH: f32 = 900.0;
+const MIN_HEIGHT: f32 = 600.0;
+
+/// The size of a new window on `display`.
+fn default_size(display: Option<&Bounds<Pixels>>) -> Size<Pixels> {
+    let Some(display) = display else {
+        return size(px(DEFAULT_WIDTH), px(DEFAULT_HEIGHT));
+    };
+    let side = |room: Pixels, share: f32, min: f32| {
+        let room = f32::from(room);
+        px((room * share).max(min).min(room))
+    };
+    size(
+        side(display.size.width, WIDTH_SHARE, MIN_WIDTH),
+        side(display.size.height, HEIGHT_SHARE, MIN_HEIGHT),
+    )
+}
 
 /// Window geometry in logical pixels, as saved in the state file.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -130,6 +157,25 @@ impl AppState {
 }
 
 impl SavedWindow {
+    /// What to save for a window now at `bounds`. A maximized or fullscreen
+    /// window's size is the compositor's, not the user's (Hyprland reports a
+    /// lone tiled window as maximized at the display's size), so it keeps the
+    /// size saved before, else `default`; restoring then maximizes over that
+    /// size, and un-maximizing or floating the window gives it back.
+    pub fn remember(
+        previous: Option<SavedWindow>,
+        bounds: WindowBounds,
+        default: Bounds<Pixels>,
+    ) -> Self {
+        match bounds {
+            WindowBounds::Windowed(_) => Self::from_bounds(bounds),
+            WindowBounds::Maximized(_) | WindowBounds::Fullscreen(_) => Self {
+                maximized: true,
+                ..previous.unwrap_or_else(|| Self::from_bounds(WindowBounds::Windowed(default)))
+            },
+        }
+    }
+
     pub fn from_bounds(bounds: WindowBounds) -> Self {
         let (inner, maximized) = match bounds {
             WindowBounds::Windowed(b) => (b, false),
@@ -168,6 +214,46 @@ impl SavedWindow {
     }
 }
 
+/// Whether `display` is too small for the default shares, which would come
+/// out under the minimum (below 1500 wide or 800 tall).
+fn is_small(display: &Bounds<Pixels>) -> bool {
+    f32::from(display.size.width) * WIDTH_SHARE < MIN_WIDTH
+        || f32::from(display.size.height) * HEIGHT_SHARE < MIN_HEIGHT
+}
+
+/// The display a new window opens on: the primary one (on Wayland, which has
+/// none, the first one).
+fn default_display(cx: &App) -> Option<Bounds<Pixels>> {
+    cx.primary_display()
+        .or_else(|| cx.displays().into_iter().next())
+        .map(|d| d.bounds())
+}
+
+/// A new window: the default size, centered on its display.
+fn default_bounds(cx: &App) -> Bounds<Pixels> {
+    match default_display(cx) {
+        Some(display) => centered_default(&display),
+        None => Bounds::centered(None, default_size(None), cx),
+    }
+}
+
+fn centered_default(display: &Bounds<Pixels>) -> Bounds<Pixels> {
+    Bounds::centered_at(display.center(), default_size(Some(display)))
+}
+
+/// The first window on `display`: maximized on a small one, so the window
+/// manager fits it to the room its panels leave (a window the display's size
+/// would sit under them), else the default size; either way the default
+/// bounds are what un-maximizing gives.
+fn first_window(display: &Bounds<Pixels>) -> WindowBounds {
+    let bounds = centered_default(display);
+    if is_small(display) {
+        WindowBounds::Maximized(bounds)
+    } else {
+        WindowBounds::Windowed(bounds)
+    }
+}
+
 impl AppState {
     /// Loads the state file. Problems are logged and treated as "no saved
     /// state"; losing window geometry is not worth bothering the user.
@@ -191,17 +277,16 @@ impl AppState {
         self.state
             .window
             .and_then(|saved| saved.restore(&displays))
-            .unwrap_or_else(|| {
-                WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(DEFAULT_WIDTH), px(DEFAULT_HEIGHT)),
-                    cx,
-                ))
+            .unwrap_or_else(|| match default_display(cx) {
+                Some(display) => first_window(&display),
+                None => WindowBounds::Windowed(default_bounds(cx)),
             })
     }
 
     pub fn remember_window(bounds: WindowBounds, cx: &mut App) {
-        cx.global_mut::<Self>().state.window = Some(SavedWindow::from_bounds(bounds));
+        let default = default_bounds(cx);
+        let state = &mut cx.global_mut::<Self>().state;
+        state.window = Some(SavedWindow::remember(state.window, bounds, default));
     }
 
     /// Where to open a viewer: where the last one was, if that still fits the
@@ -215,7 +300,9 @@ impl AppState {
     }
 
     pub fn remember_viewer(bounds: WindowBounds, cx: &mut App) {
-        cx.global_mut::<Self>().state.viewer = Some(SavedWindow::from_bounds(bounds));
+        let default = default_bounds(cx);
+        let state = &mut cx.global_mut::<Self>().state;
+        state.viewer = Some(SavedWindow::remember(state.viewer, bounds, default));
     }
 
     pub fn remember_panels(commander: &Entity<Commander>, cx: &mut App) {
@@ -313,6 +400,109 @@ mod tests {
         let restored = maximized.restore(&[display()]).unwrap();
         assert!(matches!(restored, WindowBounds::Maximized(_)));
         assert_eq!(SavedWindow::from_bounds(restored), maximized);
+    }
+
+    #[test]
+    fn a_maximized_window_keeps_the_size_saved_before() {
+        let before = saved(100.0, 50.0);
+        let screen = WindowBounds::Maximized(display());
+        let now = SavedWindow::remember(Some(before), screen, display());
+        assert_eq!(
+            now,
+            SavedWindow {
+                maximized: true,
+                ..before
+            }
+        );
+        let fullscreen = WindowBounds::Fullscreen(display());
+        assert_eq!(
+            SavedWindow::remember(Some(before), fullscreen, display()),
+            now
+        );
+        // Restoring maximizes over the earlier size.
+        let restored = now.restore(&[display()]).unwrap();
+        assert_eq!(restored, WindowBounds::Maximized(before.bounds()));
+    }
+
+    #[test]
+    fn a_window_maximized_from_the_start_keeps_the_default() {
+        // Hyprland: a lone tiled window is maximized from its first frame.
+        let default = saved(200.0, 100.0).bounds();
+        let screen = WindowBounds::Maximized(display());
+        let now = SavedWindow::remember(None, screen, default);
+        assert_eq!(
+            now,
+            SavedWindow {
+                maximized: true,
+                ..saved(200.0, 100.0)
+            }
+        );
+    }
+
+    #[test]
+    fn an_ordinary_window_saves_its_own_size() {
+        let window = saved(10.0, 20.0);
+        let now = SavedWindow::remember(
+            Some(saved(0.0, 0.0)),
+            WindowBounds::Windowed(window.bounds()),
+            display(),
+        );
+        assert_eq!(now, window);
+    }
+
+    fn display_of(width: f32, height: f32) -> Bounds<Pixels> {
+        Bounds::new(point(px(0.0), px(0.0)), size(px(width), px(height)))
+    }
+
+    #[test]
+    fn the_default_size_is_a_share_of_the_display() {
+        let want = |w: f32, h: f32| size(px(w), px(h));
+        assert_eq!(default_size(Some(&display())), want(1152.0, 810.0));
+        assert_eq!(
+            default_size(Some(&display_of(3840.0, 2160.0))),
+            want(2304.0, 1620.0)
+        );
+        // At least 900x600 ...
+        assert_eq!(
+            default_size(Some(&display_of(1280.0, 720.0))),
+            want(900.0, 600.0)
+        );
+        // ... but never more than the display: 1920x1080 at 1.5, which
+        // gpui sees on Wayland as 960x540.
+        assert_eq!(
+            default_size(Some(&display_of(960.0, 540.0))),
+            want(900.0, 540.0)
+        );
+        assert_eq!(
+            default_size(Some(&display_of(800.0, 500.0))),
+            want(800.0, 500.0)
+        );
+        assert_eq!(default_size(None), want(1200.0, 800.0));
+    }
+
+    #[test]
+    fn the_first_window_on_a_small_display_is_maximized() {
+        for (width, height) in [
+            (1280.0, 720.0),
+            (1366.0, 768.0),
+            (1440.0, 900.0),
+            (1920.0, 790.0),
+        ] {
+            let display = display_of(width, height);
+            assert_eq!(
+                first_window(&display),
+                WindowBounds::Maximized(centered_default(&display)),
+                "{width}x{height}"
+            );
+        }
+        for (width, height) in [(1500.0, 800.0), (1920.0, 1080.0), (3840.0, 2160.0)] {
+            let display = display_of(width, height);
+            assert_eq!(
+                first_window(&display),
+                WindowBounds::Windowed(centered_default(&display)),
+                "{width}x{height}"
+            );
+        }
     }
 
     #[test]
