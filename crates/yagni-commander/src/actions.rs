@@ -15,6 +15,9 @@ actions!(
     yagni_commander,
     [
         SwitchPanel,
+        ZoomIn,
+        ZoomOut,
+        ZoomReset,
         CursorUp,
         CursorDown,
         CursorHome,
@@ -93,7 +96,10 @@ pub mod viewer {
             FindPrevious,
             ToggleHex,
             SelectAll,
-            Copy
+            Copy,
+            ZoomIn,
+            ZoomOut,
+            ZoomReset
         ]
     );
 }
@@ -190,6 +196,12 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("alt-enter", ShowProperties, context),
         KeyBinding::new("alt-f7", FindFiles, context),
         KeyBinding::new("ctrl-shift-t", OpenTerminal, context),
+        // Ctrl-= is the primary key (shown in the menu), so it comes last.
+        KeyBinding::new("ctrl-=", ZoomIn, context),
+        KeyBinding::new("ctrl-+", ZoomIn, context),
+        KeyBinding::new("ctrl-=", ZoomIn, context),
+        KeyBinding::new("ctrl--", ZoomOut, context),
+        KeyBinding::new("ctrl-0", ZoomReset, context),
         // Only while a panel has focus: a text field's context is deeper, so
         // its own Ctrl-C/Ctrl-Ins win there. macOS also takes Cmd-C, shown
         // in its menu (the first binding there, the last on Linux).

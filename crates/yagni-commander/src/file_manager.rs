@@ -25,7 +25,7 @@ use crate::actions::{
     OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
     SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
     SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
-    Trash, View,
+    Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -659,6 +659,9 @@ impl Render for FileManager {
             .on_action(
                 cx.listener(|this, _: &SwitchPanel, _, cx| this.execute(Command::SwitchPanel, cx)),
             )
+            .on_action(cx.listener(|_, _: &ZoomIn, _, cx| crate::zoom::change_ui(1.0, cx)))
+            .on_action(cx.listener(|_, _: &ZoomOut, _, cx| crate::zoom::change_ui(-1.0, cx)))
+            .on_action(cx.listener(|_, _: &ZoomReset, _, cx| crate::zoom::reset_ui(cx)))
             // While a quick search is open, Up/Down step through its matches
             // and Backspace shortens it.
             .on_action(cx.listener(|this, _: &CursorUp, _, cx| {

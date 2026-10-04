@@ -17,6 +17,7 @@ mod settings_dialog;
 mod theme;
 mod viewer_view;
 mod windows;
+mod zoom;
 
 use gpui_kit::{App, AppContext, WindowOptions};
 use yagni_commander_core::{Commander, oplog, storage};
@@ -76,6 +77,8 @@ fn main() {
             gpui_kit::init(cx);
             fonts::register(cx);
             Theme::default().install(cx);
+            cx.set_global(app_state.state.zoom());
+            zoom::apply_ui(cx);
             cx.set_global(current);
             actions::bind_default_keys(cx);
 

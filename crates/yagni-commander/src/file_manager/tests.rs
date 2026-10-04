@@ -5776,3 +5776,69 @@ mod open_terminal {
         assert!(text.contains("no-such-terminal-here"), "{text}");
     }
 }
+
+mod zoom {
+    use super::*;
+    use crate::zoom::Zoom;
+    use gpui_kit::component::ActiveTheme as _;
+
+    fn ui_font_size(cx: &mut VisualTestContext) -> f32 {
+        cx.run_until_parked();
+        cx.update(|_, cx| f32::from(cx.theme().font_size))
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_equals_minus_and_zero_change_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("ctrl-=");
+        assert_eq!(ui_font_size(cx), 17.0);
+        cx.simulate_keystrokes("ctrl-+");
+        assert_eq!(ui_font_size(cx), 18.0);
+        cx.simulate_keystrokes("ctrl-- ctrl-- ctrl--");
+        assert_eq!(ui_font_size(cx), 15.0);
+        cx.simulate_keystrokes("ctrl-0");
+        assert_eq!(ui_font_size(cx), 16.0);
+        let saved = cx.update(|_, cx| cx.global::<AppState>().state.ui_zoom);
+        assert_eq!(saved, 16.0);
+        assert_eq!(
+            cx.update(|_, cx| Zoom::get(cx).viewer),
+            16.0,
+            "viewer level untouched"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_level_stops_at_its_limits(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        for _ in 0..30 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        assert_eq!(ui_font_size(cx), 32.0);
+        for _ in 0..30 {
+            cx.simulate_keystrokes("ctrl--");
+        }
+        assert_eq!(ui_font_size(cx), 10.0);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_equals_does_not_reach_the_quick_search(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("b");
+        cx.simulate_keystrokes("ctrl-=");
+        assert_eq!(ui_font_size(cx), 17.0);
+        let search = commander.read_with(cx, |c, _| c.search().map(str::to_owned));
+        assert_eq!(
+            search.as_deref(),
+            Some("b"),
+            "zooming neither types `=` nor ends the search"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn installing_the_theme_keeps_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("ctrl-= ctrl-=");
+        cx.update(|_, cx| Theme::default().install(cx));
+        assert_eq!(ui_font_size(cx), 18.0);
+    }
+}

@@ -23,7 +23,7 @@ pub struct SavedWindow {
 
 /// The state file's contents. Missing keys take their defaults, so older
 /// files keep working.
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct State {
     pub window: Option<SavedWindow>,
@@ -46,9 +46,46 @@ pub struct State {
     pub left: Option<PathBuf>,
     #[serde(skip_serializing)]
     pub right: Option<PathBuf>,
+    /// Zoom levels in px (see `zoom`); 16 when missing.
+    #[serde(default = "default_zoom")]
+    pub ui_zoom: f32,
+    #[serde(default = "default_zoom")]
+    pub viewer_zoom: f32,
+}
+
+fn default_zoom() -> f32 {
+    crate::zoom::DEFAULT
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            window: None,
+            show_hidden: false,
+            viewer: None,
+            left_tabs: Vec::new(),
+            right_tabs: Vec::new(),
+            left_tab: 0,
+            right_tab: 0,
+            active: None,
+            find_skip: None,
+            left: None,
+            right: None,
+            ui_zoom: crate::zoom::DEFAULT,
+            viewer_zoom: crate::zoom::DEFAULT,
+        }
+    }
 }
 
 impl State {
+    /// The saved zoom levels, clamped (a hand-edited file may hold anything).
+    pub fn zoom(&self) -> crate::zoom::Zoom {
+        crate::zoom::Zoom {
+            ui: crate::zoom::clamp(self.ui_zoom),
+            viewer: crate::zoom::clamp(self.viewer_zoom),
+        }
+    }
+
     /// The tabs to open: the saved ones (or an old file's single folder,
     /// else `home`), with a command-line folder in place of the folder of
     /// that side's active tab (left first, then right). Nothing is read
@@ -83,6 +120,14 @@ pub struct AppState {
 }
 
 impl Global for AppState {}
+
+impl AppState {
+    pub fn remember_zoom(zoom: crate::zoom::Zoom, cx: &mut App) {
+        let state = &mut cx.global_mut::<Self>().state;
+        state.ui_zoom = zoom.ui;
+        state.viewer_zoom = zoom.viewer;
+    }
+}
 
 impl SavedWindow {
     pub fn from_bounds(bounds: WindowBounds) -> Self {
@@ -211,6 +256,35 @@ impl AppState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn zoom_levels_round_trip_and_default_to_16() {
+        let state: State = toml::from_str("").unwrap();
+        assert_eq!((state.ui_zoom, state.viewer_zoom), (16.0, 16.0));
+        let state = State {
+            ui_zoom: 20.0,
+            viewer_zoom: 12.0,
+            ..State::default()
+        };
+        let back: State = toml::from_str(&toml::to_string(&state).unwrap()).unwrap();
+        assert_eq!((back.ui_zoom, back.viewer_zoom), (20.0, 12.0));
+    }
+
+    #[test]
+    fn bad_zoom_values_are_clamped() {
+        for (text, want) in [("nan", 16.0), ("-5.0", 10.0), ("1000.0", 32.0)] {
+            let state: State =
+                toml::from_str(&format!("ui_zoom = {text}\nviewer_zoom = {text}\n")).unwrap();
+            assert_eq!(
+                state.zoom(),
+                crate::zoom::Zoom {
+                    ui: want,
+                    viewer: want
+                },
+                "{text}"
+            );
+        }
+    }
+
     fn display() -> Bounds<Pixels> {
         Bounds::new(point(px(0.0), px(0.0)), size(px(1920.0), px(1080.0)))
     }
@@ -280,6 +354,8 @@ mod tests {
             active: Some(Side::Right),
             left: None,
             right: None,
+            ui_zoom: 20.0,
+            viewer_zoom: 12.0,
         };
         AppState {
             path: Some(path.clone()),
