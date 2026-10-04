@@ -67,7 +67,6 @@ How yagni-commander is built, and why. What it does is in [SPEC.md](SPEC.md), wh
 ## Known issues
 
 - Below about 210 px (Name at its 120 px minimum plus Size), Name shrinks anyway: only optional columns are dropped for it.
-- The owner reported that only Name sorting seemed to work on their machine; Size and Modified sort correctly in headless tests. Unverified. Note that owner/permissions sorts look like name sorts in directories where those values are all equal.
 - Reading a big folder takes ~320 ms per 100k entries on Linux (~70% of it one `stat` per entry), near-instant on macOS. It runs in the background now; making the `stat` cheaper would only shorten the wait.
 - A folder given on the command line is checked synchronously before the window opens, so one on a dead mount still hangs startup (accepted: the user typed it).
 - No-replace rename (F2, move) is atomic only on Linux glibc (`renameat2`). On macOS it checks, then renames, so another process could create the target in between (TOCTOU); fixing it needs `renamex_np`, which nix doesn't offer without our own `unsafe`.

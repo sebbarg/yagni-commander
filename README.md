@@ -10,13 +10,13 @@ More than a little inspired by these GOATs:
 
 and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
 
-Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X11; Hyprland and Wayland are untested so far. Early days.
+Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE (X11 and Wayland); Hyprland is untested so far. Early days.
 
 ## Features
 
 - Two panels, Tab switches between them. Columns Name, Size, Modified, Owner, Permissions; click a header to sort.
 - File icons by name and extension (like `eza --icons`), from a bundled Nerd Font.
-- Total Commander keys: F3 view, F4 edit (in your editor), F5 copy, F6 move, F7 new folder, F8 trash, Shift-F8 delete, F2 rename, Shift-F4 new file, Alt-Z, Ctrl-U, Ctrl-R. The full keymap is in [SPEC.md](SPEC.md#keyboard).
+- Total Commander keys: F3 view, F4 edit (in your editor), F5 copy, F6 move, F7 new folder, F8 trash, Shift-F8 delete, F2 rename, Shift-F4 new file, Alt-Z, Ctrl-U, Ctrl-R. The full keymap is in [SPEC.md](SPEC.md#keyboard). Keys can't be remapped in the app, so a key your desktop takes for itself never arrives: free it in the desktop's shortcut settings. Some KDE Plasma versions bind Alt-F7 (find files) to Move Window; Commands > Find files... works either way.
 - Copy, move and delete run in the background with progress, Cancel and a prompt per conflict.
 - Type to jump: a quick search box finds names starting with what you type.
 - A viewer (F3) that opens multi-GB files instantly.

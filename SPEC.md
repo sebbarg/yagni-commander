@@ -101,6 +101,8 @@ Tabs per side (v1; pulled forward from v2 on 2026-10-02). Ctrl-T clones the visi
 
 ## Keyboard
 
+A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some KDE Plasma versions) is the user's to free in the desktop's settings; the app doesn't work around it (owner, 2026-10-04).
+
 | Key | Action |
 |---|---|
 | Space | Toggle selection of the entry under the cursor and move the cursor down. Selected entries are orange. ".." can't be selected. Changing directory clears the selection. |
