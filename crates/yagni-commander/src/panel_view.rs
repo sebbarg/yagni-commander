@@ -15,7 +15,9 @@ use yagni_commander_core::{
 
 use yagni_commander_core::{icons, label};
 
-use crate::columns::{CELL_SPACING, Column, visible_columns};
+use crate::columns::{
+    CELL_SPACING, CELL_TEXT, Column, HEADER_TEXT, Widths, text_width, visible_columns,
+};
 use crate::file_manager::{execute, panel_width};
 use crate::theme::{Colors, Theme};
 use crate::zoom::{Zoom, rems_from_px, scaled};
@@ -143,14 +145,20 @@ impl PanelView {
         (top..=top + rows).contains(&ix)
     }
 
-    /// The columns that fit this panel's width in `window`.
-    fn columns(&self, window: &Window, cx: &App) -> Vec<&'static Column> {
+    /// The columns that fit this panel's width in `window`, and their
+    /// widths (Owner sized to this panel's owners).
+    fn columns(&self, window: &Window, cx: &App) -> (Vec<&'static Column>, Widths) {
         let ui = Zoom::get(cx).ui;
         let viewport = f32::from(window.viewport_size().width);
         // Inside the 1 px border and the row padding.
         let width =
             panel_width(self.side, viewport, self.split, ui) - 2.0 - 2.0 * scaled(ROW_PADDING, ui);
-        visible_columns(self.commander.read(cx), width, ui)
+        let commander = self.commander.read(cx);
+        let owners = commander.panel(self.side).owners();
+        let widths = Widths::get(cx).with_owners(owners, |owner| {
+            text_width(window, cx, owner, CELL_TEXT, Default::default())
+        });
+        (visible_columns(commander, width, ui, &widths), widths)
     }
 
     fn render_rows(
@@ -159,7 +167,7 @@ impl PanelView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Vec<Div> {
-        let columns = self.columns(window, cx);
+        let (columns, widths) = self.columns(window, cx);
         let side = self.side;
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
@@ -174,7 +182,7 @@ impl PanelView {
                     selected: panel.is_selected(entry),
                 };
                 let icon = icons.then(|| icon_slot(commander.icon(side, entry), side, ix));
-                entry_row(entry, row, colors, &columns, icon)
+                entry_row(entry, row, colors, &columns, &widths, icon)
                     .debug_selector(|| format!("row-{}-{ix}", side_name(side)))
                     .on_mouse_down(
                         MouseButton::Left,
@@ -256,7 +264,7 @@ impl PanelView {
 
     /// Clickable column titles; clicking sorts the panel by that column.
     fn render_column_headers(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let columns = self.columns(window, cx);
+        let (columns, widths) = self.columns(window, cx);
         let side = self.side;
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
@@ -270,11 +278,11 @@ impl PanelView {
             .gap(rems_from_px(CELL_SPACING))
             .border_b_1()
             .border_color(colors.border)
-            .text_size(rems_from_px(12.0))
+            .text_size(rems_from_px(HEADER_TEXT))
             .children(columns.into_iter().map(|column| {
                 let key = column.key;
                 column
-                    .cell()
+                    .cell(&widths)
                     .debug_selector(|| format!("header-{}-{:?}", side_name(side), key))
                     .cursor_pointer()
                     .text_color(if sort.key == key {
@@ -473,6 +481,7 @@ fn entry_row(
     row: RowState,
     colors: &Colors,
     columns: &[&Column],
+    widths: &Widths,
     icon: Option<Div>,
 ) -> Div {
     let icons = icon.is_some();
@@ -508,8 +517,8 @@ fn entry_row(
             let is_name = column.key == SortKey::Name;
             let text = column.text(entry, icons);
             let cell = column
-                .cell()
-                .when(!is_name, |d| d.text_size(rems_from_px(13.0)))
+                .cell(widths)
+                .when(!is_name, |d| d.text_size(rems_from_px(CELL_TEXT)))
                 .text_color(if is_name { fg } else { detail });
             // Name is the only column that takes the icon, so `take` runs once.
             match (is_name, if is_name { icon.take() } else { None }) {

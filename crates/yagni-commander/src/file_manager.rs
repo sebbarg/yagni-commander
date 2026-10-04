@@ -142,6 +142,7 @@ impl FileManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        crate::columns::measure(window, cx);
         let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, cx));
         let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
         let focus = cx.focus_handle();

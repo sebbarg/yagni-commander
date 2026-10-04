@@ -30,6 +30,8 @@ pub struct Panel {
     entries: Vec<Entry>,
     /// Hidden entries while they are not shown, unsorted.
     hidden: Vec<Entry>,
+    /// The distinct owners of the listing, hidden entries included, sorted.
+    owners: Vec<String>,
     show_hidden: bool,
     cursor: usize,
     sort: Sort,
@@ -178,6 +180,7 @@ impl Panel {
             path,
             entries: Vec::new(),
             hidden: Vec::new(),
+            owners: Vec::new(),
             show_hidden,
             cursor: 0,
             sort: Sort::default(),
@@ -201,6 +204,7 @@ impl Panel {
             path: self.path.clone(),
             entries: self.entries.clone(),
             hidden: self.hidden.clone(),
+            owners: self.owners.clone(),
             show_hidden: self.show_hidden,
             cursor: self.cursor,
             sort: self.sort,
@@ -437,6 +441,7 @@ impl Panel {
         self.path = target;
         self.archive = archive;
         self.results = results;
+        self.owners = distinct_owners(&entries, &hidden);
         self.entries = entries;
         self.hidden = hidden;
         self.cursor = cursor;
@@ -480,6 +485,12 @@ impl Panel {
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The distinct owners (`user:group`) in the listing, hidden entries
+    /// included, so showing them doesn't change the list; sorted.
+    pub fn owners(&self) -> &[String] {
+        &self.owners
     }
 
     pub fn entries(&self) -> &[Entry] {
@@ -656,6 +667,15 @@ impl Panel {
 /// relative path); any other name as it is.
 fn file_name(name: &str) -> &str {
     name.rsplit('/').next().unwrap_or(name)
+}
+
+fn distinct_owners(entries: &[Entry], hidden: &[Entry]) -> Vec<String> {
+    let owners: std::collections::BTreeSet<&str> = entries
+        .iter()
+        .chain(hidden)
+        .filter_map(|e| e.owner.as_deref())
+        .collect();
+    owners.into_iter().map(str::to_owned).collect()
 }
 
 fn split_hidden(entries: Vec<Entry>, show_hidden: bool) -> (Vec<Entry>, Vec<Entry>) {
@@ -1278,6 +1298,47 @@ mod tests {
         );
         assert!(panel.is_loaded());
         assert_eq!(panel.cursor_entry().unwrap().label, "beta");
+    }
+
+    #[test]
+    fn owners_are_listed_once_hidden_entries_included() {
+        let tmp = fixture();
+        fs::write(tmp.path().join(".hidden"), b"").unwrap();
+        let mut entries = read_entries(tmp.path(), &AtomicUsize::new(0)).unwrap();
+        let owned = |name: &str, owner: &str| Entry {
+            owner: Some(owner.into()),
+            ..entries.iter().find(|e| e.label == name).unwrap().clone()
+        };
+        let (a, b, h) = (
+            owned("alpha", "bob:staff"),
+            owned("beta", "al:al"),
+            owned(".hidden", "root:root"),
+        );
+        entries.retain(|e| !["alpha", "beta", ".hidden"].contains(&e.label.as_str()));
+        entries.extend([a, b, h]);
+        let mut panel = Panel::empty(tmp.path().to_path_buf(), false);
+        panel.apply(
+            Listing {
+                path: tmp.path().to_path_buf(),
+                entries,
+                archive: None,
+                results: None,
+                modified: None,
+            },
+            None,
+        );
+        let mine =
+            crate::entry::owner_text(&fs::metadata(tmp.path().join("file.txt")).unwrap()).unwrap();
+        let mut want = vec![
+            "al:al".to_owned(),
+            "bob:staff".into(),
+            "root:root".into(),
+            mine,
+        ];
+        want.sort();
+        assert!(panel.entries().iter().all(|e| e.label != ".hidden"));
+        assert_eq!(panel.owners(), want);
+        assert_eq!(panel.duplicate().owners(), want);
     }
 
     #[test]
