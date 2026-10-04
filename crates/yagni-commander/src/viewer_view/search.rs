@@ -4,6 +4,7 @@
 //! reports over a std channel polled every `OPENER_POLL` (a futures wake-up
 //! from another thread panics gpui's test scheduler).
 
+use crate::file_manager::commands::themed_dialog;
 use std::io;
 use std::ops::Range;
 use std::rc::Rc;
@@ -132,7 +133,7 @@ impl ViewerView {
         window.open_dialog(cx, move |dialog, _, cx| {
             let submit = submit.clone();
             let (focus_ok, focus_cancel) = (focus.clone(), focus.clone());
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Find")
                 .w(dialog_width(520.0, cx))
                 .close_button(false)

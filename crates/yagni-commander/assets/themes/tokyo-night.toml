@@ -9,6 +9,7 @@ mode = "dark"
 [colors]
 window_bg = "#16161e"
 panel_bg = "#1a1b26"
+dialog_bg = "#1a1b26"
 header_bg = "#1f2335"
 header_active_bg = "#2f3549"
 border = "#292e42"

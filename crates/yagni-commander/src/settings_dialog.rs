@@ -2,6 +2,7 @@
 //! key by key (`FileManager::change_setting`). The text fields apply when
 //! they lose focus and when the dialog closes (Close, Enter or Escape).
 
+use crate::file_manager::commands::themed_dialog;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -345,7 +346,7 @@ impl FileManager {
         window.open_dialog(cx, move |dialog, _, cx| {
             let (commit_ok, closed_ok) = (commit.clone(), closed.clone());
             let (commit_cancel, closed_cancel) = (commit.clone(), closed.clone());
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Settings")
                 .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)

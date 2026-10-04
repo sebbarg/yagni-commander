@@ -10,6 +10,30 @@ use gpui_kit::{App, Global, Rgba, SharedString};
 use serde::Deserialize;
 
 const TOKYO_NIGHT: &str = include_str!("../assets/themes/tokyo-night.toml");
+const CATPPUCCIN_MOCHA: &str = include_str!("../assets/themes/catppuccin-mocha.toml");
+const CLASSIC: &str = include_str!("../assets/themes/classic.toml");
+
+/// The built-in themes: (id, file), Tokyo Night (the default) first. The id
+/// is what the config's `theme` key holds.
+pub const BUILTIN: [(&str, &str); 3] = [
+    ("tokyo-night", TOKYO_NIGHT),
+    ("catppuccin-mocha", CATPPUCCIN_MOCHA),
+    ("classic", CLASSIC),
+];
+
+/// (id, display name) of every built-in, in `BUILTIN` order.
+#[allow(dead_code)] // the Settings dropdown (a later task) uses it
+pub fn ids_and_names() -> Vec<(&'static str, String)> {
+    BUILTIN
+        .iter()
+        .map(|(id, _)| {
+            (
+                *id,
+                Theme::builtin(id).expect("bundled theme is valid").name,
+            )
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,8 +57,10 @@ pub enum Mode {
 pub struct Colors {
     /// Behind the panels and the status line.
     pub window_bg: Rgba,
-    /// Panel list background; also dialogs and popups.
+    /// Panel list background; also lists inside dialogs, and text fields in light themes.
     pub panel_bg: Rgba,
+    /// Dialogs (gpui-component's Dialog takes it through `themed_dialog`).
+    pub dialog_bg: Rgba,
     /// Path header and footer of the inactive panel.
     pub header_bg: Rgba,
     /// Path header of the active panel.
@@ -84,6 +110,23 @@ impl Default for Theme {
 }
 
 impl Theme {
+    pub fn builtin(id: &str) -> Option<Self> {
+        BUILTIN
+            .iter()
+            .find(|(builtin, _)| *builtin == id)
+            .map(|(_, text)| Self::parse(text).expect("bundled theme is valid"))
+    }
+
+    /// The theme for a config's `theme` id (none: the default), and whether
+    /// the id was unknown (then the default too).
+    pub fn named(id: Option<&str>) -> (Self, bool) {
+        match id.map(Self::builtin) {
+            None => (Self::default(), false),
+            Some(Some(theme)) => (theme, false),
+            Some(None) => (Self::default(), true),
+        }
+    }
+
     pub fn parse(toml: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(toml)
     }
@@ -241,57 +284,99 @@ mod tests {
     /// WCAG AA for normal text (4.5:1); icons and other non-text marks 3:1.
     #[test]
     fn text_is_readable_on_its_backgrounds() {
+        for (id, _) in BUILTIN {
+            let c = Theme::builtin(id).unwrap().colors;
+            let text_on = |fg: Rgba, bgs: &[Rgba]| -> Vec<(Rgba, Rgba, f32)> {
+                bgs.iter().map(|&bg| (fg, bg, 4.5)).collect()
+            };
+            let pairs: Vec<(Rgba, Rgba, f32)> = [
+                text_on(
+                    c.text,
+                    &[
+                        c.window_bg,
+                        c.panel_bg,
+                        c.dialog_bg,
+                        c.header_bg,
+                        c.header_active_bg,
+                        c.cursor_inactive_bg,
+                    ],
+                ),
+                // Column details, column titles, footers, status lines, hints, labels.
+                text_on(
+                    c.text_secondary,
+                    &[
+                        c.window_bg,
+                        c.panel_bg,
+                        c.dialog_bg,
+                        c.header_bg,
+                        c.cursor_inactive_bg,
+                    ],
+                ),
+                // The inactive side's path header and tabs, placeholders.
+                text_on(c.text_dim, &[c.panel_bg, c.dialog_bg, c.header_bg]),
+                // File names, also under the inactive cursor bar.
+                text_on(c.hidden, &[c.panel_bg, c.cursor_inactive_bg]),
+                text_on(c.directory, &[c.panel_bg, c.cursor_inactive_bg]),
+                text_on(c.symlink, &[c.panel_bg, c.cursor_inactive_bg]),
+                text_on(c.selected, &[c.panel_bg, c.cursor_inactive_bg]),
+                text_on(c.text_on_accent, &[c.accent]),
+                text_on(c.text_on_selected, &[c.selected]),
+                // The status line and dialogs.
+                text_on(c.error, &[c.window_bg, c.panel_bg, c.dialog_bg]),
+                text_on(c.warning, &[c.panel_bg, c.dialog_bg]),
+                text_on(c.success, &[c.panel_bg, c.dialog_bg]),
+                text_on(c.info, &[c.panel_bg, c.dialog_bg]),
+                // The active side's folder glyph.
+                vec![(c.accent, c.header_active_bg, 3.0)],
+            ]
+            .concat();
+            let failing: Vec<_> = pairs
+                .iter()
+                .filter(|(fg, bg, min)| contrast(*fg, *bg) < *min)
+                .map(|(fg, bg, min)| {
+                    format!(
+                        "{} on {}: {:.2} < {min}",
+                        to_hex(*fg),
+                        to_hex(*bg),
+                        contrast(*fg, *bg)
+                    )
+                })
+                .collect();
+            assert!(
+                failing.is_empty(),
+                "{id}: too little contrast: {failing:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_builtin_parses_with_its_name() {
+        let names: Vec<_> = ids_and_names();
+        assert_eq!(
+            names,
+            vec![
+                ("tokyo-night", "Tokyo Night".to_owned()),
+                ("catppuccin-mocha", "Catppuccin Mocha".to_owned()),
+                ("classic", "Classic".to_owned()),
+            ]
+        );
+        assert_eq!(Theme::builtin("classic").unwrap().mode, Mode::Light);
+        assert_eq!(Theme::builtin("catppuccin-mocha").unwrap().mode, Mode::Dark);
+    }
+
+    #[test]
+    fn named_falls_back_to_tokyo_night() {
+        assert_eq!(Theme::named(None).0.name, "Tokyo Night");
+        assert!(!Theme::named(None).1);
+        assert_eq!(Theme::named(Some("classic")).0.name, "Classic");
+        let (theme, unknown) = Theme::named(Some("solarized"));
+        assert_eq!((theme.name.as_str(), unknown), ("Tokyo Night", true));
+    }
+
+    #[test]
+    fn tokyo_night_dialogs_look_as_before() {
         let c = Theme::default().colors;
-        let text_on = |fg: Rgba, bgs: &[Rgba]| -> Vec<(Rgba, Rgba, f32)> {
-            bgs.iter().map(|&bg| (fg, bg, 4.5)).collect()
-        };
-        let pairs: Vec<(Rgba, Rgba, f32)> = [
-            text_on(
-                c.text,
-                &[
-                    c.window_bg,
-                    c.panel_bg,
-                    c.header_bg,
-                    c.header_active_bg,
-                    c.cursor_inactive_bg,
-                ],
-            ),
-            // Column details, column titles, footers, status lines, hints, labels.
-            text_on(
-                c.text_secondary,
-                &[c.window_bg, c.panel_bg, c.header_bg, c.cursor_inactive_bg],
-            ),
-            // The inactive side's path header and tabs, placeholders.
-            text_on(c.text_dim, &[c.panel_bg, c.header_bg]),
-            // File names, also under the inactive cursor bar.
-            text_on(c.hidden, &[c.panel_bg, c.cursor_inactive_bg]),
-            text_on(c.directory, &[c.panel_bg, c.cursor_inactive_bg]),
-            text_on(c.symlink, &[c.panel_bg, c.cursor_inactive_bg]),
-            text_on(c.selected, &[c.panel_bg, c.cursor_inactive_bg]),
-            text_on(c.text_on_accent, &[c.accent]),
-            text_on(c.text_on_selected, &[c.selected]),
-            // The status line and dialogs.
-            text_on(c.error, &[c.window_bg, c.panel_bg]),
-            text_on(c.warning, &[c.panel_bg]),
-            text_on(c.success, &[c.panel_bg]),
-            text_on(c.info, &[c.panel_bg]),
-            // The active side's folder glyph.
-            vec![(c.accent, c.header_active_bg, 3.0)],
-        ]
-        .concat();
-        let failing: Vec<_> = pairs
-            .iter()
-            .filter(|(fg, bg, min)| contrast(*fg, *bg) < *min)
-            .map(|(fg, bg, min)| {
-                format!(
-                    "{} on {}: {:.2} < {min}",
-                    to_hex(*fg),
-                    to_hex(*bg),
-                    contrast(*fg, *bg)
-                )
-            })
-            .collect();
-        assert!(failing.is_empty(), "too little contrast: {failing:#?}");
+        assert_eq!(c.dialog_bg, c.panel_bg);
     }
 
     #[test]

@@ -3953,6 +3953,23 @@ mod copy_message {
     }
 }
 
+#[gpui_kit::test]
+fn dialogs_take_the_dialog_background(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.update(|_, cx| {
+        let mut theme = Theme::get(cx).clone();
+        theme.colors.dialog_bg = theme.colors.error; // distinct from panel_bg
+        cx.set_global(theme);
+        let mut dialog = commands::themed_dialog(gpui_kit::component::dialog::Dialog::new(cx), cx);
+        let bg = gpui_kit::Styled::style(&mut dialog).background.clone();
+        assert_eq!(
+            bg,
+            Some(gpui_kit::Fill::from(Theme::get(cx).colors.error)),
+            "the dialog is not painted with dialog_bg"
+        );
+    });
+}
+
 /// gpui animations run on wall-clock time: a dialog sliding in moves
 /// between frames, and under a loaded test run a click aimed at one frame's
 /// position lands somewhere else. Tests use reduced motion (`setup`).

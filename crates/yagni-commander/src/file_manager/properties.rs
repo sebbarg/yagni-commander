@@ -2,6 +2,7 @@
 //! counted, on a thread of its own (a `stat` can hang on a dead mount);
 //! a timer moves the results in, like the opener's errors.
 
+use crate::file_manager::commands::themed_dialog;
 use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -124,7 +125,7 @@ impl FileManager {
         let this = cx.entity().downgrade();
         window.open_dialog(cx, move |dialog, _, cx| {
             let this = this.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Properties")
                 .w(crate::zoom::dialog_width(WIDTH, cx))
                 .close_button(false)

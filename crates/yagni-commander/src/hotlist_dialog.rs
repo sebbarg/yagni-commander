@@ -3,6 +3,7 @@
 //! Move down / Cancel / OK. Edits stay here until OK, which checks every
 //! path and saves the whole list (`FileManager::save_hotlist`).
 
+use crate::file_manager::commands::themed_dialog;
 use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
@@ -369,7 +370,7 @@ impl FileManager {
         focus_when_open(view.read(cx).list_focus.clone(), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let (ok, cancel) = (ok.clone(), cancel.clone());
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Directory hotlist")
                 .w(crate::zoom::dialog_width(720.0, cx))
                 .close_button(false)

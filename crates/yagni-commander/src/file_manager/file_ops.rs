@@ -3,6 +3,7 @@
 //! progress updates the progress dialog, a conflict opens the Overwrite/Skip
 //! prompt, and the end reloads both panels and reports any failures.
 
+use crate::file_manager::commands::themed_dialog;
 use std::cell::Cell;
 use std::io;
 use std::ops::Range;
@@ -487,7 +488,7 @@ impl FileManager {
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let focus_cancel = focus.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title(title)
                 .w(crate::zoom::dialog_width(420.0, cx))
                 .close_button(false)
@@ -629,7 +630,7 @@ impl FileManager {
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let this = this.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title(kind.progress_title())
                 .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)
@@ -688,7 +689,7 @@ impl FileManager {
         window.open_dialog(cx, move |dialog, _, cx| {
             let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title("File exists")
                 .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
@@ -756,7 +757,7 @@ impl FileManager {
             let this_cancel = this.clone();
             let checked = for_all.get();
             let for_all = for_all.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Symbolic link")
                 .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
@@ -854,7 +855,7 @@ impl FileManager {
             let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
             let submit = submit.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Password")
                 .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)
@@ -1257,7 +1258,7 @@ fn confirm_overwrite(
     focus_when_open(buttons.focus_handle(cx), window, cx);
     window.open_dialog(cx, move |dialog, _, cx| {
         let focus = focus.clone();
-        dialog
+        themed_dialog(dialog, cx)
             .title("Archive exists")
             .w(crate::zoom::dialog_width(420.0, cx))
             .close_button(false)

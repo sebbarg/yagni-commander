@@ -2,6 +2,7 @@
 //! what it asks for: go to a result, view it, or feed the results to the
 //! active panel.
 
+use crate::file_manager::commands::themed_dialog;
 use gpui_kit::component::WindowExt;
 use gpui_kit::{AppContext, Context, InteractiveElement, ParentElement, Styled, Window, div};
 
@@ -40,7 +41,7 @@ impl FileManager {
         window.open_dialog(cx, move |dialog, _, cx| {
             let (search, cancel, focus) = (view.clone(), view.clone(), focus.clone());
             let width = view.read(cx).width(cx);
-            dialog
+            themed_dialog(dialog, cx)
                 .title("Find files")
                 .w(width)
                 .close_button(false)

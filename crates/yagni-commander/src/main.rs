@@ -77,7 +77,7 @@ fn main() {
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             fonts::register(cx);
-            Theme::default().install(cx);
+            Theme::named(None).0.install(cx);
             cx.set_global(app_state.state.zoom());
             zoom::apply_ui(cx);
             cx.set_global(current);

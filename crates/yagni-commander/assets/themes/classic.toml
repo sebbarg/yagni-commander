@@ -1,0 +1,30 @@
+# Classic: the colors of old Total Commander (gray window, white lists, navy
+# cursor), not its 3D look. Colors are named by role, not hue.
+# Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+# Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
+# (checked by the theme tests).
+name = "Classic"
+mode = "light"
+
+[colors]
+window_bg = "#d4d0c8"
+panel_bg = "#ffffff"
+dialog_bg = "#d4d0c8"
+header_bg = "#d4d0c8"
+header_active_bg = "#b9d1ea"
+border = "#808080"
+text = "#000000"
+text_secondary = "#3c3c3c"
+text_dim = "#585858"
+directory = "#000080"
+symlink = "#005f5f"
+hidden = "#5f5f5f"
+accent = "#000080"
+text_on_accent = "#ffffff"
+cursor_inactive_bg = "#e4e2dc"
+selected = "#c00000"
+text_on_selected = "#ffffff"
+error = "#a00000"
+warning = "#7a4f00"
+success = "#005a00"
+info = "#00577a"

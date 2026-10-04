@@ -5,10 +5,11 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
+use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
-    SharedString, Window,
+    SharedString, Styled, Window,
 };
 use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch};
 
@@ -487,7 +488,7 @@ impl FileManager {
             let confirm = confirm.clone();
             let focus_ok = focus.clone();
             let focus_cancel = focus.clone();
-            dialog
+            themed_dialog(dialog, cx)
                 .title(title.clone())
                 .w(crate::zoom::dialog_width(width, cx))
                 .child(dialog_field(&input))
@@ -526,6 +527,12 @@ pub(crate) fn configured_editor(
         );
     }
     editor
+}
+
+/// Every dialog's builder starts here: gpui-component's `Dialog` paints its
+/// own background and then applies ours, so this one wins (`dialog_bg`).
+pub(crate) fn themed_dialog(dialog: Dialog, cx: &App) -> Dialog {
+    dialog.bg(crate::theme::Theme::get(cx).colors.dialog_bg)
 }
 
 /// A centered, modal error box that stays until dismissed (button, Enter or
@@ -587,7 +594,7 @@ pub(super) fn show_message_box(
     focus_when_open(buttons.focus_handle(cx), window, cx);
     window.open_dialog(cx, move |dialog, _, cx| {
         let refocus = refocus.clone();
-        dialog
+        themed_dialog(dialog, cx)
             .title(title)
             .w(crate::zoom::dialog_width(width, cx))
             .close_button(false)
