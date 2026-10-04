@@ -156,6 +156,12 @@ fn q_closes_the_viewer(cx: &mut TestAppContext) {
     assert_key_closes("q", cx);
 }
 
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn cmd_w_closes_the_viewer(cx: &mut TestAppContext) {
+    assert_key_closes("cmd-w", cx);
+}
+
 #[gpui_kit::test]
 fn alt_f4_closes_only_the_viewer(cx: &mut TestAppContext) {
     // The global Alt-F4 is Quit; in a viewer it must close just that window.

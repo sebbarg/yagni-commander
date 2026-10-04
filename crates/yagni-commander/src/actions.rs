@@ -392,6 +392,9 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-0", viewer::ZoomReset, ctx),
     ]);
     if cfg!(target_os = "macos") {
-        cx.bind_keys([KeyBinding::new("cmd-c", viewer::Copy, ctx)]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-c", viewer::Copy, ctx),
+            KeyBinding::new("cmd-w", viewer::Close, ctx),
+        ]);
     }
 }
