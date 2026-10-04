@@ -10,7 +10,7 @@ More than a little inspired by these GOATs:
 
 and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
 
-Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X11; Hyprland and Wayland are untested so far. Early days: no releases yet, build it from source.
+Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X11; Hyprland and Wayland are untested so far. Early days.
 
 ## Features
 
@@ -23,6 +23,28 @@ Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X1
 - Panels follow changes made by other programs.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
 - Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
+
+## Installing
+
+Download the file for your system from [Releases](https://github.com/sebbarg/yagni-commander/releases), or build it yourself (below). `SHA256SUMS` there lists each file's checksum.
+
+**macOS** (`yagni-commander-<version>-macos.zip`, Apple Silicon and Intel): unzip it and move `yagni-commander.app` to Applications. The app is not notarized by Apple (that needs a paid developer account), so macOS refuses to open a downloaded copy. Remove the download mark once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/yagni-commander.app
+```
+
+or try to open it, then choose Open Anyway in System Settings > Privacy & Security. Built from source, it opens without this step.
+
+**Linux** (`yagni-commander-<version>-linux-x86_64.tar.gz`, built on Ubuntu 22.04, so it needs glibc 2.35 or newer):
+
+```sh
+tar -xzf yagni-commander-*-linux-x86_64.tar.gz
+cd yagni-commander-*-linux-x86_64
+./install.sh
+```
+
+It installs into `~/.local` (the binary, a launcher entry and the icons), so it shows in your app menu; no root needed. `./install.sh uninstall` removes it.
 
 ## Building
 
@@ -40,7 +62,7 @@ cargo run --release -- [left-folder] [right-folder]
 
 Without folders it reopens the ones from the last run.
 
-To install it as an app with its icon:
+To install your build as an app with its icon:
 
 - **Linux:** `scripts/install-linux.sh` puts the binary in `~/.local/bin`, plus a launcher entry and icons under `~/.local/share`, so it shows in the app menu. `scripts/install-linux.sh uninstall` removes them.
 - **macOS:** `scripts/bundle-mac.sh` builds `yagni-commander.app` and copies it to `~/Applications`, where Finder, Launchpad and Spotlight find it.

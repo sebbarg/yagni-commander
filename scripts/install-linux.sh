@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Builds a release binary and installs it for the current user, with a
-# launcher entry and the app icon, so the desktop's app menu finds it.
+# Installs yagni-commander for the current user, with a launcher entry and
+# the app icon, so the desktop's app menu finds it. In the repository it
+# builds a release binary first; in a release tarball (as `install.sh`,
+# next to the binary and `icons/`, see dist-linux.sh) it installs those.
 #
 #   scripts/install-linux.sh             install into ~/.local
 #   scripts/install-linux.sh uninstall   remove what install put there
@@ -10,7 +12,7 @@
 set -euo pipefail
 
 app=yagni-commander
-root=$(cd "$(dirname "$0")/.." && pwd)
+here=$(cd "$(dirname "$0")" && pwd)
 prefix=${PREFIX:-$HOME/.local}
 bin=$prefix/bin/$app
 desktop=$prefix/share/applications/$app.desktop
@@ -38,12 +40,20 @@ elif [[ $# -gt 0 ]]; then
     exit 2
 fi
 
-cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-"$cargo" build --release --manifest-path "$root/Cargo.toml" -p $app
+if [[ -x $here/$app && -d $here/icons ]]; then
+    built=$here/$app
+    art=$here/icons
+else
+    root=$(cd "$here/.." && pwd)
+    cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
+    "$cargo" build --release --manifest-path "$root/Cargo.toml" -p $app
+    built=$root/target/release/$app
+    art=$root/packaging/icons
+fi
 
-install -Dm755 "$root/target/release/$app" "$bin"
-install -Dm644 "$root/packaging/icons/$app.svg" "$icons/scalable/apps/$app.svg"
-for png in "$root"/packaging/icons/hicolor/*/apps/"$app".png; do
+install -Dm755 "$built" "$bin"
+install -Dm644 "$art/$app.svg" "$icons/scalable/apps/$app.svg"
+for png in "$art"/hicolor/*/apps/"$app".png; do
     size=$(basename "$(dirname "$(dirname "$png")")")
     install -Dm644 "$png" "$icons/$size/apps/$app.png"
 done

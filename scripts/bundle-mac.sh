@@ -2,12 +2,15 @@
 # Builds yagni-commander.app from a release build and installs it, so it
 # starts from Finder, Launchpad and Spotlight with its icon.
 #
-#   scripts/bundle-mac.sh            build and install into ~/Applications
+#   scripts/bundle-mac.sh                build and install into ~/Applications
 #   scripts/bundle-mac.sh --no-install   only build target/release/yagni-commander.app
+#   scripts/bundle-mac.sh --dist         a universal (arm64 + x86_64) bundle, zipped as
+#                                        target/dist/yagni-commander-<version>-macos.zip
 #
 # The bundle is signed ad hoc (`codesign -s -`), which is enough on the Mac
 # that built it: a local build carries no quarantine flag, so Gatekeeper
-# never asks. A copy downloaded elsewhere would need notarization.
+# never asks. A downloaded copy is quarantined and, not being notarized,
+# blocked until the user clears the flag (see the README).
 set -euo pipefail
 
 app=yagni-commander
@@ -18,22 +21,37 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 dest=${APP_DIR:-$HOME/Applications}
 
 case ${1:-} in
-    "") install=1 ;;
-    --no-install) install=0 ;;
-    *) echo "usage: $0 [--no-install]" >&2; exit 2 ;;
+    "") mode=install ;;
+    --no-install) mode=build ;;
+    --dist) mode=dist ;;
+    *) echo "usage: $0 [--no-install | --dist]" >&2; exit 2 ;;
 esac
 
 [[ $(uname) == Darwin ]] || { echo "$0: macOS only" >&2; exit 1; }
 
 cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-"$cargo" build --release --manifest-path "$root/Cargo.toml" -p $app
-version=$("$cargo" pkgid --manifest-path "$root/Cargo.toml" -p $app | sed 's/.*[#@]//')
-
+manifest=$root/Cargo.toml
+version=$("$cargo" pkgid --manifest-path "$manifest" -p $app | sed 's/.*[#@]//')
 bundle=$root/target/release/$app.app
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
-cp "$root/target/release/$app" "$bundle/Contents/MacOS/$app"
+
+if [[ $mode == dist ]]; then
+    # One binary for Apple Silicon and Intel Macs.
+    targets=(aarch64-apple-darwin x86_64-apple-darwin)
+    rustup target add "${targets[@]}"
+    for target in "${targets[@]}"; do
+        "$cargo" build --release --locked --manifest-path "$manifest" -p $app --target "$target"
+    done
+    lipo -create -output "$bundle/Contents/MacOS/$app" \
+        "$root/target/${targets[0]}/release/$app" "$root/target/${targets[1]}/release/$app"
+else
+    "$cargo" build --release --manifest-path "$manifest" -p $app
+    cp "$root/target/release/$app" "$bundle/Contents/MacOS/$app"
+fi
+strip "$bundle/Contents/MacOS/$app"
 iconutil -c icns "$root/packaging/icons/$app.iconset" -o "$bundle/Contents/Resources/$app.icns"
+"$root/scripts/copy-licenses.sh" "$bundle/Contents/Resources"
 
 cat >"$bundle/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -60,7 +78,14 @@ plutil -lint "$bundle/Contents/Info.plist" >/dev/null
 codesign --force --sign - "$bundle"
 echo "built $bundle ($version)"
 
-if [[ $install == 1 ]]; then
+if [[ $mode == dist ]]; then
+    zip=$root/target/dist/$app-$version-macos.zip
+    mkdir -p "$(dirname "$zip")"
+    rm -f "$zip"
+    # ditto keeps the bundle and its signature intact; plain zip may not.
+    ditto -c -k --keepParent "$bundle" "$zip"
+    echo "$zip"
+elif [[ $mode == install ]]; then
     mkdir -p "$dest"
     # Only ever our own bundle at this path; a running copy keeps working
     # until it quits.

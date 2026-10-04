@@ -1,0 +1,65 @@
+# Pushing a tag `v<version>` (the version in crates/yagni-commander/Cargo.toml)
+# builds the macOS zip and the Linux tarball with the scripts in `scripts/`
+# and publishes them as a GitHub Release. Actions are pinned to commit SHAs.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup update stable && rustup default stable
+      - name: Tag matches the crate version
+        run: |
+          version=$(cargo pkgid -p yagni-commander | sed 's/.*[#@]//')
+          [[ "v$version" == "$GITHUB_REF_NAME" ]] || { echo "tag $GITHUB_REF_NAME, crate $version"; exit 1; }
+      - run: scripts/bundle-mac.sh --dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: macos
+          path: target/dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    # The oldest Ubuntu runner: the binary needs its glibc or newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: System packages (as in the README)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config clang cmake libxkbcommon-dev \
+            libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev
+      - run: rustup update stable && rustup default stable
+      - run: scripts/dist-linux.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux
+          path: target/dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [macos, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

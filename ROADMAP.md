@@ -25,7 +25,8 @@ Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the nativ
 ## Packaging
 
 - Installing from source on your own machines: `scripts/install-linux.sh` and `scripts/bundle-mac.sh` (2026-10-04). Verified by the owner (2026-10-04): the Linux install on KDE; the macOS bundle (icon in Finder and the Dock), and F4 from the viewer launching `editor = "/usr/local/bin/code"` (a full path) with the app started from the bundle; a bare `editor = "code"` did not start it there (minimal `PATH`); now fixed by `shell_path`, to check on macOS: a bare `code` from the bundle, and startup with a slow or noisy shell profile. To check on real machines: the launcher entry and the icon on Omarchy.
-- Releases for other people (not decided): GitHub Releases built by Actions on a tag (the repo is private, so its release files are not public), a Homebrew tap for macOS (the official cask repo needs notability and a notarized app, which needs a paid Apple Developer account), an AUR `PKGBUILD` for Arch. Not Flatpak or Snap: their sandbox gets in the way of a file manager that starts editors, terminals and `xdg-open` on the host.
+- Releases (decided 2026-10-04): a tag builds a universal macOS zip (ad hoc signed, not notarized; the README explains clearing the quarantine flag) and a Linux tarball with `install.sh`, published as a GitHub Release (`.github/workflows/release.yml`). Waits for the repo to go public; the workflow has never run. Not done, on purpose: notarization (needs a paid Apple Developer membership), `.deb` (no updates without an apt repository), Flatpak and Snap (their sandbox gets in the way of starting editors, terminals and `xdg-open` on the host).
+- Later, if asked: a Homebrew tap (the official cask repo needs notability and a notarized app), an AUR `PKGBUILD`, a `.deb` via `cargo-deb`.
 
 ## v2
 
