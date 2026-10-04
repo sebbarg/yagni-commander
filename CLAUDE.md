@@ -15,6 +15,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`), install scripts and a release workflow (`scripts/install-linux.sh`, `scripts/bundle-mac.sh`, `scripts/dist-linux.sh`, `scripts/install.sh`, `scripts/release.sh`, `.github/workflows/release.yml`; 1.0.0 released 2026-10-04, the repo is public), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; known limits in SPEC (Zoom)). Themes are done and merged on `main` (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic; `theme` key and Settings dropdown). `cargo test --workspace` (459 app, 669 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. A narrow panel drops optional columns (Permissions, Owner, Modified) so Name keeps 120 px (SPEC, File list). Next: the owner's choice from `ROADMAP.md`.
 
+In progress (2026-10-04): the owner is testing 1.0.0 on Kubuntu in a "Plasma (Wayland)" session on real hardware (the first native Wayland run on a GPU). Checklist: the window frame (move, resize, close, maximize), the icon in the task manager and Alt-Tab, keys (Tab, F5/F6/F8, Ctrl-Tab, lone Alt opens the menu, Alt-Tab away and back without a stuck Alt), F3 viewer window focus, the watcher (`touch x` in the shown folder), About (1.0.0, link opens the browser). Record results in ROADMAP (To verify on real machines). After that: Omarchy (a VM needs 3D acceleration; llvmpipe with LLVM 22 crashes, see README).
+
 ## How we work
 
 - The owner reviews each step; commit only when asked (they say "commit"). Commits are local; the owner pushes (remote: `github.com/sebbarg/yagni-commander`).
