@@ -14,9 +14,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Current state (update at the end of every session)
 
-As of 2026-10-04: v1 is complete and committed, including the app icon (`packaging/icons/`, not wired into packaging). Next: the owner's choice from `ROADMAP.md`. On `main`, `cargo test --workspace`, clippy and fmt were green at the review-minors commit (`4bb45de`); `scripts/smoke.sh` was not run before it (it passes on `zoom`, which contains it).
-
-Zoom is implemented on branch `zoom` (Tasks 1-5 and keypad keys committed; Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`). There `cargo test --workspace` (431 app, 648 core), clippy and fmt are green, and `scripts/smoke.sh` passes end to end (it zooms to 150%). The owner decides whether `zoom` merges into `main`. Known limits are in SPEC (Zoom) and ROADMAP v2.
+As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`, not wired into packaging), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`; known limits in SPEC (Zoom) and ROADMAP v2). `cargo test --workspace` (431 app, 648 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. Next: the owner's choice from `ROADMAP.md`.
 
 ## How we work
 
