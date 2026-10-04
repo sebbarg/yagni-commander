@@ -4,7 +4,10 @@
 //! (`/usr/bin:/bin:/usr/sbin:/sbin`), so `editor = "code"` is not found
 //! although it works in a terminal. Like Zed and VS Code, the app asks the
 //! login shell once at startup ([`start`]) and every program it starts is
-//! looked up in, and inherits, that `PATH` ([`command`]). Only `PATH`:
+//! looked up in, and inherits, that `PATH` ([`command`]). Only when
+//! launchd started the app (Finder, Dock, Spotlight, `open`): started from
+//! a shell, the inherited `PATH` is already the user's, as VS Code also
+//! assumes. Only `PATH`:
 //! setting the whole environment would need `std::env::set_var`, which is
 //! `unsafe`.
 
@@ -27,15 +30,24 @@ const MARKER: &str = "_YAGNI_COMMANDER_ENV_";
 
 static LOGIN_PATH: OnceLock<OsString> = OnceLock::new();
 
-/// Reads the login shell's `PATH` on a background thread; [`command`] uses
-/// it from then on. Called once, at startup on macOS.
+/// Reads the login shell's `PATH` on a background thread if launchd
+/// started the app; [`command`] uses it from then on. Called once, at
+/// startup on macOS.
 pub fn start() {
+    if !started_by_launchd(nix::unistd::getppid()) {
+        return;
+    }
     std::thread::spawn(|| {
         // Without it, programs keep the inherited PATH.
         if let Some(path) = read(&login_shell(), TIMEOUT) {
             let _ = LOGIN_PATH.set(path);
         }
     });
+}
+
+/// launchd is process 1: the parent of every app LaunchServices opens.
+fn started_by_launchd(parent: nix::unistd::Pid) -> bool {
+    parent == nix::unistd::Pid::from_raw(1)
 }
 
 /// The `PATH` programs are started with: the login shell's once read,
@@ -137,6 +149,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         path
+    }
+
+    #[test]
+    fn only_a_launchd_start_asks_the_shell() {
+        use nix::unistd::Pid;
+        assert!(started_by_launchd(Pid::from_raw(1)));
+        assert!(!started_by_launchd(Pid::from_raw(4242)));
+        // Tests run under cargo, not launchd: `start` does nothing.
+        start();
+        assert!(LOGIN_PATH.get().is_none());
     }
 
     #[test]
