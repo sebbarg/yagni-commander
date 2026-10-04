@@ -16,6 +16,8 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 As of 2026-10-04: v1 is complete and committed, including the app icon (`packaging/icons/`, not wired into packaging). Next: the owner's choice from `ROADMAP.md`. `cargo test --workspace` (398 app, 648 core), clippy and fmt are green; `scripts/smoke.sh` was not run before the review-minors commit (`4bb45de`); run it next session.
 
+On branch `zoom` (2026-10-04): the zoom experiment (Ctrl-=/+/-/0, a UI level and a viewer level, modeled on Zed). Spec `docs/superpowers/specs/2026-10-04-zoom-design.md` and plan `docs/superpowers/plans/2026-10-04-zoom.md` are approved; nothing implemented yet. Next session: execute the plan with superpowers:subagent-driven-development (owner's choice), starting at Task 1, checkpoint after each task.
+
 ## How we work
 
 - The owner reviews each step; commit only when asked (they say "commit"). Commits are local; the owner pushes (remote: `github.com/sebbarg/yagni-commander`).
