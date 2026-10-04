@@ -1955,11 +1955,27 @@ fn about_shows_a_dialog_and_ok_returns_to_the_panels(cx: &mut TestAppContext) {
     assert_eq!(cursor(&commander, Side::Left, cx), 1);
 }
 
+#[gpui_kit::test]
+fn the_about_link_opens_the_repository_in_the_browser(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.dispatch_action(crate::actions::About);
+    cx.run_until_parked();
+    assert_eq!(cx.opened_url(), None);
+    click(cx, "about-link", 1);
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("https://github.com/sebbarg/yagni-commander")
+    );
+    // The box stays open.
+    assert!(dialog_open(cx));
+}
+
 #[test]
-fn about_text_has_name_and_version() {
+fn about_text_has_name_version_and_repository() {
     let text = super::commands::about_text();
     assert!(text.contains("yagni-commander"));
     assert!(text.contains(env!("CARGO_PKG_VERSION")));
+    assert!(text.ends_with("\nhttps://github.com/sebbarg/yagni-commander"));
 }
 
 #[gpui_kit::test]

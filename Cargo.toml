@@ -8,6 +8,7 @@ default-members = ["crates/yagni-commander"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/sebbarg/yagni-commander"
 # The oldest Rust that builds the tree (checked 2026-10-04): gpui-pre 0.3.7 uses
 # `std::hint::cold_path`, stable in 1.95, and declares no rust-version itself.
 rust-version = "1.95"

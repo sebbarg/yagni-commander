@@ -24,7 +24,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - Check marks follow the state: the menus are rebuilt when hidden files or the active panel's sort change.
 - Menu items act on the active panel, exactly like their keys (same rules while a panel is loading or a dialog is open).
 - Linux keyboard: F10 or a lone Alt (pressed and released with no other key, button or modifier in between) opens the first menu; Alt-F opens Files (also from another open menu; it doesn't close it); Up/Down and Enter inside, Left/Right between menus; Escape, F10 or a lone Alt closes it and the panel gets focus back; other keys are ignored while it is open, except Quit (Alt-F4). Opening a menu, by key or mouse, ends the quick search. Alt-Z, Alt-F4 and Alt-Tab never open it (a key, mouse button or window deactivation between press and release cancels). Not while a dialog is open. On macOS F10, lone Alt and Alt-F do nothing.
-- About: a dialog with the name and version (`CARGO_PKG_VERSION`) and an OK button.
+- About: a dialog with the name and version (`CARGO_PKG_VERSION`), the project's GitHub address as a link that opens the browser (`CARGO_PKG_REPOSITORY`, in the theme's `info` color; Ctrl-C copies the text) and an OK button.
 
 ### Config
 

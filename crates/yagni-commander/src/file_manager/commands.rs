@@ -576,6 +576,22 @@ pub(super) fn show_message_box(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let body = move |_: &mut App| gpui_kit::IntoElement::into_any_element(message.clone());
+    show_box(title, body, copied, width, button, refocus, window, cx);
+}
+
+/// A [`show_message_box`] whose body `body` builds, for more than text.
+#[allow(clippy::too_many_arguments)]
+fn show_box(
+    title: &'static str,
+    body: impl Fn(&mut App) -> gpui_kit::AnyElement + 'static,
+    copied: String,
+    width: f32,
+    button: &'static str,
+    refocus: Option<FocusHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     // After the dialog stack has finished restoring focus.
     let restore = move |refocus: &Option<FocusHandle>, window: &mut Window, cx: &mut App| {
         if let Some(focus) = refocus.clone() {
@@ -598,7 +614,7 @@ pub(super) fn show_message_box(
             .title(title)
             .w(crate::zoom::dialog_width(width, cx))
             .close_button(false)
-            .child(message.clone())
+            .child(body(cx))
             .footer(buttons.clone())
             .on_cancel(move |_, window, cx| {
                 restore(&refocus, window, cx);
@@ -637,11 +653,13 @@ pub(crate) fn dialog_password_field(state: &gpui_kit::Entity<InputState>) -> gpu
         .child(text_field(state).mask_toggle())
 }
 
-/// The About box's text.
+/// The About box's text, which Ctrl-C copies; the box shows its last
+/// line, the repository, as a link.
 pub(super) fn about_text() -> String {
     format!(
-        "yagni-commander {}\nA dual-pane file manager.",
-        env!("CARGO_PKG_VERSION")
+        "yagni-commander {}\nA dual-pane file manager.\n{}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
     )
 }
 
@@ -650,14 +668,28 @@ impl FileManager {
     pub(super) fn about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         let refocus = Some(self.focus.clone());
-        show_message(
-            "About yagni-commander",
-            about_text(),
-            "OK",
-            refocus,
-            window,
-            cx,
-        );
+        let title = "About yagni-commander";
+        let text = about_text();
+        let copied = format!("{title}\n{text}");
+        let body = move |_: &mut App| {
+            use gpui_kit::component::link::Link;
+            use gpui_kit::{InteractiveElement, IntoElement};
+            let (lines, url) = text.rsplit_once('\n').unwrap_or((&text, ""));
+            gpui_kit::div()
+                .child(lines.to_owned())
+                // A click opens the browser.
+                .child(
+                    gpui_kit::div().flex().child(
+                        Link::new("about-link").href(url.to_owned()).child(
+                            gpui_kit::div()
+                                .debug_selector(|| "about-link".into())
+                                .child(url.to_owned()),
+                        ),
+                    ),
+                )
+                .into_any_element()
+        };
+        show_box(title, body, copied, 420.0, "OK", refocus, window, cx);
     }
 }
 

@@ -200,6 +200,8 @@ impl Theme {
         colors.success_foreground = hex(c.success);
         colors.info = hex(c.info);
         colors.info_foreground = hex(c.info);
+        // Links (the About box's), in a color tested on dialogs.
+        colors.link = hex(c.info);
 
         ThemeConfig {
             name: SharedString::from(self.name.clone()),
