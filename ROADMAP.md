@@ -16,6 +16,7 @@ Everything so far was built and tested in a Linux container (X11 under Xvfb, no 
 - **Archives:** extracting a real-world `.tar.xz` and a Windows-made zip; a 7-Zip AES zip and a Windows Explorer ZipCrypto zip.
 - **Terminal (Ctrl-Shift-T):** Konsole on Kubuntu (`--workdir`, also when started through `x-terminal-emulator`), Omarchy (`$TERMINAL` = `xdg-terminal-exec` reaching an app started from the launcher), macOS (Terminal.app at the folder).
 - **Fonts:** JetBrains Mono NL in the F3 viewer on macOS and KDE; that the Size and Modified columns line up now that they use tabular figures (`tnum`; on macOS they did not before, 2026-10-04), also under KDE.
+- **Zoom:** Ctrl-= on keyboards where `=` needs Shift (macOS, KDE layouts), and the zoom items in the native macOS menu (labels, keys), on macOS and KDE.
 - **Clipboard:** pasting a large viewer copy (tens of MiB) into another app.
 - **macOS PATH:** F4 with `editor = "code"` when launched from Finder (apps started from Finder get a minimal `PATH`; a full path in the config is the workaround).
 - **Reported, unconfirmed:** the owner saw only Name sorting work; Size and Modified sort correctly in headless tests (owner/permissions sorts look like name sorts where those values are all equal).
@@ -31,6 +32,7 @@ Verified by the owner: F8 trash on Kubuntu lands in `~/.local/share/Trash/files`
 - **Settings:** a "Browse..." button for the editor field that picks the program with a file dialog and fills in its path; the field stays editable for arguments like `--wait` (decided 2026-10-01). Choosing the terminal emulator for Ctrl-Shift-T (a Settings field used instead of the detection).
 - **Themes:** theme selection in the config (`theme = "..."`), more built-in themes, and user themes in `~/.config/yagni-commander/themes/*.toml`; following the system light/dark appearance.
 - **File list:** resizable columns (moved from v1 on 2026-10-02; until then, hiding columns in Settings gives Name more room).
+- **Zoom:** our own menu popup, so menu rows scale with the zoom (gpui-component's `PopupMenu` rows are a fixed 26 px). Fit dialogs to the window (clamp the width, scroll the body): at large zoom in a small window some overflow (24 px in 1200x800: Settings clips at the bottom; 32 px: the hotlist Configure dialog is wider than the window).
 - **Toolbar:** with e.g. drive icons.
 - **Quick search:** fuzzy matching (if ever).
 - **Hidden files:** files hidden only by the macOS Finder flag (if needed; they are always shown now).

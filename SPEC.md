@@ -18,7 +18,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
   - **Files:** View (F3), Edit (F4), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8), Pack (Alt-F5), Extract (Alt-F6), Compare by content (no key); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS); Quit (Linux only, Alt-F4).
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D), Find files (Alt-F7), Open terminal here (Ctrl-Shift-T).
-  - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. The sort commands are actions, so the keymap can bind them; unbound by default.
+  - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. Then Zoom in (Ctrl-=), Zoom out (Ctrl--) and Actual size (Ctrl-0), see Zoom. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About. On macOS, About and Quit sit in the app menu (platform convention) and there is no Help menu.
   - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit.
 - Check marks follow the state: the menus are rebuilt when hidden files or the active panel's sort change.
@@ -50,6 +50,18 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 ### Themes
 
 - All colors come from a theme file; one built-in theme (Tokyo Night). No hardcoded colors in views. Theme selection, user themes and following the system appearance are v2.
+
+### Zoom
+
+Decided with the owner 2026-10-04, on the `zoom` branch (spec `docs/superpowers/specs/2026-10-04-zoom-design.md`), modeled on Zed.
+
+- Two zoom levels, each a base size in px: UI (the main window, every dialog and popup, the viewer's dialogs) and viewer (the content of every F3 viewer window). Both start at 16 px.
+- In the main window, Ctrl-= or Ctrl-+ makes the UI 1 px larger, Ctrl-- 1 px smaller, Ctrl-0 resets to 16 px. In a viewer window the same keys change the viewer level, for all viewer windows at once.
+- Range 10 to 32 px (62% to 200%). A key at a limit does nothing.
+- Both levels are kept in the state file (`ui_zoom`, `viewer_zoom`, in px) and apply from the first frame after a restart. A missing or out-of-range value means 16 (clamped).
+- Show menu: Zoom in, Zoom out, Actual size, with their keys. They act on the UI level.
+- Everything we draw scales: panels, status line, menu bar, hotlist popup, dialog bodies and their widths. 1 px borders stay 1 px.
+- Known limits: menu dropdown rows are a fixed 26 px (gpui-component's `PopupMenu`), so their text gets tight from about 140%. The native macOS menu bar does not scale. The default window size stays in px. Dialogs are not clamped to the window: at large zoom in a small window some overflow (at 24 px in a 1200x800 window Settings clips at the bottom; at 32 px the hotlist Configure dialog is wider than the window). At larger zoom the fixed columns squeeze the Name column sooner (at 24 px in the default 1280 px window Name can vanish with all optional columns on).
 
 ### File list
 
@@ -106,6 +118,9 @@ Tabs per side (v1; pulled forward from v2 on 2026-10-02; design: `docs/superpowe
 | Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |
 | In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |
+| Ctrl-=, Ctrl-+ | Zoom in: the UI level in the main window, the viewer level in a viewer window (see Zoom). |
+| Ctrl-- | Zoom out (same levels). |
+| Ctrl-0 | Reset the zoom to 16 px (same levels). |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
 | F10, Alt (alone) | Open the menu (Linux; see Menu). |
 | Letters, digits, `.` and other printable keys | Quick search (see below). |

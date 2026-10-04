@@ -1931,6 +1931,7 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         "alt-f4"
     };
     assert_eq!(key(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    assert_eq!(key(&crate::actions::ZoomIn, cx).as_deref(), Some("ctrl-="));
     // The native macOS menu shows an action's first binding instead
     // (gpui-pre-macos `platform.rs`, zed issue 23621).
     let first = |action: &dyn gpui_kit::Action, cx: &mut VisualTestContext| {
@@ -5835,6 +5836,15 @@ mod zoom {
             16.0,
             "viewer level untouched"
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[gpui_kit::test]
+    fn show_menu_zoom_in_raises_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        // Show is the 3rd menu; Zoom in is third from the end (Up wraps to the last item).
+        cx.simulate_keystrokes("f10 right right up up up enter");
+        assert_eq!(ui_font_size(cx), 17.0);
     }
 
     #[gpui_kit::test]

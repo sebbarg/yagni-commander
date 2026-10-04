@@ -14,9 +14,9 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Current state (update at the end of every session)
 
-As of 2026-10-04: v1 is complete and committed, including the app icon (`packaging/icons/`, not wired into packaging). Next: the owner's choice from `ROADMAP.md`. `cargo test --workspace` (398 app, 648 core), clippy and fmt are green; `scripts/smoke.sh` was not run before the review-minors commit (`4bb45de`); run it next session.
+As of 2026-10-04: v1 is complete and committed, including the app icon (`packaging/icons/`, not wired into packaging). Next: the owner's choice from `ROADMAP.md`. On `main`, `cargo test --workspace`, clippy and fmt were green at the review-minors commit (`4bb45de`); `scripts/smoke.sh` was not run before it (it passes on `zoom`, which contains it).
 
-On branch `zoom` (2026-10-04): the zoom experiment (Ctrl-=/+/-/0, a UI level and a viewer level, modeled on Zed). Spec `docs/superpowers/specs/2026-10-04-zoom-design.md` and plan `docs/superpowers/plans/2026-10-04-zoom.md` are approved; nothing implemented yet. Next session: execute the plan with superpowers:subagent-driven-development (owner's choice), starting at Task 1, checkpoint after each task.
+Zoom is implemented on branch `zoom` (Tasks 1-5 committed; Ctrl-=/+/-/0, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`). There `cargo test --workspace` (428 app, 648 core), clippy and fmt are green, and `scripts/smoke.sh` passes end to end (it zooms to 150%). The owner decides whether `zoom` merges into `main`. Known limits are in SPEC (Zoom) and ROADMAP v2.
 
 ## How we work
 

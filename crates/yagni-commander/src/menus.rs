@@ -12,7 +12,7 @@ use crate::actions::{
     Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings, OpenTerminal, Pack,
     PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName,
     SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
-    View,
+    View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -156,6 +156,12 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         .into_iter()
         .flatten(),
     );
+    show.extend([
+        MenuEntry::Separator,
+        item("Zoom in", ZoomIn),
+        item("Zoom out", ZoomOut),
+        item("Actual size", ZoomReset),
+    ]);
     let mut defs = vec![
         MenuDef {
             title: "Files",
@@ -339,7 +345,11 @@ mod tests {
                 "Sort by size",
                 "Sort by modified",
                 "Sort by owner",
-                "Sort by permissions"
+                "Sort by permissions",
+                "-",
+                "Zoom in",
+                "Zoom out",
+                "Actual size"
             ]
         );
         assert_eq!(labels(&defs[3]), ["About yagni-commander"]);
@@ -389,6 +399,9 @@ mod tests {
         assert!(action("Copy").partial_eq(&crate::actions::Copy));
         assert!(action("Sort by owner").partial_eq(&crate::actions::SortByOwner));
         assert!(action("Hidden files").partial_eq(&crate::actions::ToggleHidden));
+        assert!(action("Zoom in").partial_eq(&crate::actions::ZoomIn));
+        assert!(action("Zoom out").partial_eq(&crate::actions::ZoomOut));
+        assert!(action("Actual size").partial_eq(&crate::actions::ZoomReset));
         assert!(action("Settings...").partial_eq(&crate::actions::OpenSettings));
     }
 
@@ -424,7 +437,11 @@ mod tests {
                 "-",
                 "Sort by name",
                 "Sort by size",
-                "Sort by owner"
+                "Sort by owner",
+                "-",
+                "Zoom in",
+                "Zoom out",
+                "Actual size"
             ]
         );
     }

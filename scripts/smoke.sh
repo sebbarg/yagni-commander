@@ -594,6 +594,29 @@ check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-comm
 xdotool windowfocus "$window"
 sleep 0.5
 
+echo "zoom: 150% in the main window, a prompt, the Show menu and the viewer"
+keys ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal
+sleep 0.5
+shot 12a-zoom-main
+keys F7
+shot 12b-zoom-prompt
+keys Escape
+keys F10 Right Right
+shot 12c-zoom-menu
+keys Escape
+typed big
+keys F3
+check "zoomed viewer window open" xdotool search --name "big.txt - yagni-commander"
+xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
+sleep 0.5
+keys ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal
+sleep 0.5
+shot 12d-zoom-viewer
+keys Escape
+check "zoomed viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+
 echo "quit (with the right panel active)"
 keys Tab
 keys alt+F4
@@ -603,6 +626,8 @@ check "hidden files hidden again in the state" grep -q "show_hidden = false" \
 check "viewer geometry in the state" grep -q "^\[viewer\]" "$work/state/yagni-commander/state.toml"
 check "tabs in the state" grep -qF "left_tabs = [\"$left\", \"$left/docs\"]" "$work/state/yagni-commander/state.toml"
 check "right tab in the state" grep -qF "right_tabs = [\"$right\"]" "$work/state/yagni-commander/state.toml"
+check "zoom saved" grep -q '^ui_zoom = 24' "$work/state/yagni-commander/state.toml"
+check "viewer zoom saved" grep -q '^viewer_zoom = 24' "$work/state/yagni-commander/state.toml"
 
 echo "restart without arguments: same folders, right panel active"
 "$app" >"$work/app2.log" 2>&1 &
