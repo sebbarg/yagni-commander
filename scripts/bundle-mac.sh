@@ -39,9 +39,15 @@ mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 if [[ $mode == dist ]]; then
     # One binary for Apple Silicon and Intel Macs.
     targets=(aarch64-apple-darwin x86_64-apple-darwin)
-    rustup target add "${targets[@]}"
+    # Build with rustup's toolchain, the one the targets are added to: a
+    # cargo or rustc found first on PATH (Homebrew's rust) has only its own
+    # std. RUSTC too, since cargo looks rustc up on PATH.
+    toolchain=$(rustup show active-toolchain | cut -d' ' -f1)
+    rustup target add --toolchain "$toolchain" "${targets[@]}"
     for target in "${targets[@]}"; do
-        "$cargo" build --release --locked --manifest-path "$manifest" -p $app --target "$target"
+        RUSTC=$(rustup which --toolchain "$toolchain" rustc) \
+            "$(rustup which --toolchain "$toolchain" cargo)" build --release --locked \
+            --manifest-path "$manifest" -p $app --target "$target"
     done
     lipo -create -output "$bundle/Contents/MacOS/$app" \
         "$root/target/${targets[0]}/release/$app" "$root/target/${targets[1]}/release/$app"
