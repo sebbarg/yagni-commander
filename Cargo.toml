@@ -6,6 +6,9 @@ default-members = ["crates/yagni-commander"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
+# The oldest Rust that builds the tree (checked 2026-10-04): gpui-pre 0.3.7 uses
+# `std::hint::cold_path`, stable in 1.95, and declares no rust-version itself.
+rust-version = "1.95"
 
 [workspace.dependencies]
 yagni-commander-core = { path = "crates/yagni-commander-core" }

@@ -48,7 +48,7 @@ It installs into `~/.local` (the binary, a launcher entry and the icons), so it 
 
 ## Building
 
-Install Rust with [rustup](https://rustup.rs/) (latest stable), then the system packages:
+Install Rust with [rustup](https://rustup.rs/) (1.95 or newer; an older one stops with "requires rustc 1.95", fixed by `rustup update stable`), then the system packages:
 
 - **macOS:** Xcode.
 - **Kubuntu / Debian:** `sudo apt install build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev`
