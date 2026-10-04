@@ -19,6 +19,7 @@ mod listing;
 pub mod oplog;
 mod panel;
 mod quick_search;
+pub mod shell_path;
 mod sort;
 pub mod storage;
 mod tabs;

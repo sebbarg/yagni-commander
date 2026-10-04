@@ -30,7 +30,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 
 - Settings dialog (decided 2026-10-01): a modal dialog titled "Settings", opened with Ctrl-, (all platforms) or the menu (Linux: Files > Settings..., above Quit; macOS: the app menu's Settings...). Fields, top to bottom:
   - **Theme** (`theme`): dropdown of the built-in themes (see Themes). Enter or Space on it opens the list; arrows and Enter pick; Escape closes the list before the dialog. Switches at once.
-  - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes.
+  - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes. On macOS the editor, the terminal and the opener are looked up in the login shell's `PATH`, so a bare `code` works when the app was started from Finder (like Zed and VS Code; owner, 2026-10-04).
   - **Sort names case-sensitively** (`case_sensitive_sort`): switch. Applies at once: both panels re-sort, keeping their selection.
   - **Log file operations** (`log`): switch. On starts the log at once (including the startup cleanup of old log files); off stops logging. A copy or move already running keeps logging until it ends.
   - **Keep logs for N days** (`log_keep_days`): number, 1 to 3650, described as "Older log files are deleted at startup", followed by "Log files are stored in <folder> (click to copy)" (the full path; a click copies the path and the hint turns to "(copied)"; decided 2026-10-02). An invalid value shows an error at the field and is not saved.

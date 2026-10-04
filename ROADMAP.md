@@ -24,7 +24,7 @@ Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the nativ
 
 ## Packaging
 
-- Installing from source on your own machines: `scripts/install-linux.sh` and `scripts/bundle-mac.sh` (2026-10-04). Verified by the owner on KDE (2026-10-04): the Linux install. To check on real machines: the launcher entry and the icon on Omarchy; on macOS the bundle from Finder (icon, Dock), and F4 with `editor = "code"` launched from Finder (apps started from Finder get a minimal `PATH`; a full path in the config is the workaround).
+- Installing from source on your own machines: `scripts/install-linux.sh` and `scripts/bundle-mac.sh` (2026-10-04). Verified by the owner (2026-10-04): the Linux install on KDE; the macOS bundle (icon in Finder and the Dock), and F4 from the viewer launching `editor = "/usr/local/bin/code"` (a full path) with the app started from the bundle; a bare `editor = "code"` did not start it there (minimal `PATH`); now fixed by `shell_path`, to check on macOS: a bare `code` from the bundle, and startup with a slow or noisy shell profile. To check on real machines: the launcher entry and the icon on Omarchy.
 - Releases for other people (not decided): GitHub Releases built by Actions on a tag (the repo is private, so its release files are not public), a Homebrew tap for macOS (the official cask repo needs notability and a notarized app, which needs a paid Apple Developer account), an AUR `PKGBUILD` for Arch. Not Flatpak or Snap: their sandbox gets in the way of a file manager that starts editors, terminals and `xdg-open` on the host.
 
 ## v2

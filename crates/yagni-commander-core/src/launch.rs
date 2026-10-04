@@ -3,7 +3,9 @@
 
 use std::io;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::shell_path;
 
 /// Runs `command` (split like a shell would, e.g. `code --wait` or
 /// `"/Applications/My Editor.app/Contents/MacOS/editor"`) with `path` as its
@@ -16,7 +18,7 @@ pub fn open_in_editor(command: &str, path: &Path) -> io::Result<()> {
     let program = words
         .next()
         .ok_or_else(|| invalid("the editor command is empty"))?;
-    let mut child = Command::new(&program)
+    let mut child = shell_path::command(&program)
         .args(words)
         .arg(path)
         .stdin(Stdio::null())
@@ -47,7 +49,7 @@ pub fn open_with(
     path: &Path,
     on_failure: impl FnOnce(String) + Send + 'static,
 ) -> io::Result<()> {
-    let mut child = Command::new(opener)
+    let mut child = shell_path::command(opener)
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -120,7 +122,7 @@ pub fn run_program(path: &Path, dir: &Path) -> io::Result<()> {
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    let mut child = Command::new(path)
+    let mut child = shell_path::command(path)
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -135,6 +137,7 @@ pub fn run_program(path: &Path, dir: &Path) -> io::Result<()> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::time::{Duration, Instant};
 
     #[test]

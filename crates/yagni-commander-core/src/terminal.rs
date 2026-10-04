@@ -151,7 +151,7 @@ impl Env {
                 .then(dirs::config_dir)
                 .flatten()
                 .and_then(|dir| std::fs::read_to_string(dir.join("kdeglobals")).ok()),
-            path: std::env::var_os("PATH"),
+            path: crate::shell_path::current(),
         }
     }
 }
@@ -161,7 +161,7 @@ impl Env {
 /// failing to start is an error: a shell's exit code is its own business.
 pub fn open_terminal(command: Option<&str>, dir: &Path) -> io::Result<()> {
     let launch = resolve(command, &Env::current(), cfg!(target_os = "macos"), dir)?;
-    let mut child = std::process::Command::new(&launch.program)
+    let mut child = crate::shell_path::command(&launch.program)
         .args(&launch.args)
         .current_dir(dir)
         .stdin(std::process::Stdio::null())

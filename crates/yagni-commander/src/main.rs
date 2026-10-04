@@ -37,6 +37,12 @@ fn main() {
     )
     .init();
 
+    // Apps started from Finder get a minimal PATH: ask the login shell, so
+    // the editor, the terminal and the opener are found as in a terminal.
+    if cfg!(target_os = "macos") {
+        yagni_commander_core::shell_path::start();
+    }
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     let app_state = AppState::load();
     // Folders given on the command line must exist; the user typed them.
