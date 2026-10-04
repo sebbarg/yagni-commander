@@ -30,7 +30,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 
 - Settings dialog (decided 2026-10-01): a modal dialog titled "Settings", opened with Ctrl-, (all platforms) or the menu (Linux: Files > Settings..., above Quit; macOS: the app menu's Settings...). Fields, top to bottom:
   - **Theme** (`theme`): dropdown of the built-in themes (see Themes). Enter or Space on it opens the list; arrows and Enter pick; Escape closes the list before the dialog. Switches at once.
-  - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes. A "Browse..." button that picks the program with a file dialog and fills in its path (v2, decided 2026-10-01); the field stays editable for arguments like `--wait`.
+  - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes.
   - **Sort names case-sensitively** (`case_sensitive_sort`): switch. Applies at once: both panels re-sort, keeping their selection.
   - **Log file operations** (`log`): switch. On starts the log at once (including the startup cleanup of old log files); off stops logging. A copy or move already running keeps logging until it ends.
   - **Keep logs for N days** (`log_keep_days`): number, 1 to 3650, described as "Older log files are deleted at startup", followed by "Log files are stored in <folder> (click to copy)" (the full path; a click copies the path and the hint turns to "(copied)"; decided 2026-10-02). An invalid value shows an error at the field and is not saved.
@@ -50,7 +50,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 
 ### Themes
 
-- All colors come from a theme file. No hardcoded colors in views. User themes and following the system appearance are v2.
+- All colors come from a theme file. No hardcoded colors in views. The five built-in themes are the set: no user themes, no following the system appearance (owner, 2026-10-04).
 - Five built-in themes (decided 2026-10-04), in this order in the dropdown: **Tokyo Night** (the default), **Gruvbox Dark** (dark, warm: the original palette, two colors lifted for contrast), **Everforest Dark** (dark, muted green-gray; medium contrast, its grays lifted), **Catppuccin Latte** (light, soft; its pastel accents darkened to reach 4.5:1, same hues) and **Classic** (light: white lists, gray `#d4d0c8` window, headers and dialogs, a navy cursor bar, red marked files; the colors of old Total Commander, not its 3D look).
 - The config key `theme` holds a theme's id: `tokyo-night`, `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` or `classic`. Missing means Tokyo Night. The commented template lists the ids.
 - An unknown id: Tokyo Night is used and the status line says `Unknown theme "x", using Tokyo Night`; every other setting still applies and the file is not rewritten.
@@ -67,7 +67,7 @@ Decided with the owner 2026-10-04, on the `zoom` branch (spec `docs/superpowers/
 - Both levels are kept in the state file (`ui_zoom`, `viewer_zoom`, in px) and apply from the first frame after a restart. A missing or out-of-range value means 16 (clamped).
 - Show menu: Zoom in, Zoom out, Actual size, with their keys. They act on the UI level.
 - Everything we draw scales: panels, status line, menu bar, hotlist popup, dialog bodies and their widths. 1 px borders stay 1 px.
-- Known limits: menu dropdown rows are a fixed 26 px (gpui-component's `PopupMenu`), so their text gets tight from about 140%. The native macOS menu bar does not scale. The default window size stays in px. Dialogs are not clamped to the window: at large zoom in a small window some overflow (at 24 px in a 1200x800 window Settings clips at the bottom; at 32 px the hotlist Configure dialog is wider than the window). At larger zoom optional columns make way for Name sooner (see File list).
+- Known limits: menu dropdown rows are a fixed 26 px (gpui-component's `PopupMenu`), so their text gets tight from about 140%. The native macOS menu bar does not scale. While a viewer window has focus, every macOS menu item but Quit is disabled (the menu's actions belong to the main window); the viewer zooms by its keys (owner, 2026-10-04: fine as is). The default window size stays in px. Dialogs are not clamped to the window: at large zoom in a small window some overflow (at 24 px in a 1200x800 window Settings clips at the bottom; at 32 px the hotlist Configure dialog is wider than the window). At larger zoom optional columns make way for Name sooner (see File list).
 
 ### File list
 
@@ -147,7 +147,7 @@ Tabs per side (v1; pulled forward from v2 on 2026-10-02; design: `docs/superpowe
 
 ### Hidden files
 
-- Hidden means the name starts with `.` (Linux and macOS). Files hidden only by the macOS Finder flag are always shown (v2, if needed).
+- Hidden means the name starts with `.` (Linux and macOS). Files hidden only by the macOS Finder flag are always shown.
 - Hidden files are not shown by default. Ctrl-. toggles them for both panels, and the choice is remembered across runs (state file).
 - When shown, hidden entries are drawn in a dimmer color (a theme role).
 - Hiding them deselects any selected hidden entries, so file operations never act on something invisible. Quick search only matches visible entries.

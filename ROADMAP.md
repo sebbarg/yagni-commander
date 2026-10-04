@@ -4,7 +4,7 @@ What comes next. v1 is complete; what remains is verification on real machines, 
 
 ## To verify on real machines
 
-Built and tested in a Linux container (X11 under Xvfb, no window manager); the owner has also checked everything below on macOS (2026-10-04) and some of it on KDE under X11.
+Built and tested in a Linux container (X11 under Xvfb, no window manager); since then the owner has checked macOS and part of KDE under X11 (see "Verified by the owner" below). What is left is Linux on real machines.
 
 - **Builds and tests:** `scripts/smoke.sh` on Kubuntu and Omarchy (packages in the README; names not yet verified there).
 - **Platforms:** Wayland (Plasma, Hyprland), never tested; the file icons on Wayland.
@@ -20,22 +20,16 @@ Built and tested in a Linux container (X11 under Xvfb, no window manager); the o
 - **Clipboard:** pasting a large viewer copy (tens of MiB) into another app.
 - **Reported, unconfirmed:** the owner saw only Name sorting work; Size and Modified sort correctly in headless tests (owner/permissions sorts look like name sorts where those values are all equal).
 
-Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the native menu, file icons, keys, viewer focus, drag and auto-scroll, the watcher (FSEvents) and its CPU, Terminal.app, fonts and tabular figures, zoom keys and menu items, F4 from Finder; F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE, X11).
+Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the native menu, file icons, keys, viewer focus, drag and auto-scroll, the watcher (FSEvents) and its CPU, Terminal.app, F4 (also from the viewer), fonts and tabular figures, zoom keys and menu items (in a viewer window the keys zoom the viewer; every menu item but Quit is disabled there, which the owner accepts); F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE, X11).
 
 ## Packaging
 
 - A `.desktop` file and icon-theme install for Linux, an `.app` bundle with the `.icns` for macOS. The icons are ready in `packaging/icons/` (see ARCHITECTURE.md).
+- Once the `.app` bundle exists, check on macOS: F4 with `editor = "code"` when launched from Finder (apps started from Finder get a minimal `PATH`; a full path in the config is the workaround).
 
 ## v2
 
-- **Settings:** a "Browse..." button for the editor field that picks the program with a file dialog and fills in its path; the field stays editable for arguments like `--wait` (decided 2026-10-01). Choosing the terminal emulator for Ctrl-Shift-T (a Settings field used instead of the detection).
-- **Themes:** theme selection (`theme` key, Settings dropdown) and five built-ins (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic) are done. Remaining: more built-in themes, user themes in `~/.config/yagni-commander/themes/*.toml`, and following the system light/dark appearance.
-- **File list:** resizable columns (moved from v1 on 2026-10-02; until then, a narrow panel drops optional columns so Name keeps its room).
-- **Zoom:** our own menu popup, so menu rows scale with the zoom (gpui-component's `PopupMenu` rows are a fixed 26 px). Fit dialogs to the window (clamp the width, scroll the body): at large zoom in a small window some overflow (24 px in 1200x800: Settings clips at the bottom; 32 px: the hotlist Configure dialog is wider than the window).
 - **Toolbar:** with e.g. drive icons.
-- **Quick search:** fuzzy matching (if ever).
-- **Hidden files:** files hidden only by the macOS Finder flag (if needed; they are always shown now).
-- **F3 viewer:** go to line (the line scan already keeps per-MiB line counts for it); other encodings; following a growing file.
 - **File operations:** a queue of operations, like TC's F2 queue (now one operation at a time).
 
 ## v3
