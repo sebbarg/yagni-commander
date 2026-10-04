@@ -39,7 +39,7 @@ impl FileManager {
         let focus = self.focus.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
             let (search, cancel, focus) = (view.clone(), view.clone(), focus.clone());
-            let width = view.read(cx).width();
+            let width = view.read(cx).width(cx);
             dialog
                 .title("Find files")
                 .w(width)

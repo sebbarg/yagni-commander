@@ -6,7 +6,7 @@
 //! font size); the code is ours.
 
 use gpui_kit::component::Theme as ComponentTheme;
-use gpui_kit::{App, Global, Rems, px, rems};
+use gpui_kit::{App, Global, Pixels, Rems, px, rems};
 
 pub const DEFAULT: f32 = 16.0;
 pub const MIN: f32 = 10.0;
@@ -60,6 +60,12 @@ pub fn rems_from_px(px: f32) -> Rems {
 /// `px` at the 16 px base, in px at `level`: for arithmetic on sizes.
 pub fn scaled(px: f32, level: f32) -> f32 {
     px * level / DEFAULT
+}
+
+/// A dialog width given in px at the 16 px base, in px at the UI level:
+/// gpui-component's `Dialog::w` takes only `Pixels`.
+pub fn dialog_width(px_at_base: f32, cx: &App) -> Pixels {
+    px(scaled(px_at_base, Zoom::get(cx).ui))
 }
 
 /// Makes the UI level the rem size of every window (through gpui-component's

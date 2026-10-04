@@ -11,7 +11,7 @@ use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::{
     App, AppContext, ClipboardItem, Context, Entity, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    WeakEntity, Window, div, prelude::FluentBuilder,
 };
 use yagni_commander_core::Setting;
 use yagni_commander_core::config::parse_keep_days;
@@ -194,7 +194,7 @@ impl Render for SettingsView {
         div()
             .flex()
             .flex_col()
-            .gap(px(12.0))
+            .gap(crate::zoom::rems_from_px(12.0))
             .when_some(problem, |d, problem| {
                 d.child(
                     div()
@@ -204,11 +204,16 @@ impl Render for SettingsView {
                 )
             })
             .child(
-                div().flex().flex_col().gap(px(4.0)).child("Editor").child(
-                    div()
-                        .debug_selector(|| "settings-editor".into())
-                        .child(text_field(&self.editor)),
-                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(crate::zoom::rems_from_px(4.0))
+                    .child("Editor")
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-editor".into())
+                            .child(text_field(&self.editor)),
+                    ),
             )
             .child(switch(
                 "settings-sort",
@@ -226,18 +231,18 @@ impl Render for SettingsView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(crate::zoom::rems_from_px(4.0))
                     .child("Keep logs for (days)")
                     .child(
                         div()
                             .debug_selector(|| "settings-days".into())
-                            .w(px(120.0))
+                            .w(crate::zoom::rems_from_px(120.0))
                             .child(text_field(&self.days)),
                     )
                     .child(
                         div()
                             .text_color(colors.text_secondary)
-                            .text_size(px(12.0))
+                            .text_size(crate::zoom::rems_from_px(12.0))
                             .child("Older log files are deleted at startup."),
                     )
                     .when_some(self.log_dir_text(), |d, text| {
@@ -246,7 +251,7 @@ impl Render for SettingsView {
                                 .id("settings-log-dir")
                                 .debug_selector(|| "settings-log-dir".into())
                                 .text_color(colors.text_secondary)
-                                .text_size(px(12.0))
+                                .text_size(crate::zoom::rems_from_px(12.0))
                                 .cursor_pointer()
                                 .hover(|style| style.text_color(colors.text))
                                 .on_click(cx.listener(|this, _, _, cx| this.copy_log_dir(cx)))
@@ -266,7 +271,7 @@ impl Render for SettingsView {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(8.0))
+                    .gap(crate::zoom::rems_from_px(8.0))
                     .child("Columns")
                     .child(switch(
                         "settings-icons",
@@ -295,7 +300,7 @@ impl Render for SettingsView {
                     .child(
                         div()
                             .text_color(colors.text_secondary)
-                            .text_size(px(12.0))
+                            .text_size(crate::zoom::rems_from_px(12.0))
                             .child("Name and Size are always shown."),
                     ),
             )
@@ -337,12 +342,12 @@ impl FileManager {
         });
         let buttons = ButtonRow::build([("Close", on_close)], 0, cx);
         focus_when_open(view.read(cx).editor_focus(cx), window, cx);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let (commit_ok, closed_ok) = (commit.clone(), closed.clone());
             let (commit_cancel, closed_cancel) = (commit.clone(), closed.clone());
             dialog
                 .title("Settings")
-                .w(px(480.0))
+                .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)
                 .child(view.clone())
                 .footer(buttons.clone())

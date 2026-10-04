@@ -16,7 +16,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::{
     App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, WeakEntity, Window, div, px,
+    Render, SharedString, Styled, WeakEntity, Window, div,
 };
 use yagni_commander_core::archive::inner_parts;
 use yagni_commander_core::file_ops::{
@@ -485,11 +485,11 @@ impl FileManager {
         let label = if delete { "Delete" } else { "Move to trash" };
         let buttons = ButtonRow::build([("Cancel", cancel), (label, confirm)], 1, cx);
         focus_when_open(buttons.focus_handle(cx), window, cx);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let focus_cancel = focus.clone();
             dialog
                 .title(title)
-                .w(px(420.0))
+                .w(crate::zoom::dialog_width(420.0, cx))
                 .close_button(false)
                 .child(question.clone())
                 .footer(buttons.clone())
@@ -627,11 +627,11 @@ impl FileManager {
         });
         let buttons = ButtonRow::build([("Cancel", cancel)], 0, cx);
         focus_when_open(buttons.focus_handle(cx), window, cx);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let this = this.clone();
             dialog
                 .title(kind.progress_title())
-                .w(px(480.0))
+                .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)
                 .overlay_closable(false)
                 .child(view.clone())
@@ -690,14 +690,14 @@ impl FileManager {
             let this_cancel = this.clone();
             dialog
                 .title("File exists")
-                .w(px(560.0))
+                .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
                 .overlay_closable(false)
                 .child(question.clone())
                 .child(
                     div()
                         .text_color(secondary)
-                        .text_size(px(13.0))
+                        .text_size(crate::zoom::rems_from_px(13.0))
                         .child(
                             div()
                                 .debug_selector(|| "conflict-new".into())
@@ -758,7 +758,7 @@ impl FileManager {
             let for_all = for_all.clone();
             dialog
                 .title("Symbolic link")
-                .w(px(560.0))
+                .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
                 .overlay_closable(false)
                 .child(
@@ -769,13 +769,13 @@ impl FileManager {
                 .child(
                     div()
                         .text_color(secondary)
-                        .text_size(px(13.0))
+                        .text_size(crate::zoom::rems_from_px(13.0))
                         .child(place.clone()),
                 )
                 .child(
                     div()
                         .debug_selector(|| "link-all".into())
-                        .pt(px(8.0))
+                        .pt(crate::zoom::rems_from_px(8.0))
                         .child(
                             Checkbox::new("link-all")
                                 .label("Same for the remaining links")
@@ -856,7 +856,7 @@ impl FileManager {
             let submit = submit.clone();
             dialog
                 .title("Password")
-                .w(px(480.0))
+                .w(crate::zoom::dialog_width(480.0, cx))
                 .close_button(false)
                 .overlay_closable(false)
                 .child(
@@ -868,7 +868,7 @@ impl FileManager {
                     div()
                         .debug_selector(|| "password-wrong".into())
                         .text_color(secondary)
-                        .text_size(px(13.0))
+                        .text_size(crate::zoom::rems_from_px(13.0))
                         .child("Wrong password.")
                 }))
                 .child(dialog_password_field(&input))
@@ -1255,11 +1255,11 @@ fn confirm_overwrite(
     });
     let buttons = ButtonRow::build([("Cancel", cancel), ("Overwrite", overwrite)], 1, cx);
     focus_when_open(buttons.focus_handle(cx), window, cx);
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
         let focus = focus.clone();
         dialog
             .title("Archive exists")
-            .w(px(420.0))
+            .w(crate::zoom::dialog_width(420.0, cx))
             .close_button(false)
             .child(question.clone())
             .footer(buttons.clone())
@@ -1442,7 +1442,7 @@ impl Render for ProgressView {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::zoom::rems_from_px(8.0))
             .child(
                 div()
                     .overflow_hidden()
@@ -1454,7 +1454,7 @@ impl Render for ProgressView {
             .child(
                 div()
                     .text_color(colors.text_secondary)
-                    .text_size(px(13.0))
+                    .text_size(crate::zoom::rems_from_px(13.0))
                     .child(status),
             )
     }

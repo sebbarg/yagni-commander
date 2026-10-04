@@ -5264,6 +5264,28 @@ mod find_files {
     }
 
     #[gpui_kit::test]
+    fn the_dialog_resizes_in_px_when_zoomed(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.simulate_keystrokes("alt-f7");
+        let list = |cx: &mut VisualTestContext| bounds(cx, "find-list".into()).unwrap().size;
+        let before = list(cx);
+        let grip = center(cx, "find-grip");
+        let left = gpui_kit::MouseButton::Left;
+        let modifiers = gpui_kit::Modifiers::default();
+        let to = gpui_kit::point(grip.x + gpui_kit::px(50.0), grip.y + gpui_kit::px(80.0));
+        cx.simulate_mouse_down(grip, left, modifiers);
+        cx.simulate_mouse_move(to, left, modifiers);
+        cx.simulate_mouse_up(to, left, modifiers);
+        cx.run_until_parked();
+        let bigger = list(cx);
+        assert_eq!(bigger.height, before.height + gpui_kit::px(80.0));
+        assert!(bigger.width > before.width);
+    }
+
+    #[gpui_kit::test]
     fn double_click_goes_to_the_file(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = opened(cx);
         search(cx, "y.txt");
@@ -5907,5 +5929,43 @@ mod zoom {
         // The divider's center follows the mouse.
         let divider = center(cx, "divider");
         assert!((f32::from(divider.x) - f32::from(target.x)).abs() < 1.0);
+    }
+
+    #[gpui_kit::test]
+    fn a_prompt_field_scales_with_the_zoom(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("f7");
+        let field = bounds(cx, "prompt-field".into()).unwrap();
+        let dialog = bounds(cx, "dialog-0".into()).unwrap();
+        cx.simulate_keystrokes("escape");
+        for _ in 0..16 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.simulate_keystrokes("f7");
+        let zoomed = bounds(cx, "prompt-field".into()).unwrap();
+        assert_eq!(
+            zoomed.size.height,
+            field.size.height * 2.0,
+            "32 px is twice 16 px"
+        );
+        // gpui-component's own dialog padding is px, so only nearly double.
+        assert!(zoomed.size.width > field.size.width * 1.9);
+        let wide = bounds(cx, "dialog-0".into()).unwrap();
+        assert_eq!(wide.size.width, dialog.size.width * 2.0);
+    }
+
+    #[gpui_kit::test]
+    fn the_find_dialog_keeps_its_minimum_width_in_rems(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.simulate_keystrokes("alt-f7");
+        let dialog = bounds(cx, "dialog-0".into()).unwrap();
+        assert!(
+            dialog.size.width >= gpui_kit::px(680.0 * 1.5),
+            "{:?}",
+            dialog.size.width
+        );
     }
 }

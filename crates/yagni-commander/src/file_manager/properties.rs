@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::{AppContext, Context, Entity, Focusable, ParentElement, Window, px};
+use gpui_kit::{AppContext, Context, Entity, Focusable, ParentElement, Window};
 use yagni_commander_core::archive::inner_parts;
 use yagni_commander_core::info::{self, Count, Info, Kind, Progress, Totals};
 use yagni_commander_core::{EntryKind, Panel};
@@ -122,11 +122,11 @@ impl FileManager {
         self.info = Some(running);
         focus_when_open(buttons.focus_handle(cx), window, cx);
         let this = cx.entity().downgrade();
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let this = this.clone();
             dialog
                 .title("Properties")
-                .w(px(WIDTH))
+                .w(crate::zoom::dialog_width(WIDTH, cx))
                 .close_button(false)
                 .child(view.clone())
                 .footer(buttons.clone())

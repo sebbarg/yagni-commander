@@ -190,9 +190,9 @@ impl Render for HotlistDialog {
                 .id(("hotlist-entry", ix))
                 .debug_selector(move || format!("hotlist-entry-{ix}"))
                 .flex()
-                .gap(px(16.0))
-                .px(px(8.0))
-                .py(px(2.0))
+                .gap(crate::zoom::rems_from_px(16.0))
+                .px(crate::zoom::rems_from_px(8.0))
+                .py(crate::zoom::rems_from_px(2.0))
                 .when(at_cursor, |d| {
                     d.bg(colors.accent).text_color(colors.text_on_accent)
                 })
@@ -204,7 +204,7 @@ impl Render for HotlistDialog {
                     }),
                 )
                 .child(
-                    div().w(px(140.0)).child(
+                    div().w(crate::zoom::rems_from_px(140.0)).child(
                         StyledText::new(label.text)
                             .with_highlights(label.underline.map(|r| (r, underline))),
                     ),
@@ -219,7 +219,7 @@ impl Render for HotlistDialog {
         div()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::zoom::rems_from_px(8.0))
             .child(
                 div()
                     .id("hotlist-list")
@@ -236,8 +236,8 @@ impl Render for HotlistDialog {
                     )
                     .on_action(cx.listener(|this, _: &act::MoveUp, _, cx| this.shift(-1, cx)))
                     .on_action(cx.listener(|this, _: &act::MoveDown, _, cx| this.shift(1, cx)))
-                    .mt(px(4.0))
-                    .min_h(px(120.0))
+                    .mt(crate::zoom::rems_from_px(4.0))
+                    .min_h(crate::zoom::rems_from_px(120.0))
                     .border_1()
                     .border_color(colors.border)
                     .bg(colors.panel_bg)
@@ -245,7 +245,7 @@ impl Render for HotlistDialog {
                         d.child(
                             div()
                                 .debug_selector(|| "hotlist-empty".into())
-                                .p(px(8.0))
+                                .p(crate::zoom::rems_from_px(8.0))
                                 .text_color(colors.text_dim)
                                 .child("No folders yet"),
                         )
@@ -256,16 +256,26 @@ impl Render for HotlistDialog {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .child(div().flex_none().w(px(48.0)).child("Name"))
+                    .gap(crate::zoom::rems_from_px(8.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(crate::zoom::rems_from_px(48.0))
+                            .child("Name"),
+                    )
                     .child(div().flex_1().child(text_field(&self.name))),
             )
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
-                    .child(div().flex_none().w(px(48.0)).child("Path"))
+                    .gap(crate::zoom::rems_from_px(8.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(crate::zoom::rems_from_px(48.0))
+                            .child("Path"),
+                    )
                     .child(div().flex_1().child(dialog_field(&self.path))),
             )
     }
@@ -357,11 +367,11 @@ impl FileManager {
             cx,
         );
         focus_when_open(view.read(cx).list_focus.clone(), window, cx);
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let (ok, cancel) = (ok.clone(), cancel.clone());
             dialog
                 .title("Directory hotlist")
-                .w(px(720.0))
+                .w(crate::zoom::dialog_width(720.0, cx))
                 .close_button(false)
                 .child(view.clone())
                 .footer(buttons.clone())

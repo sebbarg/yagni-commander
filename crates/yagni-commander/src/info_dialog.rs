@@ -1,7 +1,7 @@
 //! The Properties box's body (Alt-Enter): label and value rows. The box
 //! and its updates live in `file_manager/properties.rs`.
 
-use gpui_kit::{Context, IntoElement, ParentElement, Render, Styled, Window, div, px};
+use gpui_kit::{Context, IntoElement, ParentElement, Render, Styled, Window, div};
 
 use crate::theme::Theme;
 
@@ -34,14 +34,14 @@ impl Render for InfoView {
         div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(crate::zoom::rems_from_px(4.0))
             .children(self.lines.iter().map(|(label, value)| {
                 div()
                     .flex()
                     .flex_row()
                     .child(
                         div()
-                            .w(px(LABEL_WIDTH))
+                            .w(crate::zoom::rems_from_px(LABEL_WIDTH))
                             .flex_none()
                             .text_color(colors.text_secondary)
                             .child(*label),

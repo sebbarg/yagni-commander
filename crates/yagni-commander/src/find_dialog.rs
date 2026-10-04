@@ -542,7 +542,7 @@ impl FindDialog {
                 }
                 div()
                     .debug_selector(move || format!("find-result-{ix}"))
-                    .px(px(8.0))
+                    .px(crate::zoom::rems_from_px(8.0))
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .text_ellipsis()
@@ -581,8 +581,8 @@ impl FindDialog {
     }
 
     /// The dialog's width (the builder reads it on every render).
-    pub fn width(&self) -> Pixels {
-        px(MIN_WIDTH) + self.grown.width
+    pub fn width(&self, cx: &App) -> Pixels {
+        crate::zoom::dialog_width(MIN_WIDTH, cx) + self.grown.width
     }
 
     fn start_resize(&mut self, at: Point<Pixels>) {
@@ -675,9 +675,9 @@ impl FindDialog {
             .flex()
             .items_center()
             .justify_between()
-            .h(px(SKIP_CONTROL_HEIGHT))
-            .px(px(8.0))
-            .rounded(px(6.0))
+            .h(crate::zoom::rems_from_px(SKIP_CONTROL_HEIGHT))
+            .px(crate::zoom::rems_from_px(8.0))
+            .rounded(crate::zoom::rems_from_px(6.0))
             .border_1()
             .border_color(colors.border)
             .cursor_pointer()
@@ -703,7 +703,7 @@ impl FindDialog {
             )
             .child(
                 Icon::new(IconName::ChevronDown)
-                    .size(px(14.0))
+                    .size(crate::zoom::rems_from_px(14.0))
                     .text_color(colors.text_dim),
             )
             .when(focused, |d| d.child(focus_ring(colors.accent, "find-skip")));
@@ -716,9 +716,9 @@ impl FindDialog {
                     .debug_selector(move || format!("find-skip-row-{ix}"))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .px(px(8.0))
-                    .py(px(2.0))
+                    .gap(crate::zoom::rems_from_px(6.0))
+                    .px(crate::zoom::rems_from_px(8.0))
+                    .py(crate::zoom::rems_from_px(2.0))
                     .when(at_cursor, |d| {
                         d.bg(colors.accent).text_color(colors.text_on_accent)
                     })
@@ -742,10 +742,10 @@ impl FindDialog {
                         .track_focus(&self.skip_popup_focus)
                         .occlude()
                         // Anchored at the control's top: open below it.
-                        .mt(px(SKIP_CONTROL_HEIGHT + 2.0))
-                        .min_w(px(200.0))
-                        .py(px(4.0))
-                        .rounded(px(6.0))
+                        .mt(crate::zoom::rems_from_px(SKIP_CONTROL_HEIGHT + 2.0))
+                        .min_w(crate::zoom::rems_from_px(200.0))
+                        .py(crate::zoom::rems_from_px(4.0))
+                        .rounded(crate::zoom::rems_from_px(6.0))
                         .border_1()
                         .border_color(colors.accent)
                         .bg(colors.panel_bg)
@@ -807,14 +807,14 @@ const GRIP_DOTS: [(f32, f32); 6] = [(8., 0.), (4., 4.), (8., 4.), (0., 8.), (4.,
 pub fn grip(view: &Entity<FindDialog>, cx: &App) -> Stateful<Div> {
     let colors = Theme::get(cx).colors.clone();
     let view = view.clone();
-    let offset = px(GRIP_INSET - 16.0);
+    let offset = crate::zoom::rems_from_px(GRIP_INSET - 16.0);
     div()
         .id("find-grip")
         .debug_selector(|| "find-grip".into())
         .absolute()
         .right(offset)
         .bottom(offset)
-        .size(px(GRIP))
+        .size(crate::zoom::rems_from_px(GRIP))
         .cursor(CursorStyle::ResizeUpLeftDownRight)
         .child(
             div()
@@ -822,13 +822,13 @@ pub fn grip(view: &Entity<FindDialog>, cx: &App) -> Stateful<Div> {
                 .absolute()
                 .right_0()
                 .bottom_0()
-                .size(px(10.0))
+                .size(crate::zoom::rems_from_px(10.0))
                 .children(GRIP_DOTS.map(|(x, y)| {
                     div()
                         .absolute()
-                        .left(px(x))
-                        .top(px(y))
-                        .size(px(2.0))
+                        .left(crate::zoom::rems_from_px(x))
+                        .top(crate::zoom::rems_from_px(y))
+                        .size(crate::zoom::rems_from_px(2.0))
                         .bg(colors.text_dim)
                 })),
         )
@@ -877,8 +877,13 @@ impl Render for FindDialog {
             div()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
-                .child(div().flex_none().w(px(140.0)).child(label))
+                .gap(crate::zoom::rems_from_px(8.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .w(crate::zoom::rems_from_px(140.0))
+                        .child(label),
+                )
                 .child(div().flex_1().child(field))
         };
         let list = uniform_list(
@@ -894,7 +899,7 @@ impl Render for FindDialog {
             .relative()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::zoom::rems_from_px(8.0))
             .child(follow)
             // Each case box sits by what it applies to: names here, the
             // text's options under its field.
@@ -905,19 +910,24 @@ impl Render for FindDialog {
             .child(row("Search in", div().child(text_field(&self.search_in))))
             .child(row("Skip folders", self.skip_control(window, cx)))
             // Which files above, what's in them below.
-            .child(div().h(px(1.0)).my(px(4.0)).bg(colors.border))
+            .child(
+                div()
+                    .h(px(1.0))
+                    .my(crate::zoom::rems_from_px(4.0))
+                    .bg(colors.border),
+            )
             .child(row("Containing text", div().child(text_field(&self.text))))
             .child(
                 // Two aligned columns under the field.
                 div()
                     .flex()
                     .flex_wrap()
-                    .gap_y(px(8.0))
-                    .ml(px(148.0))
+                    .gap_y(crate::zoom::rems_from_px(8.0))
+                    .ml(crate::zoom::rems_from_px(148.0))
                     .children([CASE_TEXT, WHOLE_WORDS, REGEX, NOT_CONTAINING].map(|ix| {
                         div()
                             .flex()
-                            .w(px(OPTION_COLUMN))
+                            .w(crate::zoom::rems_from_px(OPTION_COLUMN))
                             .child(self.option_box(ix, window, cx).flex_none())
                     })),
             )
@@ -939,8 +949,8 @@ impl Render for FindDialog {
                     .on_action(cx.listener(|this, _: &act::End, _, cx| this.step(isize::MAX, cx)))
                     .on_action(cx.listener(|this, _: &act::Open, _, cx| this.open(cx)))
                     .on_action(cx.listener(|this, _: &act::View, _, cx| this.view(cx)))
-                    .mt(px(4.0))
-                    .h(px(LIST_HEIGHT) + self.grown.height)
+                    .mt(crate::zoom::rems_from_px(4.0))
+                    .h(crate::zoom::dialog_width(LIST_HEIGHT, cx) + self.grown.height)
                     .border_1()
                     .border_color(if list_focused {
                         colors.accent
@@ -953,7 +963,7 @@ impl Render for FindDialog {
             .child(
                 div()
                     .debug_selector(|| "find-status".into())
-                    .h(px(20.0))
+                    .h(crate::zoom::rems_from_px(20.0))
                     .text_color(colors.text_secondary)
                     .child(SharedString::from(status_text(&self.status))),
             )

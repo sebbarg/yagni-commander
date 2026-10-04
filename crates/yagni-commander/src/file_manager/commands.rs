@@ -56,7 +56,7 @@ pub(super) struct Prompt<'a> {
     pub initial: &'a str,
     /// Byte range of `initial` to preselect.
     pub selection: Range<usize>,
-    /// Dialog width in pixels.
+    /// Dialog width in px at the 16 px base (it scales with the UI level).
     pub width: f32,
 }
 
@@ -483,13 +483,13 @@ impl FileManager {
 
         let title = SharedString::from(prompt.title.to_owned());
         let width = prompt.width;
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let confirm = confirm.clone();
             let focus_ok = focus.clone();
             let focus_cancel = focus.clone();
             dialog
                 .title(title.clone())
-                .w(gpui_kit::px(width))
+                .w(crate::zoom::dialog_width(width, cx))
                 .child(dialog_field(&input))
                 .footer(buttons.clone())
                 // Enter in the text field.
@@ -580,11 +580,11 @@ pub(super) fn show_message_box(
     let buttons = ButtonRow::build([(button, dismiss)], 0, cx);
     buttons.update(cx, |row, _| row.set_copy_text(copied));
     focus_when_open(buttons.focus_handle(cx), window, cx);
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, _, cx| {
         let refocus = refocus.clone();
         dialog
             .title(title)
-            .w(gpui_kit::px(width))
+            .w(crate::zoom::dialog_width(width, cx))
             .close_button(false)
             .child(message.clone())
             .footer(buttons.clone())
@@ -601,7 +601,7 @@ pub(super) fn show_message_box(
 /// leaves exactly one line.
 pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
     use gpui_kit::Styled;
-    Input::new(state).py(gpui_kit::px(5.0))
+    Input::new(state).py(crate::zoom::rems_from_px(5.0))
 }
 
 /// A [`text_field`] at the top or bottom of a dialog body. The body clips
@@ -609,9 +609,10 @@ pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
 /// focus ring 3 px outside the field, so the field needs room above and
 /// below or the ring is cut off.
 pub(crate) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
-    use gpui_kit::{ParentElement, Styled};
+    use gpui_kit::{InteractiveElement, ParentElement, Styled};
     gpui_kit::div()
-        .py(gpui_kit::px(4.0))
+        .debug_selector(|| "prompt-field".into())
+        .py(crate::zoom::rems_from_px(4.0))
         .child(text_field(state))
 }
 
@@ -620,7 +621,7 @@ pub(crate) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Di
 pub(crate) fn dialog_password_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
     use gpui_kit::{ParentElement, Styled};
     gpui_kit::div()
-        .py(gpui_kit::px(4.0))
+        .py(crate::zoom::rems_from_px(4.0))
         .child(text_field(state).mask_toggle())
 }
 
