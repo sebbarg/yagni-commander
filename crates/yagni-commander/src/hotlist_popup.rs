@@ -106,10 +106,12 @@ impl Render for HotlistPopup {
             div()
                 .id(("hotlist-row", ix))
                 .debug_selector(move || format!("hotlist-row-{ix}"))
+                // Sized like gpui-component's menu items, so the popup
+                // reads like the menus.
+                .h(px(26.0))
                 .flex()
-                .gap(px(16.0))
+                .items_center()
                 .px(px(10.0))
-                .py(px(3.0))
                 .when(highlighted, |d| {
                     d.bg(colors.accent).text_color(colors.text_on_accent)
                 })
@@ -133,13 +135,8 @@ impl Render for HotlistPopup {
             let text = StyledText::new(label.text)
                 .with_highlights(label.underline.map(|range| (range, underline)));
             let highlighted = ix == self.highlight;
-            row(ix, highlighted)
-                .child(div().flex_1().child(text))
-                .child(
-                    div()
-                        .when(!highlighted, |d| d.text_color(colors.text_secondary))
-                        .child(entry.path.clone()),
-                )
+            // Names only; Configure shows the paths.
+            row(ix, highlighted).child(div().flex_1().child(text))
         });
         div()
             .key_context(HOTLIST_CONTEXT)
@@ -160,7 +157,7 @@ impl Render for HotlistPopup {
             .border_1()
             .border_color(colors.border)
             .rounded(px(4.0))
-            .text_size(px(13.0))
+            .text_sm()
             .text_color(colors.text)
             .children(entries)
             .when(count > 0, |d| {

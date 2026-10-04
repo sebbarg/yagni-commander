@@ -352,13 +352,13 @@ impl FileManager {
         }
     }
 
-    /// The popup, anchored at the top-left of `side`'s list.
+    /// The popup, anchored right under `side`'s tabs.
     fn hotlist_overlay(&self, side: Side) -> Option<impl IntoElement + use<>> {
         let open = self.hotlist.as_ref().filter(|open| open.side == side)?;
         Some(
             div()
                 .absolute()
-                .top(px(crate::panel_view::LIST_TOP))
+                .top(px(crate::panel_view::BELOW_TABS))
                 .left(px(4.0))
                 .child(deferred(
                     anchored()

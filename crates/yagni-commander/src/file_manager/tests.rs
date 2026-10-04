@@ -3105,6 +3105,47 @@ mod hotlist {
     }
 
     #[gpui_kit::test]
+    fn the_popup_opens_right_under_the_tabs(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        for (keys, tab) in [
+            ("ctrl-d", "tab-left-0"),
+            ("escape tab ctrl-d", "tab-right-0"),
+        ] {
+            cx.simulate_keystrokes(keys);
+            let popup = bounds(cx, "hotlist-popup".into()).unwrap();
+            let tab = bounds(cx, tab.into()).unwrap();
+            assert_eq!(popup.origin.y, tab.bottom(), "{keys}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_popup_shows_names_not_paths(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let long = format!("/{}", "deep/".repeat(60));
+        use_hotlist(&tmp, &cfg, &[("Far", &long)], cx);
+        cx.simulate_keystrokes("ctrl-d");
+        // A path would widen the popup past its minimum width.
+        let popup = bounds(cx, "hotlist-popup".into()).unwrap();
+        assert_eq!(popup.size.width, px(260.0));
+    }
+
+    #[gpui_kit::test]
+    fn rows_are_as_tall_as_menu_items(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_hotlist(&tmp, &cfg, &[], cx);
+        cx.simulate_keystrokes("ctrl-d");
+        // gpui-component's menu items are 26 px (`PopupMenu`, Size::Medium).
+        for ix in 0..4 {
+            let row = bounds(cx, format!("hotlist-row-{ix}")).unwrap();
+            assert_eq!(row.size.height, px(26.0), "row {ix}");
+        }
+    }
+
+    #[gpui_kit::test]
     fn the_right_panel_gets_its_own_popup_and_navigation(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();

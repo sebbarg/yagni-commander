@@ -25,9 +25,9 @@ const TAB_HEIGHT: f32 = 26.0;
 /// A tab's width while they all fit; then they shrink evenly.
 const TAB_WIDTH: f32 = 160.0;
 const COLUMN_HEADER_HEIGHT: f32 = 26.0;
-/// Distance from a panel's top to its first row: tab header, path header,
-/// column headers. The hotlist popup opens there.
-pub(crate) const LIST_TOP: f32 = TAB_HEIGHT + HEADER_HEIGHT + COLUMN_HEADER_HEIGHT;
+/// Distance from a panel's top to the bottom of its tabs. The hotlist popup
+/// opens there, over the path header.
+pub(crate) const BELOW_TABS: f32 = TAB_HEIGHT;
 const FOOTER_HEIGHT: f32 = 24.0;
 const CELL_SPACING: f32 = 10.0;
 
