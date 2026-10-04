@@ -136,6 +136,9 @@ pub struct FindDialog {
     cursor: usize,
     list_focus: FocusHandle,
     scroll: UniformListScrollHandle,
+    /// The UI level the list's px offset was last valid for.
+    level: f32,
+    _zoom: gpui_kit::Subscription,
     running: Option<Running>,
     status: Status,
     next_id: u64,
@@ -190,6 +193,8 @@ impl FindDialog {
             cursor: 0,
             list_focus: cx.focus_handle().tab_stop(true),
             scroll: UniformListScrollHandle::new(),
+            level: crate::zoom::Zoom::get(cx).ui,
+            _zoom: cx.observe_global::<crate::zoom::Zoom>(|this, cx| this.rezoom(cx)),
             running: None,
             status: Status::Idle,
             next_id: 0,
@@ -494,6 +499,25 @@ impl FindDialog {
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
         let last = self.found.len().saturating_sub(1);
         self.select(self.cursor.saturating_add_signed(by).min(last), cx);
+    }
+
+    /// The list keeps its offset in px: on a zoom, scale it so the same top
+    /// row stays, then bring the cursor back in view.
+    fn rezoom(&mut self, cx: &mut Context<Self>) {
+        let level = crate::zoom::Zoom::get(cx).ui;
+        if level == self.level {
+            return;
+        }
+        {
+            let handle = self.scroll.0.borrow();
+            let mut offset = handle.base_handle.offset();
+            offset.y *= level / self.level;
+            handle.base_handle.set_offset(offset);
+        }
+        self.level = level;
+        self.scroll
+            .scroll_to_item(self.cursor, ScrollStrategy::Nearest);
+        cx.notify();
     }
 
     fn select(&mut self, ix: usize, cx: &mut Context<Self>) {

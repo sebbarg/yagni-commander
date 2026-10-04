@@ -5920,6 +5920,42 @@ mod zoom {
         assert_eq!(cursor, rows - 1);
     }
 
+    fn cursor_row_is_inside_the_list(cx: &mut VisualTestContext, row: usize) {
+        let list = bounds(cx, "list-left".into()).unwrap();
+        let drawn = bounds(cx, format!("row-left-{row}")).expect("cursor row not drawn");
+        assert!(
+            drawn.top() >= list.top() && drawn.bottom() <= list.bottom() + gpui_kit::px(1.0),
+            "{drawn:?} outside {list:?}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn zooming_keeps_the_cursor_in_view(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..200 {
+            std::fs::write(tmp.path().join(format!("f{i:03}")), b"").unwrap();
+        }
+        setup(cx);
+        let commander = cx.new(|_| Commander::new(tmp.path(), tmp.path(), false).unwrap());
+        let cx = window_on(commander.clone(), cx);
+        file_manager(cx).update(cx, |this, _| this.load = None);
+        for _ in 0..90 {
+            cx.simulate_keystrokes("down");
+        }
+        let row = commander.read_with(cx, |c, _| c.panel(Side::Left).cursor());
+        cursor_row_is_inside_the_list(cx, row);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cursor_row_is_inside_the_list(cx, row);
+        for _ in 0..14 {
+            cx.simulate_keystrokes("ctrl--");
+        }
+        cursor_row_is_inside_the_list(cx, row);
+        cx.simulate_keystrokes("ctrl-0");
+        cursor_row_is_inside_the_list(cx, row);
+    }
+
     #[gpui_kit::test]
     fn dragging_the_divider_works_zoomed(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);

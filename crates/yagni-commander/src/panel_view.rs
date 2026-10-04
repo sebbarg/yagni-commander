@@ -46,6 +46,8 @@ pub struct PanelView {
     /// cursor moves (or a tab switch), so mouse-wheel scrolling isn't undone
     /// by unrelated updates such as activity in the other panel.
     revealed: Option<Revealed>,
+    /// The UI level the scroll offset (in px) was last valid for.
+    level: f32,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -62,12 +64,16 @@ impl PanelView {
             this.reveal_cursor(cx);
             cx.notify();
         });
+        // The list keeps its offset in px: on a zoom, scale it so the same
+        // top row stays, then bring the cursor back in view.
+        let zoom = cx.observe_global::<Zoom>(|this, cx| this.rezoom(cx));
         Self {
             commander,
             side,
             scroll: UniformListScrollHandle::new(),
             revealed: None,
-            _subscriptions: vec![subscription],
+            level: Zoom::get(cx).ui,
+            _subscriptions: vec![subscription, zoom],
         }
     }
 
@@ -75,6 +81,23 @@ impl PanelView {
     pub fn visible_rows(&self, cx: &App) -> Option<usize> {
         let height = f32::from(self.scroll.0.borrow().base_handle.bounds().size.height);
         (height > 0.0).then(|| (height / row_height(cx)) as usize)
+    }
+
+    fn rezoom(&mut self, cx: &mut Context<Self>) {
+        let level = Zoom::get(cx).ui;
+        if level == self.level {
+            return;
+        }
+        {
+            let handle = self.scroll.0.borrow();
+            let mut offset = handle.base_handle.offset();
+            offset.y *= level / self.level;
+            handle.base_handle.set_offset(offset);
+        }
+        self.level = level;
+        let cursor = self.commander.read(cx).panel(self.side).cursor();
+        self.scroll.scroll_to_item(cursor, ScrollStrategy::Nearest);
+        cx.notify();
     }
 
     fn reveal_cursor(&mut self, cx: &mut Context<Self>) {

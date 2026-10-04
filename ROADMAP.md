@@ -16,7 +16,7 @@ Everything so far was built and tested in a Linux container (X11 under Xvfb, no 
 - **Archives:** extracting a real-world `.tar.xz` and a Windows-made zip; a 7-Zip AES zip and a Windows Explorer ZipCrypto zip.
 - **Terminal (Ctrl-Shift-T):** Konsole on Kubuntu (`--workdir`, also when started through `x-terminal-emulator`), Omarchy (`$TERMINAL` = `xdg-terminal-exec` reaching an app started from the launcher), macOS (Terminal.app at the folder).
 - **Fonts:** JetBrains Mono NL in the F3 viewer on macOS and KDE; that the Size and Modified columns line up now that they use tabular figures (`tnum`; on macOS they did not before, 2026-10-04), also under KDE.
-- **Zoom:** Ctrl-= on keyboards where `=` needs Shift (macOS, KDE layouts), and the zoom items in the native macOS menu (labels, keys), on macOS and KDE.
+- **Zoom:** Ctrl-= on keyboards where `=` needs Shift (macOS, KDE layouts), and the zoom items in the native macOS menu (labels, keys), on macOS and KDE. The macOS menu's Zoom items dispatch `ZoomIn` and friends, handled only in the `FileManager` context, so they probably do nothing while a viewer window has focus: check, and route them to the viewer if so.
 - **Clipboard:** pasting a large viewer copy (tens of MiB) into another app.
 - **macOS PATH:** F4 with `editor = "code"` when launched from Finder (apps started from Finder get a minimal `PATH`; a full path in the config is the workaround).
 - **Reported, unconfirmed:** the owner saw only Name sorting work; Size and Modified sort correctly in headless tests (owner/permissions sorts look like name sorts where those values are all equal).
