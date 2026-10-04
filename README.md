@@ -97,6 +97,17 @@ Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `
 - [ROADMAP.md](ROADMAP.md): what comes next.
 - [CLAUDE.md](CLAUDE.md): how we work on it (with Claude Code).
 
+### Releasing
+
+The version lives in one place, `version` under `[workspace.package]` in the root `Cargo.toml`. On a clean `main` that matches `origin/main`:
+
+```sh
+scripts/release.sh 0.2.0                  # sets the version, updates Cargo.lock, runs the tests, commits and tags v0.2.0
+git push --atomic origin main v0.2.0      # the tag starts the release workflow
+```
+
+The workflow builds the macOS zip and the Linux tarball and uploads them, with `install.sh` and `SHA256SUMS`, as a draft release. Try the files, then publish the draft on the Releases page (`gh release edit v0.2.0 --draft=false`); only then does `releases/latest` serve it. While on 0.x: the minor number for new features, the patch number for fixes only.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Bundled third-party material (the icon font, the icon table and JetBrains Mono) is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
