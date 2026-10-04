@@ -1,6 +1,6 @@
 # Architecture
 
-How yagni-commander is built, and why. What it does is in [SPEC.md](SPEC.md), what comes next in [ROADMAP.md](ROADMAP.md), how to build and run it in [README.md](README.md). Per-feature designs with their reasoning are in `docs/superpowers/specs/` and `docs/superpowers/plans/`.
+How yagni-commander is built, and why. What it does is in [SPEC.md](SPEC.md), what comes next in [ROADMAP.md](ROADMAP.md), how to build and run it in [README.md](README.md).
 
 ## Goals
 
@@ -18,7 +18,7 @@ How yagni-commander is built, and why. What it does is in [SPEC.md](SPEC.md), wh
 - **Bundled monospace font, platform UI font.** The F3 viewer uses JetBrains Mono NL, bundled (about 200 KB), so it looks the same everywhere; without it gpui-component picks Menlo on macOS and DejaVu Sans Mono (or a stand-in) on Linux. NL, the variant without ligatures, so the viewer never draws `!=` as one sign. UI text keeps the platform's font to feel native (decided with the owner 2026-10-04); on Linux gpui guesses it from a fixed list (`gpui-pre` `text_system.rs`) rather than asking the desktop.
 - **Errors are modal.** Errors show in a centered message box that stays until dismissed (`show_error` in `file_manager/commands.rs`); never toast notifications for errors.
 - **Archive crates:** `zip` (zip2 project; default codecs off, Deflate via zlib-rs and Deflate64), `tar`, `flate2`, `bzip2`, `liblzma` (maintained fork of `xz2`), `zstd`. 7z and rar left out (immature / non-free). Chosen 2026-10-03 for stability; the owner accepted `.tar.xz` knowingly. `aes-crypto` on (AES zips from 7-Zip/WinRAR; adds RustCrypto `aes`, `hmac`, `pbkdf2`, `sha1`, `zeroize`). `hmac`, `pbkdf2` and `sha1` are also direct dependencies of core, at the versions zip uses, for `aes_authentic`.
-- **Zoom like Zed:** the UI level through gpui-component's `font_size` and `Root`'s rem size; our sizes in rems; the viewer's level through `RemScope`. Two independent levels (UI, viewer), 10 to 32 px, kept in the state file. Spec `docs/superpowers/specs/2026-10-04-zoom-design.md`.
+- **Zoom like Zed:** the UI level through gpui-component's `font_size` and `Root`'s rem size; our sizes in rems; the viewer's level through `RemScope`. Two independent levels (UI, viewer), 10 to 32 px, kept in the state file.
 - **Same keymap on all platforms**, Ctrl not Cmd on macOS (only Quit differs: Cmd-Q / Alt-F4; macOS also takes Cmd-C for copy path, next to Ctrl-C). F-keys assume Fn is held on Mac keyboards.
 - **Upstream bug, unreported by choice:** gpui-component `Dialog` binds Enter to OK for the whole dialog, ignoring the focused button (still on gpui-kit `main`; nearest related PR #3097). The owner decided not to file it for now; our `ButtonRow` works around it (see Gotchas).
 

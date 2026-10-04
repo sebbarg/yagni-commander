@@ -9,18 +9,17 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 - `SPEC.md`: what the app does and why (keys, dialogs, file operations, owner decisions). Read the relevant part before changing behavior.
 - `ROADMAP.md`: v2 and v3, open decisions, and what waits for verification on real machines.
 - `ARCHITECTURE.md` (imported above): goals, technical decisions, code map, known issues, gotchas, testing.
-- `docs/superpowers/specs/` and `docs/superpowers/plans/`: per-feature designs and plans with their reasoning (historical: they still say `Requirements.md`, now `SPEC.md`).
 - `README.md`: features, building, configuration, for users.
 
 ## Current state (update at the end of every session)
 
-As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`) install scripts and a release workflow (`scripts/install-linux.sh`, `scripts/bundle-mac.sh`, `scripts/dist-linux.sh`, `.github/workflows/release.yml`; waits for the repo to go public), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`; known limits in SPEC (Zoom)). Themes are done and merged on `main` (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic; `theme` key and Settings dropdown; spec `docs/superpowers/specs/2026-10-04-themes-design.md`). `cargo test --workspace` (457 app, 660 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. A narrow panel drops optional columns (Permissions, Owner, Modified) so Name keeps 120 px (SPEC, File list). Next: the owner's choice from `ROADMAP.md`.
+As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`), install scripts and a release workflow (`scripts/install-linux.sh`, `scripts/bundle-mac.sh`, `scripts/dist-linux.sh`, `.github/workflows/release.yml`; waits for the repo to go public), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; known limits in SPEC (Zoom)). Themes are done and merged on `main` (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic; `theme` key and Settings dropdown). `cargo test --workspace` (457 app, 660 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. A narrow panel drops optional columns (Permissions, Owner, Modified) so Name keeps 120 px (SPEC, File list). Next: the owner's choice from `ROADMAP.md`.
 
 ## How we work
 
 - The owner reviews each step; commit only when asked (they say "commit"). Commits are local; the owner pushes (remote: `github.com/sebbarg/yagni-commander`).
 - Every change: tests (core near 100% coverage; gpui app tests for every key, mouse action and dialog), `cargo clippy --workspace --all-targets` with zero warnings, `cargo fmt`, then `scripts/smoke.sh` and a look at its screenshots. Extend the smoke script when a feature is visible or touches the OS (trash, editor, state file).
-- Keep the docs current: `SPEC.md` when the owner decides behavior, `ROADMAP.md` when an item is done, added or verified, `ARCHITECTURE.md` when the code's structure or a technical decision changes, and Current state above at the end of a session. No history here: git log and the specs keep it.
+- Keep the docs current: `SPEC.md` when the owner decides behavior, `ROADMAP.md` when an item is done, added or verified, `ARCHITECTURE.md` when the code's structure or a technical decision changes, and Current state above at the end of a session. No history here: git log keeps it.
 - User-facing text and docs: no em dashes.
 
 ## Fresh dev container (Ubuntu 24.04, no display)
