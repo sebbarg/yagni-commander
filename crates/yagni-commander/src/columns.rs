@@ -1,6 +1,8 @@
 //! The panel's table layout: which columns exist, their size, and cell text.
 
-use gpui_kit::{Div, div, prelude::*, px};
+use std::sync::Arc;
+
+use gpui_kit::{Div, FontFeatures, div, prelude::*, px};
 use yagni_commander_core::{
     Commander, Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
 };
@@ -11,6 +13,9 @@ pub struct Column {
     /// Width in logical pixels, or `None` to take the remaining space.
     pub width: Option<f32>,
     pub align_right: bool,
+    /// Digits all one width (the font's `tnum` feature), so numbers line up
+    /// from row to row: the system font on macOS has proportional digits.
+    pub tabular_figures: bool,
 }
 
 pub const COLUMNS: [Column; 5] = [
@@ -19,30 +24,35 @@ pub const COLUMNS: [Column; 5] = [
         title: "Name",
         width: None,
         align_right: false,
+        tabular_figures: false,
     },
     Column {
         key: SortKey::Size,
         title: "Size",
         width: Some(70.0),
         align_right: true,
+        tabular_figures: true,
     },
     Column {
         key: SortKey::Modified,
         title: "Modified",
         width: Some(118.0),
         align_right: false,
+        tabular_figures: true,
     },
     Column {
         key: SortKey::Owner,
         title: "Owner",
         width: Some(100.0),
         align_right: false,
+        tabular_figures: false,
     },
     Column {
         key: SortKey::Permissions,
         title: "Permissions",
         width: Some(78.0),
         align_right: false,
+        tabular_figures: false,
     },
 ];
 
@@ -87,8 +97,15 @@ impl Column {
             Some(width) => div().w(px(width)).flex_none(),
             None => div().flex_1().min_w_0(),
         };
-        cell.truncate().when(self.align_right, |d| d.text_right())
+        cell.truncate()
+            .when(self.align_right, |d| d.text_right())
+            .when(self.tabular_figures, |d| d.font_features(tabular_figures()))
     }
+}
+
+/// OpenType tabular figures. A font without the feature draws as before.
+pub fn tabular_figures() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("tnum".into(), 1)]))
 }
 
 #[cfg(test)]
@@ -110,6 +127,20 @@ mod tests {
             .entries()
             .to_vec();
         (tmp, entries)
+    }
+
+    #[test]
+    fn number_columns_use_tabular_figures() {
+        let tabular: Vec<_> = COLUMNS
+            .iter()
+            .filter(|c| c.tabular_figures)
+            .map(|c| c.key)
+            .collect();
+        assert_eq!(tabular, [SortKey::Size, SortKey::Modified]);
+        assert_eq!(
+            tabular_figures().tag_value_list(),
+            [("tnum".to_string(), 1)]
+        );
     }
 
     #[test]

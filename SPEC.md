@@ -53,7 +53,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 
 ### File list
 
-- Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Modified, Owner and Permissions can be turned off (see Config). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
+- Columns: Name, Size, Modified (local time), Owner (`user:group`), Permissions (`ls -l` style). Modified, Owner and Permissions can be turned off (see Config). Clicking a header sorts that panel by it; clicking again reverses. Size and Modified start descending, and their digits are all one width (tabular figures), so numbers line up from row to row. ".." then directories always come first. `case_sensitive_sort` in the config switches name comparison.
 - Symlinks: Owner and Permissions describe the link itself; Size and Modified come from the target.
 - Selected entries are orange (the cursor bar turns orange on a selected entry). The footer shows totals, or "N of M selected, size of total". Selection is per panel, kept by name across re-sorts, cleared on directory change.
 - Mouse: a click moves the cursor (and focuses that panel), a double-click activates, the wheel scrolls the view without moving the cursor. The divider between the panels can be dragged.
