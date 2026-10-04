@@ -1,5 +1,7 @@
 # yagni-commander
 
+![yagni-commander on Omarchy](docs/yc-omarchy.png)
+
 A YAGNI-minded, keyboard-first, dual-pane file manager for macOS and Linux. It does the part of a classic commander that I actually use, not all of it ("you aren't gonna need it"). Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), the UI framework behind the Zed editor.
 
 More than a little inspired by these GOATs:
