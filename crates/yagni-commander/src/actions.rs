@@ -346,6 +346,12 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-a", viewer::SelectAll, ctx),
         KeyBinding::new("ctrl-c", viewer::Copy, ctx),
         KeyBinding::new("ctrl-insert", viewer::Copy, ctx),
+        // The viewer's own level; Ctrl-= is the primary key, so it comes last.
+        KeyBinding::new("ctrl-=", viewer::ZoomIn, ctx),
+        KeyBinding::new("ctrl-+", viewer::ZoomIn, ctx),
+        KeyBinding::new("ctrl-=", viewer::ZoomIn, ctx),
+        KeyBinding::new("ctrl--", viewer::ZoomOut, ctx),
+        KeyBinding::new("ctrl-0", viewer::ZoomReset, ctx),
     ]);
     if cfg!(target_os = "macos") {
         cx.bind_keys([KeyBinding::new("cmd-c", viewer::Copy, ctx)]);

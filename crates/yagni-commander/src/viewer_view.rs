@@ -22,10 +22,13 @@ use yagni_commander_core::viewer::{
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown,
-    PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap,
+    PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap, ZoomIn, ZoomOut,
+    ZoomReset,
 };
 use crate::app_state::AppState;
+use crate::rem_scope::RemScope;
 use crate::theme::Theme;
+use crate::zoom::{Zoom, rems_from_px, scaled};
 
 mod search;
 mod select;
@@ -36,6 +39,10 @@ const PADDING: f32 = 8.0;
 const LINE_HEIGHT: f32 = 18.0;
 const STATUS_HEIGHT: f32 = 22.0;
 const SCROLLBAR_WIDTH: f32 = 12.0;
+/// The text size (gpui-component's default monospace size).
+const MONO_SIZE: f32 = 13.0;
+/// The status line's text size.
+const STATUS_TEXT: f32 = 12.0;
 /// Columns per Left/Right.
 const H_STEP: u32 = 8;
 /// Before the first layout.
@@ -280,14 +287,19 @@ impl ViewerView {
         let font = font(theme.mono_font_family.clone());
         let text_system = window.text_system();
         let char_width = text_system
-            .advance(text_system.resolve_font(&font), theme.mono_font_size, 'M')
+            .advance(
+                text_system.resolve_font(&font),
+                px(at_level(MONO_SIZE, cx)),
+                'M',
+            )
             .map(|s| f32::from(s.width))
             .unwrap_or(8.0)
             .max(1.0);
         let viewport = window.viewport_size();
-        let width = f32::from(viewport.width) - 2.0 * PADDING - SCROLLBAR_WIDTH;
-        let height = f32::from(viewport.height) - 2.0 * PADDING - STATUS_HEIGHT;
-        let rows = (height / LINE_HEIGHT).floor().max(1.0) as usize;
+        let padding = padding(cx);
+        let width = f32::from(viewport.width) - 2.0 * padding - scrollbar_width(cx);
+        let height = f32::from(viewport.height) - 2.0 * padding - status_height(cx);
+        let rows = (height / line_height(cx)).floor().max(1.0) as usize;
         let cols = (width / char_width).floor().max(1.0) as u32;
         (rows, cols, char_width)
     }
@@ -443,9 +455,10 @@ impl Drop for ViewerView {
 impl ViewerView {
     /// Scrollbar track geometry in window coordinates: (top, height). The
     /// layout is fixed (padding, status line), so it follows from the window.
-    fn track(window: &Window) -> (f32, f32) {
-        let height = f32::from(window.viewport_size().height) - 2.0 * PADDING - STATUS_HEIGHT;
-        (PADDING, height.max(1.0))
+    fn track(window: &Window, cx: &App) -> (f32, f32) {
+        let padding = padding(cx);
+        let height = f32::from(window.viewport_size().height) - 2.0 * padding - status_height(cx);
+        (padding, height.max(1.0))
     }
 
     /// Shows the row containing the byte at `fraction` of the file, but never
@@ -463,13 +476,14 @@ impl ViewerView {
     }
 
     fn drag_to(&mut self, y: f32, window: &Window, cx: &mut Context<Self>) {
-        let (top, height) = Self::track(window);
+        let (top, height) = Self::track(window, cx);
         self.jump_to((y - top) / height, cx);
     }
 
     fn on_wheel(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
-        let dy = f32::from(event.delta.pixel_delta(px(LINE_HEIGHT)).y);
-        self.wheel_rows += dy / LINE_HEIGHT;
+        let line = line_height(cx);
+        let dy = f32::from(event.delta.pixel_delta(px(line)).y);
+        self.wheel_rows += dy / line;
         let whole = self.wheel_rows.trunc();
         self.wheel_rows -= whole;
         let rows = whole.abs() as usize;
@@ -488,7 +502,7 @@ impl ViewerView {
         div()
             .id("viewer-scrollbar")
             .debug_selector(|| "viewer-scrollbar".into())
-            .w(px(SCROLLBAR_WIDTH))
+            .w(rems_from_px(SCROLLBAR_WIDTH))
             .h_full()
             .flex_none()
             .relative()
@@ -503,11 +517,11 @@ impl ViewerView {
                 div()
                     .debug_selector(|| "viewer-thumb".into())
                     .absolute()
-                    .left(px(2.0))
-                    .right(px(2.0))
+                    .left(rems_from_px(2.0))
+                    .right(rems_from_px(2.0))
                     .top(gpui_kit::relative(start.min(1.0 - size)))
                     .h(gpui_kit::relative(size.min(1.0)))
-                    .rounded(px(3.0))
+                    .rounded(rems_from_px(3.0))
                     .bg(if self.dragging_thumb {
                         colors.accent
                     } else {
@@ -585,7 +599,7 @@ impl Render for ViewerView {
             row_elements.push(
                 div()
                     .debug_selector(move || format!("viewer-row-{ix}"))
-                    .h(px(LINE_HEIGHT))
+                    .h(rems_from_px(LINE_HEIGHT))
                     .whitespace_nowrap()
                     .overflow_hidden()
                     .child(styled),
@@ -595,8 +609,7 @@ impl Render for ViewerView {
 
         let status = self.status_text();
         let error = self.doc.error().map(str::to_owned);
-        let theme = cx.theme();
-        let (mono, mono_size) = (theme.mono_font_family.clone(), theme.mono_font_size);
+        let mono = cx.theme().mono_font_family.clone();
 
         div()
             .key_context(VIEWER_CONTEXT)
@@ -627,6 +640,9 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
             .on_action(cx.listener(|this, _: &ScrollRight, _, cx| this.scroll_h(true, cx)))
+            .on_action(cx.listener(|_, _: &ZoomIn, _, cx| crate::zoom::change_viewer(1.0, cx)))
+            .on_action(cx.listener(|_, _: &ZoomOut, _, cx| crate::zoom::change_viewer(-1.0, cx)))
+            .on_action(cx.listener(|_, _: &ZoomReset, _, cx| crate::zoom::reset_viewer(cx)))
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
@@ -656,49 +672,80 @@ impl Render for ViewerView {
             .bg(colors.panel_bg)
             .text_color(colors.text)
             .child(
-                div()
+                // The viewer's own level: everything below sizes in rems of it.
+                RemScope::new(px(Zoom::get(cx).viewer))
+                    .size_full()
                     .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .p(px(PADDING))
+                    .flex_col()
                     .child(
                         div()
-                            .id("viewer-text")
-                            .on_mouse_down(
-                                gpui_kit::MouseButton::Left,
-                                cx.listener(|this, event, window, cx| {
-                                    this.on_text_mouse_down(event, window, cx)
-                                }),
-                            )
+                            .flex()
                             .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .font_family(mono)
-                            .text_size(mono_size)
-                            .line_height(px(LINE_HEIGHT))
-                            .children(row_elements),
+                            .min_h_0()
+                            .p(rems_from_px(PADDING))
+                            .child(
+                                div()
+                                    .id("viewer-text")
+                                    .on_mouse_down(
+                                        gpui_kit::MouseButton::Left,
+                                        cx.listener(|this, event, window, cx| {
+                                            this.on_text_mouse_down(event, window, cx)
+                                        }),
+                                    )
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .font_family(mono)
+                                    .text_size(rems_from_px(MONO_SIZE))
+                                    .line_height(rems_from_px(LINE_HEIGHT))
+                                    .children(row_elements),
+                            )
+                            .child(self.render_scrollbar(cx)),
                     )
-                    .child(self.render_scrollbar(cx)),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "viewer-status".into())
-                    .h(px(STATUS_HEIGHT))
-                    .flex_none()
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .bg(colors.header_bg)
-                    .text_size(px(12.0))
-                    .text_color(colors.text_secondary)
-                    .child(match error {
-                        Some(e) => div()
-                            .text_color(colors.error)
-                            .child(format!("Read error: {e}")),
-                        None => div().child(status),
-                    }),
+                    .child(
+                        div()
+                            .debug_selector(|| "viewer-status".into())
+                            .h(rems_from_px(STATUS_HEIGHT))
+                            .flex_none()
+                            .px(rems_from_px(10.0))
+                            .flex()
+                            .items_center()
+                            .bg(colors.header_bg)
+                            .text_size(rems_from_px(STATUS_TEXT))
+                            .text_color(colors.text_secondary)
+                            .child(match error {
+                                Some(e) => div()
+                                    .text_color(colors.error)
+                                    .child(format!("Read error: {e}")),
+                                None => div().child(status),
+                            }),
+                    ),
             )
     }
+}
+
+/// `px_at_base` (px at the 16 px base) in px at the viewer level: for
+/// arithmetic on the sizes the viewer draws in rems.
+fn at_level(px_at_base: f32, cx: &App) -> f32 {
+    scaled(px_at_base, Zoom::get(cx).viewer)
+}
+
+/// A row's height in px at the viewer level.
+fn line_height(cx: &App) -> f32 {
+    at_level(LINE_HEIGHT, cx)
+}
+
+/// The padding around the rows, in px at the viewer level.
+fn padding(cx: &App) -> f32 {
+    at_level(PADDING, cx)
+}
+
+fn status_height(cx: &App) -> f32 {
+    at_level(STATUS_HEIGHT, cx)
+}
+
+fn scrollbar_width(cx: &App) -> f32 {
+    at_level(SCROLLBAR_WIDTH, cx)
 }
 
 #[cfg(test)]

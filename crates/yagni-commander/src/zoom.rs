@@ -97,6 +97,28 @@ pub fn reset_ui(cx: &mut App) {
     );
 }
 
+/// Moves the viewer level by `delta` px for every viewer window, and
+/// remembers it.
+pub fn change_viewer(delta: f32, cx: &mut App) {
+    set(
+        Zoom {
+            viewer: step(Zoom::get(cx).viewer, delta),
+            ..Zoom::get(cx)
+        },
+        cx,
+    );
+}
+
+pub fn reset_viewer(cx: &mut App) {
+    set(
+        Zoom {
+            viewer: DEFAULT,
+            ..Zoom::get(cx)
+        },
+        cx,
+    );
+}
+
 fn set(zoom: Zoom, cx: &mut App) {
     cx.set_global(zoom);
     crate::app_state::AppState::remember_zoom(zoom, cx);

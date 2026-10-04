@@ -15,7 +15,7 @@ use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, Focusable, Global, IntoElement, ParentElement,
-    Render, Styled, Window, div, px,
+    Render, Styled, Window, div,
 };
 use yagni_commander_core::find::text::{Text, TextQuery};
 use yagni_commander_core::viewer::{Direction, Highlight, find};
@@ -23,6 +23,7 @@ use yagni_commander_core::viewer::{Direction, Highlight, find};
 use super::ViewerView;
 use crate::button_row::{ButtonRow, OnPress};
 use crate::file_manager::commands::{OPENER_POLL, dialog_field, show_error, show_message};
+use crate::zoom::{dialog_width, rems_from_px};
 
 /// Polls before the status line says "searching...": ~300 ms.
 const QUIET_POLLS: u32 = 3;
@@ -128,12 +129,12 @@ impl ViewerView {
         window.defer(cx, move |window, cx| {
             input.update(cx, |state, cx| state.focus(window, cx))
         });
-        window.open_dialog(cx, move |dialog, _, _| {
+        window.open_dialog(cx, move |dialog, _, cx| {
             let submit = submit.clone();
             let (focus_ok, focus_cancel) = (focus.clone(), focus.clone());
             dialog
                 .title("Find")
-                .w(px(520.0))
+                .w(dialog_width(520.0, cx))
                 .close_button(false)
                 .child(view.clone())
                 .footer(buttons.clone())
@@ -450,8 +451,14 @@ impl Render for FindView {
         div()
             .flex()
             .flex_col()
-            .gap(px(10.0))
+            .gap(rems_from_px(10.0))
             .child(dialog_field(&self.input))
-            .child(div().flex().gap(px(16.0)).pb(px(4.0)).children(boxes))
+            .child(
+                div()
+                    .flex()
+                    .gap(rems_from_px(16.0))
+                    .pb(rems_from_px(4.0))
+                    .children(boxes),
+            )
     }
 }

@@ -1092,4 +1092,95 @@ mod select {
         assert!(n > 5, "one tick scrolled to {top_row}");
         cx.simulate_mouse_up(far, MouseButton::Left, m);
     }
+
+    #[gpui_kit::test]
+    fn a_drag_selects_under_the_mouse_when_zoomed(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"line 1\nline 2\nline 3\n", cx);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.run_until_parked();
+        // `at` places the mouse by the drawn row and the measured character
+        // width, so a hit test that ignores the zoom picks other bytes.
+        let (from, to) = (at(&viewer, 0, 5.2, &mut cx), at(&viewer, 1, 4.8, &mut cx));
+        drag(from, to, &mut cx);
+        assert_eq!(selection(&viewer, &mut cx), Some(5..12));
+    }
+}
+
+mod zoom {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn ctrl_equals_zooms_the_viewer_only(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        let rows = viewer.read_with(&cx, |v, _| v.screen_rows());
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.run_until_parked();
+        let zoomed = viewer.read_with(&cx, |v, _| v.screen_rows());
+        assert!(zoomed < rows, "{zoomed} rows at 24 px, {rows} at 16 px");
+        let zoom = cx.update(|_, cx| crate::zoom::Zoom::get(cx));
+        assert_eq!((zoom.ui, zoom.viewer), (16.0, 24.0));
+        let row = bounds_of(&mut cx, "viewer-row-0");
+        assert_eq!(row.size.height, px(LINE_HEIGHT * 1.5), "rows drawn zoomed");
+        cx.simulate_keystrokes("ctrl-- ctrl-0");
+        cx.run_until_parked();
+        assert_eq!(viewer.read_with(&cx, |v, _| v.screen_rows()), rows);
+        assert_eq!(cx.update(|_, cx| crate::zoom::Zoom::get(cx).viewer), 16.0);
+    }
+
+    #[gpui_kit::test]
+    fn a_second_viewer_follows_the_level(cx: &mut TestAppContext) {
+        let (tmp, first, mut cx) = view(&numbered(1000), cx);
+        let rows = first.read_with(&cx, |v, _| v.screen_rows());
+        cx.simulate_keystrokes("ctrl-= ctrl-= ctrl-= ctrl-=");
+        cx.run_until_parked();
+        let path = tmp.path().join("file.txt");
+        cx.update(|_, cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let second = viewer_in(window, &mut cx).unwrap();
+        let second_cx = VisualTestContext::from_window(window, &cx);
+        second_cx.run_until_parked();
+        let (a, b) = (
+            first.read_with(&cx, |v, _| v.screen_rows()),
+            second.read_with(&second_cx, |v, _| v.screen_rows()),
+        );
+        assert_eq!(a, b);
+        assert!(a < rows, "zoomed: {a} rows, {rows} at 16 px");
+    }
+
+    #[gpui_kit::test]
+    fn the_find_dialog_follows_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut cx) = view(&numbered(10), cx);
+        let find_dialog = |cx: &mut VisualTestContext| {
+            cx.simulate_keystrokes("ctrl-f");
+            let sizes = (
+                bounds_of(cx, "dialog-0").size.width,
+                bounds_of(cx, "prompt-field").size.height,
+            );
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            sizes
+        };
+        let base = find_dialog(&mut cx);
+        cx.simulate_keystrokes("ctrl-= ctrl-= ctrl-= ctrl-=");
+        cx.run_until_parked();
+        let size =
+            cx.update(|_, cx| f32::from(gpui_kit::component::ActiveTheme::theme(cx).font_size));
+        assert_eq!(size, 16.0, "dialogs use the UI level, not the viewer's");
+        assert_eq!(
+            find_dialog(&mut cx),
+            base,
+            "the viewer level leaves it alone"
+        );
+        // 20 px: 650 px wide still fits the 800 px window.
+        cx.update(|_, cx| crate::zoom::change_ui(4.0, cx));
+        cx.run_until_parked();
+        let (width, field) = find_dialog(&mut cx);
+        assert_eq!(width, base.0 * 1.25, "the UI level sizes it");
+        assert_eq!(field, base.1 * 1.25);
+    }
 }

@@ -5,13 +5,13 @@
 use std::ops::Range;
 
 use gpui_kit::{
-    Bounds, ClipboardItem, Context, DispatchPhase, IntoElement, MouseButton, MouseDownEvent,
+    App, Bounds, ClipboardItem, Context, DispatchPhase, IntoElement, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, Pixels, Point, Styled, Window, canvas, point, px, size,
 };
 use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{COPY_CAP, Copy, HexColumn, TooLarge};
 
-use super::{LINE_HEIGHT, PADDING, SCROLLBAR_WIDTH, STATUS_HEIGHT, ViewerView};
+use super::{ViewerView, line_height, padding, scrollbar_width, status_height};
 use crate::file_manager::commands::show_error;
 
 /// Auto-scroll tick while dragging past an edge.
@@ -124,13 +124,14 @@ pub(super) fn follow_drag(cx: &mut Context<ViewerView>) -> impl IntoElement {
 impl ViewerView {
     /// The rows' area in window coordinates (the layout is fixed, as for
     /// the scrollbar).
-    pub(super) fn text_area(window: &Window) -> Bounds<Pixels> {
+    pub(super) fn text_area(window: &Window, cx: &App) -> Bounds<Pixels> {
         let v = window.viewport_size();
+        let padding = padding(cx);
         Bounds::new(
-            point(px(PADDING), px(PADDING)),
+            point(px(padding), px(padding)),
             size(
-                v.width - px(2.0 * PADDING + SCROLLBAR_WIDTH),
-                v.height - px(2.0 * PADDING + STATUS_HEIGHT),
+                v.width - px(2.0 * padding + scrollbar_width(cx)),
+                v.height - px(2.0 * padding + status_height(cx)),
             ),
         )
     }
@@ -138,18 +139,19 @@ impl ViewerView {
     /// The drawn row under `p` (clamped to the rows drawn) and the column
     /// (fractional, `h_offset` added). `None` without rows. Below the last
     /// row: that row and a column past its end.
-    fn hit(&self, p: Point<Pixels>, window: &Window) -> Option<(usize, f32)> {
-        let area = Self::text_area(window);
+    fn hit(&self, p: Point<Pixels>, window: &Window, cx: &App) -> Option<(usize, f32)> {
+        let area = Self::text_area(window, cx);
+        let line = line_height(cx);
         let last = self.drawn.len().checked_sub(1)?;
         let y = f32::from(p.y - area.origin.y);
         let mut x = f32::from(p.x - area.origin.x) / self.char_width;
         if !self.wraps_rows() {
             x += self.h_offset as f32;
         }
-        if y >= (last + 1) as f32 * LINE_HEIGHT {
+        if y >= (last + 1) as f32 * line {
             return Some((last, f32::MAX));
         }
-        let row = ((y / LINE_HEIGHT).floor().max(0.0) as usize).min(last);
+        let row = ((y / line).floor().max(0.0) as usize).min(last);
         Some((row, x))
     }
 
@@ -159,7 +161,7 @@ impl ViewerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((row, x)) = self.hit(event.position, window) else {
+        let Some((row, x)) = self.hit(event.position, window, cx) else {
             return;
         };
         let column = if self.hex {
@@ -207,7 +209,7 @@ impl ViewerView {
         }
         self.last_mouse = event.position;
         self.follow_mouse(window, cx);
-        if self.overflow(window) != (0.0, 0.0) && !self.autoscrolling {
+        if self.overflow(window, cx) != (0.0, 0.0) && !self.autoscrolling {
             self.autoscrolling = true;
             cx.spawn_in(window, async move |this, cx| {
                 loop {
@@ -238,13 +240,13 @@ impl ViewerView {
             .as_ref()
             .and_then(|s| s.column)
             .unwrap_or(HexColumn::Chars);
-        let area = Self::text_area(window);
+        let area = Self::text_area(window, cx);
         let p = self.last_mouse;
         let clamped = point(
             p.x.clamp(area.origin.x, area.origin.x + area.size.width),
             p.y.max(area.origin.y),
         );
-        let Some((row, x)) = self.hit(clamped, window) else {
+        let Some((row, x)) = self.hit(clamped, window, cx) else {
             return;
         };
         let at = self.drawn[row].boundary_at(x, column);
@@ -256,8 +258,8 @@ impl ViewerView {
 
     /// How far the mouse is past the text area: (x, y) in pixels, negative
     /// for left and up. Sideways only when rows scroll sideways.
-    fn overflow(&self, window: &Window) -> (f32, f32) {
-        let area = Self::text_area(window);
+    fn overflow(&self, window: &Window, cx: &App) -> (f32, f32) {
+        let area = Self::text_area(window, cx);
         let p = self.last_mouse;
         let over = |v: Pixels, lo: Pixels, hi: Pixels| {
             if v < lo {
@@ -281,12 +283,12 @@ impl ViewerView {
 
     /// One auto-scroll tick. Returns whether to keep ticking.
     fn autoscroll(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let (x, y) = self.overflow(window);
+        let (x, y) = self.overflow(window, cx);
         if !self.selecting || (x, y) == (0.0, 0.0) {
             self.autoscrolling = false;
             return false;
         }
-        let rows = (1 + (y.abs() / LINE_HEIGHT) as usize).min(MAX_ROWS_PER_TICK);
+        let rows = (1 + (y.abs() / line_height(cx)) as usize).min(MAX_ROWS_PER_TICK);
         if y > 0.0 {
             self.down(rows, cx);
         } else if y < 0.0 {

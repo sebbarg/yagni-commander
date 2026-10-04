@@ -13,6 +13,7 @@ mod menu_bar;
 mod menus;
 mod option_box;
 mod panel_view;
+mod rem_scope;
 mod settings_dialog;
 mod theme;
 mod viewer_view;
