@@ -10,7 +10,7 @@ fn setup(cx: &mut TestAppContext) {
         // sliding in would move between a test's frames, and clicks would
         // miss under load. Reduced motion settles them on the first frame.
         cx.set_reduce_motion(true);
-        crate::icon_font::register(cx);
+        crate::fonts::register(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
         cx.set_global(crate::config_state::CurrentConfig::default());

@@ -148,6 +148,7 @@ impl Theme {
             name: SharedString::from(self.name.clone()),
             mode: self.mode.into(),
             colors,
+            mono_font_family: Some(crate::fonts::MONO_FAMILY.into()),
             ..Default::default()
         }
     }
@@ -239,5 +240,14 @@ mod tests {
         assert_eq!(config.colors.danger, Some(to_hex(c.error)));
         assert_eq!(config.colors.list_active, Some("#7aa2f733".into()));
         assert_ne!(config.colors.primary_hover, config.colors.primary);
+    }
+
+    #[test]
+    fn monospace_text_uses_the_bundled_font() {
+        let config = Theme::default().component_config();
+        assert_eq!(
+            config.mono_font_family.as_deref(),
+            Some(crate::fonts::MONO_FAMILY)
+        );
     }
 }

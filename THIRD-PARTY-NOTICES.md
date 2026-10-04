@@ -26,6 +26,10 @@ The font contains glyphs from these icon sets, each under its own license:
 | IEC Power Symbols | https://github.com/jloughry/Unicode | MIT |
 | Weather Icons | https://github.com/erikflowers/weather-icons | OFL 1.1 |
 
+## JetBrains Mono
+
+`crates/yagni-commander/assets/fonts/JetBrainsMonoNL-Regular.ttf`, from JetBrains Mono v2.304 (https://github.com/JetBrains/JetBrainsMono), unchanged. Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono). SIL Open Font License 1.1 (`crates/yagni-commander/assets/fonts/JetBrainsMono-OFL.txt`).
+
 ## nvim-web-devicons
 
 `crates/yagni-commander-core/src/icons/table.rs` is generated from nvim-web-devicons v0.100 (https://github.com/nvim-tree/nvim-web-devicons) by `scripts/gen-icons.py`. MIT License, Copyright (c) 2023 nvim-tree.

@@ -5,9 +5,9 @@ mod columns;
 mod config_state;
 mod file_manager;
 mod find_dialog;
+mod fonts;
 mod hotlist_dialog;
 mod hotlist_popup;
-mod icon_font;
 mod info_dialog;
 mod menu_bar;
 mod menus;
@@ -69,7 +69,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
-            icon_font::register(cx);
+            fonts::register(cx);
             Theme::default().install(cx);
             cx.set_global(current);
             actions::bind_default_keys(cx);

@@ -20,4 +20,5 @@ toml.workspace = true
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }
 tar.workspace = true
+ttf-parser = "0.25"
 zip.workspace = true

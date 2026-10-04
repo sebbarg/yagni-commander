@@ -52,4 +52,4 @@ Set `editor` to the command F4 runs, for example `editor = "code --wait"`.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Bundled third-party material (the icon font and the icon table) is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+MIT, see [LICENSE](LICENSE). Bundled third-party material (the icon font, the icon table and JetBrains Mono) is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
