@@ -27,6 +27,7 @@ toml.workspace = true
 toml_edit.workspace = true
 trash.workspace = true
 unicode-width.workspace = true
+ureq.workspace = true
 zip.workspace = true
 zstd.workspace = true
 

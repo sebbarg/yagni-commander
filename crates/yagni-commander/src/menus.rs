@@ -8,11 +8,11 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist, Edit, EditNewFile,
-    Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings, OpenTerminal, Pack,
-    PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName,
-    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
-    View, ZoomIn, ZoomOut, ZoomReset,
+    About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist,
+    Edit, EditNewFile, Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings,
+    OpenTerminal, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
+    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
+    ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -94,6 +94,7 @@ fn check(label: &'static str, action: impl Action, checked: bool) -> MenuEntry {
 }
 
 const ABOUT: &str = "About yagni-commander";
+const CHECK_FOR_UPDATES: &str = "Check for updates...";
 const SETTINGS: &str = "Settings...";
 
 /// Every menu, in bar order. With `mac`, About and Quit go to the app menu
@@ -193,6 +194,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
             title: "yagni-commander",
             entries: vec![
                 item(ABOUT, About),
+                item(CHECK_FOR_UPDATES, CheckForUpdates),
                 MenuEntry::Separator,
                 item(SETTINGS, OpenSettings),
                 MenuEntry::Separator,
@@ -203,7 +205,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
     } else {
         defs.push(MenuDef {
             title: "Help",
-            entries: vec![item(ABOUT, About)],
+            entries: vec![item(ABOUT, About), item(CHECK_FOR_UPDATES, CheckForUpdates)],
         });
     }
     defs
@@ -352,7 +354,10 @@ mod tests {
                 "Actual size"
             ]
         );
-        assert_eq!(labels(&defs[3]), ["About yagni-commander"]);
+        assert_eq!(
+            labels(&defs[3]),
+            ["About yagni-commander", "Check for updates..."]
+        );
     }
 
     #[test]
@@ -362,7 +367,14 @@ mod tests {
         assert_eq!(titles, ["yagni-commander", "Files", "Commands", "Show"]);
         assert_eq!(
             labels(&defs[0]),
-            ["About yagni-commander", "-", "Settings...", "-", "Quit"]
+            [
+                "About yagni-commander",
+                "Check for updates...",
+                "-",
+                "Settings...",
+                "-",
+                "Quit"
+            ]
         );
         assert!(!labels(&defs[1]).contains(&"Quit"));
     }

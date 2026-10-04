@@ -69,6 +69,7 @@ actions!(
         SortByOwner,
         SortByPermissions,
         About,
+        CheckForUpdates,
         ToggleMenu,
         MenuAlt,
         OpenFilesMenu,

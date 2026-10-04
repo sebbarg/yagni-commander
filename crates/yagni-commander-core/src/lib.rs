@@ -27,6 +27,7 @@ mod tabs;
 pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_archives;
+pub mod update;
 pub mod viewer;
 pub mod watch;
 

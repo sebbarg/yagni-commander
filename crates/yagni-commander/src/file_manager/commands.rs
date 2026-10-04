@@ -11,7 +11,7 @@ use gpui_kit::{
     App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
     SharedString, Styled, Window,
 };
-use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch};
+use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch, update};
 
 use super::FileManager;
 use crate::button_row::{ButtonRow, OnPress};
@@ -691,6 +691,89 @@ impl FileManager {
         };
         show_box(title, body, copied, 420.0, "OK", refocus, window, cx);
     }
+}
+
+impl FileManager {
+    /// Help > Check for updates: asks GitHub on a thread of its own and
+    /// shows what it found in a box: the latest version, or a newer one
+    /// with a link to the install instructions, or why it couldn't tell.
+    pub(super) fn check_for_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_search(cx);
+        if self.checking_updates {
+            return;
+        }
+        self.checking_updates = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let url = self.update_url.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(yagni_commander_core::update::check(&url));
+        });
+        // Polled: a wake-up from another thread panics gpui's test scheduler.
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                cx.background_executor().timer(OPENER_POLL).await;
+                let result = match rx.try_recv() {
+                    Ok(result) => result,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => continue,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Err("The check stopped unexpectedly.".into())
+                    }
+                };
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.checking_updates = false;
+                    this.show_update_check(result, window, cx);
+                });
+                break;
+            }
+        })
+        .detach();
+    }
+
+    fn show_update_check(
+        &mut self,
+        result: Result<update::Check, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let refocus = Some(self.focus.clone());
+        let title = "Check for updates";
+        match result {
+            Err(e) => show_error("Cannot check for updates", e, refocus, window, cx),
+            Ok(update::Check::UpToDate(current)) => {
+                let text = format!("yagni-commander {current} is the latest version.");
+                show_message(title, text, "OK", refocus, window, cx);
+            }
+            Ok(update::Check::Available { latest, current }) => {
+                let text = available_text(latest, current);
+                let copied = format!("{title}\n{text}\n{}", update::INSTALL_URL);
+                let body = move |_: &mut App| {
+                    use gpui_kit::component::link::Link;
+                    use gpui_kit::{InteractiveElement, IntoElement};
+                    let url = update::INSTALL_URL;
+                    gpui_kit::div()
+                        .child(text.clone())
+                        // A click opens the browser.
+                        .child(
+                            gpui_kit::div().flex().child(
+                                Link::new("install-link").href(url).child(
+                                    gpui_kit::div()
+                                        .debug_selector(|| "install-link".into())
+                                        .child(url),
+                                ),
+                            ),
+                        )
+                        .into_any_element()
+                };
+                show_box(title, body, copied, 460.0, "OK", refocus, window, cx);
+            }
+        }
+    }
+}
+
+/// The text of the box that says a newer version is out; the install link
+/// follows it.
+pub(super) fn available_text(latest: update::Version, current: update::Version) -> String {
+    format!("yagni-commander {latest} is available (you have {current}). To install it:")
 }
 
 /// Opening a dialog moves focus to the dialog itself; this moves it on to

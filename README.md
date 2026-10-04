@@ -25,6 +25,7 @@ Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and
 - Copy, move and delete run in the background with progress, Cancel and a prompt per conflict.
 - Type to jump: a quick search box finds names starting with what you type.
 - A viewer (F3) that opens multi-GB files instantly.
+- Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
 - Panels follow changes made by other programs.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
 - Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.

@@ -50,6 +50,9 @@ zstd = "0.14"
 hmac = "0.13"
 pbkdf2 = "0.13"
 sha1 = "0.11"
+# Help > Check for updates: one HTTPS request to GitHub. rustls (with ring and
+# the bundled Mozilla roots, webpki-roots), no gzip.
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

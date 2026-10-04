@@ -30,6 +30,8 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
     file_manager(cx).update(cx, |this, _| {
         this.opener = "true".into();
         this.terminal = Some("true".into());
+        // Never GitHub: nothing listens on port 1.
+        this.update_url = "http://127.0.0.1:1/".into();
         this.temp_dir = None;
     });
     cx
@@ -1968,6 +1970,100 @@ fn the_about_link_opens_the_repository_in_the_browser(cx: &mut TestAppContext) {
     );
     // The box stays open.
     assert!(dialog_open(cx));
+}
+
+mod check_for_updates {
+    use super::*;
+    use std::io::{Read, Write};
+
+    /// Points the check at a local server that redirects one request to
+    /// the release tag `tag`, as GitHub does.
+    fn release(tag: &str, cx: &mut VisualTestContext) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/releases/latest", listener.local_addr().unwrap());
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: https://github.com/sebbarg/yagni-commander/releases/tag/{tag}\r\nContent-Length: 0\r\n\r\n"
+        );
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0; 4096];
+            let _ = stream.read(&mut buf);
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        file_manager(cx).update(cx, |this, _| this.update_url = url);
+    }
+
+    fn check(cx: &mut VisualTestContext) {
+        cx.dispatch_action(crate::actions::CheckForUpdates);
+        wait_until(cx, dialog_open);
+    }
+
+    #[gpui_kit::test]
+    fn the_latest_version_says_so(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        release("v0.0.1", cx);
+        check(cx);
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            box_text(cx),
+            format!("Check for updates\nyagni-commander {version} is the latest version.")
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_newer_version_links_to_the_install_instructions(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        release("v999.0.0", cx);
+        check(cx);
+        let text = box_text(cx);
+        let version = env!("CARGO_PKG_VERSION");
+        assert!(
+            text.contains(&format!("999.0.0 is available (you have {version})")),
+            "{text}"
+        );
+        assert!(text.ends_with("\nhttps://github.com/sebbarg/yagni-commander#installing"));
+        click(cx, "install-link", 1);
+        assert_eq!(
+            cx.opened_url().as_deref(),
+            Some("https://github.com/sebbarg/yagni-commander#installing")
+        );
+        assert!(dialog_open(cx), "the box stays open");
+    }
+
+    #[gpui_kit::test]
+    fn no_answer_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        check(cx);
+        let text = box_text(cx);
+        assert!(
+            text.starts_with("Cannot check for updates\nCannot reach GitHub: "),
+            "{text}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_second_press_while_checking_does_nothing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        release("v0.0.1", cx);
+        // One server, one answer: a second request would get no answer and
+        // show an error after the first box.
+        cx.dispatch_action(crate::actions::CheckForUpdates);
+        cx.dispatch_action(crate::actions::CheckForUpdates);
+        wait_until(cx, dialog_open);
+        assert!(box_text(cx).contains("is the latest version"));
+        cx.simulate_keystrokes("enter");
+        for _ in 0..10 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+        assert!(!dialog_open(cx));
+    }
 }
 
 #[test]

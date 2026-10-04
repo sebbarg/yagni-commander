@@ -19,9 +19,9 @@ mod properties;
 mod watch;
 
 use crate::actions::{
-    About, Activate, CancelSearch, CloseTab, CompareContents, Copy, CopyPath, CursorDown,
-    CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile, Extract,
-    FILE_MANAGER_CONTEXT, FindFiles, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab,
+    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath,
+    CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
+    Extract, FILE_MANAGER_CONTEXT, FindFiles, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab,
     OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
     SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
     SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
@@ -88,6 +88,11 @@ pub struct FileManager {
     /// The program Enter on a file runs with its path (xdg-open, open).
     /// Tests replace it so they never start a real application.
     pub(crate) opener: String,
+    /// Where Help > Check for updates asks for the latest release. Tests
+    /// point it at a local server, never at GitHub.
+    pub(crate) update_url: String,
+    /// A check for updates is running: another press waits for it.
+    checking_updates: bool,
     /// Runs directory reads; `None` reads them inline (tests).
     load: Option<loads::LoadFn>,
     /// Directory reads in progress.
@@ -228,6 +233,8 @@ impl FileManager {
             job: None,
             trash: yagni_commander_core::file_ops::system_trash,
             opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
+            update_url: yagni_commander_core::update::LATEST_URL.to_owned(),
+            checking_updates: false,
             terminal: None,
             load: Some(loads::spawn_load),
             loads: Vec::new(),
@@ -794,6 +801,9 @@ impl Render for FileManager {
                 this.sort_by(SortKey::Permissions, cx)
             }))
             .on_action(cx.listener(|this, _: &About, window, cx| this.about(window, cx)))
+            .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
+                this.check_for_updates(window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )
