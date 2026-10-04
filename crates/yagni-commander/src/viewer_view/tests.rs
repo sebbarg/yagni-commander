@@ -1193,3 +1193,79 @@ mod zoom {
         assert_eq!(field, base.1 * 1.25);
     }
 }
+
+mod edit {
+    use super::*;
+    use gpui_kit::component::WindowExt;
+
+    fn set_editor(editor: &str, cx: &mut VisualTestContext) {
+        cx.update(|_, cx| {
+            cx.set_global(crate::config_state::CurrentConfig {
+                config: yagni_commander_core::Config {
+                    editor: Some(editor.to_owned()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+        });
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    /// An editor command that writes the path it was given to `out`.
+    fn recording_editor(out: &std::path::Path) -> String {
+        format!("sh -c 'printf %s \"$0\" > \"{}\"'", out.display())
+    }
+
+    fn wait_for(out: &std::path::Path) -> String {
+        for _ in 0..500 {
+            if let Ok(text) = std::fs::read_to_string(out)
+                && !text.is_empty()
+            {
+                return text;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the editor never ran");
+    }
+
+    #[gpui_kit::test]
+    fn f4_opens_the_viewed_file_in_the_editor(cx: &mut TestAppContext) {
+        let (tmp, viewer, mut cx) = view(b"text\n", cx);
+        let out = tmp.path().join("out");
+        set_editor(&recording_editor(&out), &mut cx);
+        cx.simulate_keystrokes("f4");
+        let path = tmp.path().join("file.txt");
+        assert_eq!(wait_for(&out), path.display().to_string());
+        assert!(!dialog_open(&mut cx));
+        assert!(viewer.read_with(&cx, |_, _| true), "the viewer stays open");
+    }
+
+    #[gpui_kit::test]
+    fn f4_without_an_editor_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut cx) = view(b"text\n", cx);
+        cx.simulate_keystrokes("f4");
+        assert!(dialog_open(&mut cx));
+    }
+
+    #[gpui_kit::test]
+    fn f4_on_an_archive_entry_is_refused(cx: &mut TestAppContext) {
+        setup(cx);
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("entry.txt");
+        std::fs::write(&path, b"text\n").unwrap();
+        let out = temp.path().join("out");
+        cx.update(|cx| open(path, main_bounds(), Some(temp), None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let mut cx = VisualTestContext::from_window(window, cx);
+        set_editor(&recording_editor(&out), &mut cx);
+        cx.simulate_keystrokes("f4");
+        assert!(dialog_open(&mut cx), "a box says why");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!out.exists(), "the private copy is never edited");
+    }
+}

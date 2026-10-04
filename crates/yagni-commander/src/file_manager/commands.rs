@@ -219,7 +219,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let Some(editor) = configured_editor(window, cx) else {
+        let Some(editor) = configured_editor(None, window, cx) else {
             return;
         };
         let path = self.active_panel(cx).cursor_path();
@@ -313,7 +313,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let Some(editor) = configured_editor(window, cx) else {
+        let Some(editor) = configured_editor(None, window, cx) else {
             return;
         };
         let dir = self.active_panel(cx).path().to_path_buf();
@@ -508,14 +508,19 @@ impl FileManager {
     }
 }
 
-/// The `editor` setting, or an error box saying it is missing.
-fn configured_editor(window: &mut Window, cx: &mut App) -> Option<String> {
+/// The `editor` setting, or an error box saying it is missing (focus goes to
+/// `refocus` when it closes).
+pub(crate) fn configured_editor(
+    refocus: Option<FocusHandle>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<String> {
     let editor = cx.global::<CurrentConfig>().config.editor.clone();
     if editor.is_none() {
         show_error(
             "Cannot open editor",
             "No editor configured: set `editor` in config.toml.",
-            None,
+            refocus,
             window,
             cx,
         );

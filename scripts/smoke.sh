@@ -41,8 +41,10 @@ export PATH="$work/bin:$PATH"
 printf '#!/bin/sh\npwd >"%s/terminal-ran-in"\n' "$work" >"$work/bin/fake-terminal"
 chmod +x "$work/bin/fake-terminal"
 export TERMINAL=fake-terminal
-# `true` stands in for an editor: it starts and exits at once.
-printf '# smoke config\neditor = "true"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
+# A stand-in editor: records the file it was given and exits at once.
+printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
+chmod +x "$work/bin/fake-editor"
+printf '# smoke config\neditor = "fake-editor"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
 # An old log file that startup must delete.
 logs=$work/state/yagni-commander/logs
 mkdir -p "$logs"
@@ -106,6 +108,7 @@ typed() {
 }
 shot() { import -window root "$shots/$1.png"; }
 has() { [[ $(cat "$1") == "$2" ]]; }
+last_line() { [[ $(tail -1 "$1") == "$2" ]]; }
 title_is() { [[ $(xdotool getwindowname "$window") == "$1 - yagni-commander" ]]; }
 # The app id: WM_CLASS on X11 (the Wayland app_id is the same string).
 app_id() { xprop -id "$1" WM_CLASS | grep -q '= "yagni-commander", "yagni-commander"$'; }
@@ -148,6 +151,7 @@ keys shift+F4
 typed new.txt
 keys Return
 check "new.txt created" test -f "$left/new.txt"
+check "the editor got new.txt" last_line "$work/edited" "$left/new.txt"
 
 echo "F2 rename (the name is preselected up to the extension)"
 keys F2
@@ -403,7 +407,7 @@ shot 07f-settings-toggled
 keys Escape
 check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
 check "config comment kept" grep -q "^# smoke config" "$cfg"
-check "other keys kept" grep -q '^editor = "true"' "$cfg"
+check "other keys kept" grep -q '^editor = "fake-editor"' "$cfg"
 
 echo "Ctrl-D hotlist: add the current folder, leave, come back by its letter"
 keys ctrl+d
@@ -502,6 +506,10 @@ check "viewer window app id" app_id "$(xdotool search --name "big.txt - yagni-co
 xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
 sleep 0.5
 shot 08-viewer
+echo "F4 in the viewer opens the file in the editor"
+keys F4
+check "the editor got big.txt" last_line "$work/edited" "$left/big.txt"
+check "the viewer stays open" xdotool search --name "big.txt - yagni-commander"
 keys ctrl+End
 shot 09-viewer-end
 keys w Right Right

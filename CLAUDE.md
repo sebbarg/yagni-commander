@@ -14,7 +14,7 @@ A personal, cross-platform dual-pane file manager in the spirit of Total Command
 
 ## Current state (update at the end of every session)
 
-As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`, not wired into packaging), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`; known limits in SPEC (Zoom) and ROADMAP v2). `cargo test --workspace` (431 app, 648 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. Next: the owner's choice from `ROADMAP.md`.
+As of 2026-10-04: v1 is complete, including the app icon (`packaging/icons/`, not wired into packaging), and zoom is merged into `main` (Ctrl-=/+/-/0 and keypad +/-, a UI level and a viewer level, modeled on Zed; spec `docs/superpowers/specs/2026-10-04-zoom-design.md`, plan `docs/superpowers/plans/2026-10-04-zoom.md`; known limits in SPEC (Zoom) and ROADMAP v2). `cargo test --workspace` (434 app, 648 core), clippy and fmt are green and `scripts/smoke.sh` passes end to end. Next: the owner's choice from `ROADMAP.md`.
 
 ## How we work
 

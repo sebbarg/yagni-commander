@@ -13,19 +13,22 @@ use gpui_kit::{
     App, AppContext, Context, FocusHandle, HighlightStyle, SharedString, StyledText, Subscription,
     Window, WindowBounds, WindowOptions, div, font, prelude::*, px,
 };
+use yagni_commander_core::archive::IN_ARCHIVE;
 use yagni_commander_core::find::text::Text;
 use yagni_commander_core::format_size;
+use yagni_commander_core::launch;
 use yagni_commander_core::viewer::{
     Direction, Document, FileSource, Highlight, LineIndex, Row, Visible, Wrap, count_lines,
 };
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
-    Close, Copy as CopySelection, End, Find, FindNext, FindPrevious, LineDown, LineUp, PageDown,
-    PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap, ZoomIn, ZoomOut,
-    ZoomReset,
+    Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, LineDown, LineUp,
+    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap, ZoomIn,
+    ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
+use crate::file_manager::commands::{configured_editor, show_error};
 use crate::rem_scope::RemScope;
 use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
@@ -131,7 +134,7 @@ pub struct ViewerView {
     wheel_rows: f32,
     _subscriptions: Vec<Subscription>,
     /// The private copy of an archive entry, deleted with the window.
-    _temp: Option<tempfile::TempDir>,
+    temp: Option<tempfile::TempDir>,
 }
 
 impl ViewerView {
@@ -194,7 +197,7 @@ impl ViewerView {
             dragging_thumb: false,
             wheel_rows: 0.0,
             _subscriptions: subscriptions,
-            _temp: temp,
+            temp,
         }
     }
 
@@ -277,6 +280,23 @@ impl ViewerView {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.stop_search(cx) {
             window.remove_window();
+        }
+    }
+
+    /// F4: opens the file in the configured editor; the viewer stays open.
+    /// An archive entry is a private copy deleted with the window, so it is
+    /// refused, as F4 is inside an archive in the panels.
+    fn edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let refocus = Some(self.focus.clone());
+        if self.temp.is_some() {
+            show_error("Inside an archive", IN_ARCHIVE, refocus, window, cx);
+            return;
+        }
+        let Some(editor) = configured_editor(refocus.clone(), window, cx) else {
+            return;
+        };
+        if let Err(e) = launch::open_in_editor(&editor, &self.path) {
+            show_error("Cannot open editor", e.to_string(), refocus, window, cx);
         }
     }
 
@@ -615,6 +635,7 @@ impl Render for ViewerView {
             .key_context(VIEWER_CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
+            .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, window, cx| {
                 this.find_again(Direction::Forward, window, cx)

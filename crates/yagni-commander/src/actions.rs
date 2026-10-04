@@ -99,7 +99,8 @@ pub mod viewer {
             Copy,
             ZoomIn,
             ZoomOut,
-            ZoomReset
+            ZoomReset,
+            Edit
         ]
     );
 }
@@ -331,6 +332,7 @@ pub fn bind_default_keys(cx: &mut App) {
         // Without a window manager (or where it doesn't take Alt-F4), close
         // only this window instead of quitting the app.
         KeyBinding::new("alt-f4", viewer::Close, ctx),
+        KeyBinding::new("f4", viewer::Edit, ctx),
         KeyBinding::new("up", viewer::LineUp, ctx),
         KeyBinding::new("down", viewer::LineDown, ctx),
         KeyBinding::new("pageup", viewer::PageUp, ctx),
