@@ -2,7 +2,8 @@
 
 use std::sync::Arc;
 
-use gpui_kit::{Div, FontFeatures, div, prelude::*, px};
+use crate::zoom::rems_from_px;
+use gpui_kit::{Div, FontFeatures, div, prelude::*};
 use yagni_commander_core::{
     Commander, Entry, EntryKind, Sort, SortKey, format_modified, format_permissions, format_size,
 };
@@ -94,7 +95,7 @@ impl Column {
     /// An empty cell sized and aligned for this column, shared by headers and rows.
     pub fn cell(&self) -> Div {
         let cell = match self.width {
-            Some(width) => div().w(px(width)).flex_none(),
+            Some(width) => div().w(rems_from_px(width)).flex_none(),
             None => div().flex_1().min_w_0(),
         };
         cell.truncate()

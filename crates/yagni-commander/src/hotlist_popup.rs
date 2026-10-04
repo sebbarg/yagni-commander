@@ -13,6 +13,7 @@ use yagni_commander_core::hotlist::{self, HotlistEntry};
 
 use crate::actions::{HOTLIST_CONTEXT, hotlist as act};
 use crate::theme::Theme;
+use crate::zoom::rems_from_px;
 
 pub enum HotlistEvent {
     /// This entry's folder, as stored (the popup's own copy of the list).
@@ -108,10 +109,10 @@ impl Render for HotlistPopup {
                 .debug_selector(move || format!("hotlist-row-{ix}"))
                 // Sized like gpui-component's menu items, so the popup
                 // reads like the menus.
-                .h(px(26.0))
+                .h(rems_from_px(26.0))
                 .flex()
                 .items_center()
-                .px(px(10.0))
+                .px(rems_from_px(10.0))
                 .when(highlighted, |d| {
                     d.bg(colors.accent).text_color(colors.text_on_accent)
                 })
@@ -149,19 +150,19 @@ impl Render for HotlistPopup {
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(HotlistEvent::Dismiss)))
             .debug_selector(|| "hotlist-popup".into())
             .occlude()
-            .min_w(px(260.0))
-            .py(px(4.0))
+            .min_w(rems_from_px(260.0))
+            .py(rems_from_px(4.0))
             .flex()
             .flex_col()
             .bg(colors.header_bg)
             .border_1()
             .border_color(colors.border)
-            .rounded(px(4.0))
+            .rounded(rems_from_px(4.0))
             .text_sm()
             .text_color(colors.text)
             .children(entries)
             .when(count > 0, |d| {
-                d.child(div().my(px(4.0)).h(px(1.0)).bg(colors.border))
+                d.child(div().my(rems_from_px(4.0)).h(px(1.0)).bg(colors.border))
             })
             .child(row(count, self.highlight == count).child("Add current folder"))
             .child(row(count + 1, self.highlight == count + 1).child("Configure..."))

@@ -34,6 +34,7 @@ use crate::menu_bar::{self, MenuBar};
 use crate::menus::{self, MenuState};
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
+use crate::zoom::{Zoom, rems_from_px, scaled};
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
@@ -358,8 +359,8 @@ impl FileManager {
         Some(
             div()
                 .absolute()
-                .top(px(crate::panel_view::BELOW_TABS))
-                .left(px(4.0))
+                .top(rems_from_px(crate::panel_view::BELOW_TABS))
+                .left(rems_from_px(4.0))
                 .child(deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.0))
@@ -598,7 +599,10 @@ impl FileManager {
             Side::Left => &self.left,
             Side::Right => &self.right,
         };
-        let rows = panel.read(cx).visible_rows().unwrap_or(FALLBACK_PAGE_ROWS);
+        let rows = panel
+            .read(cx)
+            .visible_rows(cx)
+            .unwrap_or(FALLBACK_PAGE_ROWS);
         let delta = rows.saturating_sub(1).max(1) as isize;
         self.execute(Command::CursorBy(if down { delta } else { -delta }), cx);
     }
@@ -613,8 +617,10 @@ impl FileManager {
             return;
         }
         if event.pressed_button == Some(MouseButton::Left) {
-            let width = f32::from(window.viewport_size().width) - 2.0 * PADDING;
-            let x = f32::from(event.position.x) - PADDING - DIVIDER_WIDTH / 2.0;
+            let ui = Zoom::get(cx).ui;
+            let padding = scaled(PADDING, ui);
+            let width = f32::from(window.viewport_size().width) - 2.0 * padding;
+            let x = f32::from(event.position.x) - padding - scaled(DIVIDER_WIDTH, ui) / 2.0;
             self.split_ratio = (x / width).clamp(0.1, 0.9);
         } else {
             // Released outside the window.
@@ -631,7 +637,7 @@ impl Render for FileManager {
         let divider = div()
             .id("divider")
             .debug_selector(|| "divider".into())
-            .w(px(DIVIDER_WIDTH))
+            .w(rems_from_px(DIVIDER_WIDTH))
             .h_full()
             .flex_none()
             .cursor_col_resize()
@@ -790,14 +796,14 @@ impl Render for FileManager {
             .flex_col()
             .bg(colors.window_bg)
             .text_color(colors.text)
-            .text_size(px(14.0))
+            .text_size(rems_from_px(14.0))
             .when_some(self.menu_bar.clone(), |d, bar| d.child(bar))
             .child(
                 div()
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .p(px(PADDING))
+                    .p(rems_from_px(PADDING))
                     .child(
                         div()
                             .relative()
@@ -820,10 +826,10 @@ impl Render for FileManager {
             )
             .child(
                 status
-                    .h(px(STATUS_HEIGHT))
+                    .h(rems_from_px(STATUS_HEIGHT))
                     .flex_none()
-                    .px(px(10.0))
-                    .text_size(px(12.0)),
+                    .px(rems_from_px(10.0))
+                    .text_size(rems_from_px(12.0)),
             )
     }
 }

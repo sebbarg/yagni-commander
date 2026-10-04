@@ -6,8 +6,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, px, relative, uniform_list,
+    App, Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
+    UniformListScrollHandle, Window, div, prelude::*, relative, uniform_list,
 };
 use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
@@ -18,8 +18,15 @@ use yagni_commander_core::{icons, label};
 use crate::columns::{Column, visible_columns};
 use crate::file_manager::execute;
 use crate::theme::{Colors, Theme};
+use crate::zoom::{Zoom, rems_from_px, scaled};
 
 const ROW_HEIGHT: f32 = 22.0;
+
+/// One row's height in px at the current UI level.
+pub fn row_height(cx: &App) -> f32 {
+    scaled(ROW_HEIGHT, Zoom::get(cx).ui)
+}
+
 const HEADER_HEIGHT: f32 = 32.0;
 const TAB_HEIGHT: f32 = 26.0;
 /// A tab's width while they all fit; then they shrink evenly.
@@ -65,9 +72,9 @@ impl PanelView {
     }
 
     /// Number of fully visible rows, once the list has been laid out.
-    pub fn visible_rows(&self) -> Option<usize> {
+    pub fn visible_rows(&self, cx: &App) -> Option<usize> {
         let height = f32::from(self.scroll.0.borrow().base_handle.bounds().size.height);
-        (height > 0.0).then(|| (height / ROW_HEIGHT) as usize)
+        (height > 0.0).then(|| (height / row_height(cx)) as usize)
     }
 
     fn reveal_cursor(&mut self, cx: &mut Context<Self>) {
@@ -89,7 +96,7 @@ impl PanelView {
             // The same entry, moved by a re-read (entries came or went
             // above it, maybe once a second): follow it only if it was in
             // view, so a wheel-scrolled view stays where it was put.
-            if last.name == now.name && !self.in_view(last.cursor) {
+            if last.name == now.name && !self.in_view(last.cursor, cx) {
                 self.revealed = Some(now);
                 return;
             }
@@ -100,12 +107,12 @@ impl PanelView {
     }
 
     /// Whether row `ix` is on screen (true before the list's first layout).
-    fn in_view(&self, ix: usize) -> bool {
-        let Some(rows) = self.visible_rows() else {
+    fn in_view(&self, ix: usize, cx: &App) -> bool {
+        let Some(rows) = self.visible_rows(cx) else {
             return true;
         };
         let offset = f32::from(self.scroll.0.borrow().base_handle.offset().y);
-        let top = (-offset / ROW_HEIGHT).floor().max(0.0) as usize;
+        let top = (-offset / row_height(cx)).floor().max(0.0) as usize;
         (top..=top + rows).contains(&ix)
     }
 
@@ -159,24 +166,24 @@ impl PanelView {
             (colors.header_bg, colors.text_dim)
         };
         div()
-            .h(px(TAB_HEIGHT))
+            .h(rems_from_px(TAB_HEIGHT))
             .flex_none()
             .flex()
             .items_end()
-            .gap(px(2.0))
-            .text_size(px(12.0))
+            .gap(rems_from_px(2.0))
+            .text_size(rems_from_px(12.0))
             .children(tabs.iter().enumerate().map(|(ix, panel)| {
                 let is_front = ix == front;
                 div()
                     .debug_selector(move || format!("tab-{}-{ix}", side_name(side)))
-                    .flex_basis(px(TAB_WIDTH))
+                    .flex_basis(rems_from_px(TAB_WIDTH))
                     .flex_shrink(1.0)
                     .min_w_0()
-                    .h(px(TAB_HEIGHT - 4.0))
-                    .px(px(10.0))
+                    .h(rems_from_px(TAB_HEIGHT - 4.0))
+                    .px(rems_from_px(10.0))
                     .flex()
                     .items_center()
-                    .rounded_t(px(6.0))
+                    .rounded_t(rems_from_px(6.0))
                     .border_t_1()
                     .border_l_1()
                     .border_r_1()
@@ -213,15 +220,15 @@ impl PanelView {
         let sort = commander.panel(side).sort();
         let columns: Vec<_> = visible_columns(commander).collect();
         div()
-            .h(px(COLUMN_HEADER_HEIGHT))
+            .h(rems_from_px(COLUMN_HEADER_HEIGHT))
             .flex_none()
-            .px(px(10.0))
+            .px(rems_from_px(10.0))
             .flex()
             .items_center()
-            .gap(px(CELL_SPACING))
+            .gap(rems_from_px(CELL_SPACING))
             .border_b_1()
             .border_color(colors.border)
-            .text_size(px(12.0))
+            .text_size(rems_from_px(12.0))
             .children(columns.into_iter().map(|column| {
                 let key = column.key;
                 column
@@ -258,9 +265,9 @@ impl Render for PanelView {
             .map(|l| loading_text(&l.path, l.entries_read()));
 
         let header = div()
-            .h(px(HEADER_HEIGHT))
+            .h(rems_from_px(HEADER_HEIGHT))
             .flex_none()
-            .px(px(10.0))
+            .px(rems_from_px(10.0))
             .flex()
             .items_center()
             .bg(if is_active {
@@ -273,7 +280,7 @@ impl Render for PanelView {
             } else {
                 colors.text_dim
             })
-            .gap(px(8.0))
+            .gap(rems_from_px(8.0))
             // "You are here": an accent glyph on the active side.
             .when(commander.shows_icons(), |header| {
                 header.child(
@@ -330,8 +337,8 @@ impl Render for PanelView {
                 .max_w(relative(0.6))
                 .overflow_hidden()
                 .whitespace_nowrap()
-                .px(px(6.0))
-                .rounded(px(3.0))
+                .px(rems_from_px(6.0))
+                .rounded(rems_from_px(3.0))
                 .border_1()
                 .border_color(colors.accent)
                 .bg(colors.panel_bg)
@@ -339,15 +346,15 @@ impl Render for PanelView {
                 .child(prefix.to_owned())
         });
         let footer = div()
-            .h(px(FOOTER_HEIGHT))
+            .h(rems_from_px(FOOTER_HEIGHT))
             .flex_none()
-            .px(px(10.0))
+            .px(rems_from_px(10.0))
             .flex()
             .items_center()
-            .gap(px(10.0))
+            .gap(rems_from_px(10.0))
             .bg(colors.header_bg)
             .text_color(colors.text_secondary)
-            .text_size(px(12.0))
+            .text_size(rems_from_px(12.0))
             .children(search)
             .child(
                 div()
@@ -369,6 +376,10 @@ impl Render for PanelView {
             cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
         )
         .track_scroll(&self.scroll)
+        .debug_selector({
+            let side = self.side;
+            move || format!("list-{}", if side == Side::Left { "left" } else { "right" })
+        })
         .flex_1()
         .when(loading.is_some(), |list| list.opacity(0.5));
 
@@ -378,9 +389,9 @@ impl Render for PanelView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            .rounded(px(6.0))
+            .rounded(rems_from_px(6.0))
             // Square where the first tab sits on top of it.
-            .rounded_tl(px(0.0))
+            .rounded_tl(rems_from_px(0.0))
             .border_1()
             .border_color(border)
             .bg(panel_bg)
@@ -407,7 +418,7 @@ const ICON_WIDTH: f32 = 18.0;
 fn icon_slot(icon: char, side: Side, ix: usize) -> Div {
     div()
         .debug_selector(move || format!("icon-{}-{ix}", side_name(side)))
-        .w(px(ICON_WIDTH))
+        .w(rems_from_px(ICON_WIDTH))
         .flex_none()
         .font_family(icons::FONT_FAMILY)
         .child(icon.to_string())
@@ -445,25 +456,25 @@ fn entry_row(
     };
     div()
         .w_full()
-        .h(px(ROW_HEIGHT))
-        .px(px(10.0))
+        .h(rems_from_px(ROW_HEIGHT))
+        .px(rems_from_px(10.0))
         .flex()
         .items_center()
-        .gap(px(CELL_SPACING))
+        .gap(rems_from_px(CELL_SPACING))
         .when_some(bg, |d, bg| d.bg(bg))
         .children(columns.iter().map(|column| {
             let is_name = column.key == SortKey::Name;
             let text = column.text(entry, icons);
             let cell = column
                 .cell()
-                .when(!is_name, |d| d.text_size(px(13.0)))
+                .when(!is_name, |d| d.text_size(rems_from_px(13.0)))
                 .text_color(if is_name { fg } else { detail });
             // Name is the only column that takes the icon, so `take` runs once.
             match (is_name, if is_name { icon.take() } else { None }) {
                 (true, Some(icon)) => cell
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(rems_from_px(4.0))
                     .child(icon)
                     .child(div().min_w_0().truncate().child(text)),
                 _ => cell.child(text),

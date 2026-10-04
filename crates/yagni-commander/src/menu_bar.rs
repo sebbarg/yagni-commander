@@ -17,6 +17,7 @@ use gpui_kit::{
 
 use crate::menus::{MenuDef, popup};
 use crate::theme::Theme;
+use crate::zoom::rems_from_px;
 
 const HEIGHT: f32 = 24.0;
 
@@ -159,7 +160,7 @@ impl Render for MenuBar {
                 .debug_selector(move || format!("menu-{title}"))
                 .relative()
                 .h_full()
-                .px(px(8.0))
+                .px(rems_from_px(8.0))
                 .flex()
                 .items_center()
                 .when(is_open, |d| {
@@ -191,7 +192,7 @@ impl Render for MenuBar {
                             div()
                                 .debug_selector(|| "menu-popup".into())
                                 .occlude()
-                                .mt(px(HEIGHT))
+                                .mt(rems_from_px(HEIGHT))
                                 .child(popup),
                         ),
                     ))
@@ -202,14 +203,14 @@ impl Render for MenuBar {
             .key_context("MenuBar")
             .on_action(cx.listener(|this, _: &SelectLeft, window, cx| this.step(-1, window, cx)))
             .on_action(cx.listener(|this, _: &SelectRight, window, cx| this.step(1, window, cx)))
-            .h(px(HEIGHT))
+            .h(rems_from_px(HEIGHT))
             .flex_none()
             .flex()
             .items_center()
-            .px(px(4.0))
+            .px(rems_from_px(4.0))
             .bg(colors.header_bg)
             .text_color(colors.text)
-            .text_size(px(13.0))
+            .text_size(rems_from_px(13.0))
             .children(titles)
     }
 }

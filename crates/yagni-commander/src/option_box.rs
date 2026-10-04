@@ -7,12 +7,13 @@
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::{
     App, Div, FocusHandle, InteractiveElement, MouseButton, MouseDownEvent, ParentElement,
-    Stateful, Styled, Window, div, prelude::FluentBuilder, px,
+    Stateful, Styled, Window, div, prelude::FluentBuilder,
 };
 
 use crate::actions::{FIND_OPTION_CONTEXT, find_results::Toggle};
 use crate::button_row::focus_ring;
 use crate::theme::Theme;
+use crate::zoom::rems_from_px;
 
 /// An option box with element id and debug selector `id`. `toggle` runs on
 /// Space and on a click (which also focuses the box).
@@ -36,7 +37,7 @@ pub fn option_box(
         .relative()
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(rems_from_px(6.0))
         .cursor_pointer()
         .on_action(move |_: &Toggle, window, cx| on_key(window, cx))
         .on_mouse_down(MouseButton::Left, move |_: &MouseDownEvent, window, cx| {
@@ -53,17 +54,17 @@ pub fn option_box(
 /// A ticked or empty square, as in the option boxes.
 pub fn check_square(on: bool, colors: &crate::theme::Colors) -> Div {
     div()
-        .size(px(16.0))
+        .size(rems_from_px(16.0))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(4.0))
+        .rounded(rems_from_px(4.0))
         .border_1()
         .border_color(if on { colors.accent } else { colors.text_dim })
         .when(on, |d| {
             d.bg(colors.accent).child(
                 Icon::new(IconName::Check)
-                    .size(px(12.0))
+                    .size(rems_from_px(12.0))
                     .text_color(colors.text_on_accent),
             )
         })

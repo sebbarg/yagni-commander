@@ -53,13 +53,11 @@ pub fn step(size: f32, delta: f32) -> f32 {
 }
 
 /// A length given in px at the 16 px base, as rems: it scales with the level.
-#[allow(dead_code)] // used from Task 2 on
 pub fn rems_from_px(px: f32) -> Rems {
     rems(px / DEFAULT)
 }
 
 /// `px` at the 16 px base, in px at `level`: for arithmetic on sizes.
-#[allow(dead_code)] // used from Task 2 on
 pub fn scaled(px: f32, level: f32) -> f32 {
     px * level / DEFAULT
 }

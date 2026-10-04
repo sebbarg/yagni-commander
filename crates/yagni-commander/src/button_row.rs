@@ -14,12 +14,13 @@ use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
     App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, div, prelude::FluentBuilder, px,
+    ParentElement, Render, SharedString, Styled, Window, div, prelude::FluentBuilder,
 };
 
 use crate::actions::{
     BUTTON_ROW_CONTEXT, CopyText, NextButton, PressButton, PrevButton, TabNext, TabPrev,
 };
+use crate::zoom::rems_from_px;
 
 /// What a button does when pressed. It closes the dialog itself if it should.
 pub type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
@@ -109,13 +110,13 @@ pub fn focus_ring(accent: gpui_kit::Rgba, what: &'static str) -> gpui_kit::Div {
     div()
         .debug_selector(move || format!("focus-ring-{what}"))
         .absolute()
-        .top(px(-3.0))
-        .left(px(-3.0))
-        .right(px(-3.0))
-        .bottom(px(-3.0))
+        .top(rems_from_px(-3.0))
+        .left(rems_from_px(-3.0))
+        .right(rems_from_px(-3.0))
+        .bottom(rems_from_px(-3.0))
         .border_2()
         .border_color(accent)
-        .rounded(px(8.0))
+        .rounded(rems_from_px(8.0))
 }
 
 impl Focusable for ButtonRow {
@@ -136,7 +137,7 @@ impl Render for ButtonRow {
             .track_focus(&self.focus)
             .flex()
             .justify_end()
-            .gap(px(8.0))
+            .gap(rems_from_px(8.0))
             .on_action(cx.listener(move |this, _: &PrevButton, _, cx| {
                 this.select(this.selected.saturating_sub(1), cx)
             }))

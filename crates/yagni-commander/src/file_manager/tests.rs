@@ -3118,6 +3118,14 @@ mod hotlist {
             let tab = bounds(cx, tab.into()).unwrap();
             assert_eq!(popup.origin.y, tab.bottom(), "{keys}");
         }
+        cx.simulate_keystrokes("escape");
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.simulate_keystrokes("tab ctrl-d");
+        let popup = bounds(cx, "hotlist-popup".into()).unwrap();
+        let tab = bounds(cx, "tab-left-0".into()).unwrap();
+        assert_eq!(popup.origin.y, tab.bottom(), "zoomed");
     }
 
     #[gpui_kit::test]
@@ -5840,5 +5848,64 @@ mod zoom {
         cx.simulate_keystrokes("ctrl-= ctrl-=");
         cx.update(|_, cx| Theme::default().install(cx));
         assert_eq!(ui_font_size(cx), 18.0);
+    }
+
+    #[gpui_kit::test]
+    fn rows_scale_with_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let before = bounds(cx, "row-left-0".into()).unwrap().size.height;
+        assert_eq!(before, px(22.0));
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        let after = bounds(cx, "row-left-0".into()).unwrap().size.height;
+        assert_eq!(after, px(33.0), "22 px at 24 px is 33 px");
+        let tab = bounds(cx, "tab-left-0".into()).unwrap().size.height;
+        assert_eq!(tab, px(33.0), "tab 22 px (26 - 4) at 24 px");
+    }
+
+    #[gpui_kit::test]
+    fn page_down_follows_the_zoom(cx: &mut TestAppContext) {
+        let tmp = tempfile::tempdir().unwrap();
+        for i in 0..200 {
+            std::fs::write(tmp.path().join(format!("f{i:03}")), b"").unwrap();
+        }
+        setup(cx);
+        let commander = cx.new(|_| Commander::new(tmp.path(), tmp.path(), false).unwrap());
+        let cx = window_on(commander.clone(), cx);
+        file_manager(cx).update(cx, |this, _| this.load = None);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        cx.run_until_parked();
+        let rows = file_manager(cx)
+            .read_with(cx, |fm, cx| fm.left.read(cx).visible_rows(cx))
+            .unwrap();
+        let list = bounds(cx, "list-left".into()).unwrap().size.height;
+        assert_eq!(rows, (f32::from(list) / 33.0) as usize);
+        cx.simulate_keystrokes("pagedown");
+        let cursor = commander.read_with(cx, |c, _| c.panel(Side::Left).cursor());
+        assert_eq!(cursor, rows - 1);
+    }
+
+    #[gpui_kit::test]
+    fn dragging_the_divider_works_zoomed(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        for _ in 0..8 {
+            cx.simulate_keystrokes("ctrl-=");
+        }
+        let before = bounds(cx, "row-left-0".into()).unwrap().size.width;
+        let start = center(cx, "divider");
+        let target = gpui_kit::point(start.x / 2.0, start.y);
+        let modifiers = gpui_kit::Modifiers::default();
+        let left = gpui_kit::MouseButton::Left;
+        cx.simulate_mouse_down(start, left, modifiers);
+        cx.simulate_mouse_move(target, left, modifiers);
+        cx.simulate_mouse_up(target, left, modifiers);
+        let after = bounds(cx, "row-left-0".into()).unwrap().size.width;
+        assert!(after < before * 0.7, "{before:?} -> {after:?}");
+        // The divider's center follows the mouse.
+        let divider = center(cx, "divider");
+        assert!((f32::from(divider.x) - f32::from(target.x)).abs() < 1.0);
     }
 }
