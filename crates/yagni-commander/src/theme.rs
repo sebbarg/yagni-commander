@@ -42,7 +42,11 @@ pub struct Colors {
     pub border: Rgba,
     /// Default text, e.g. file names.
     pub text: Rgba,
-    /// Secondary text: column details, hints, inactive headers.
+    /// Secondary text that is read: column details and titles, footers,
+    /// status lines, hints and labels. Quieter than `text`, still easy to read.
+    pub text_secondary: Rgba,
+    /// Text meant to recede: the inactive side's path header and tabs,
+    /// placeholders. Still 4.5:1 against its backgrounds.
     pub text_dim: Rgba,
     pub directory: Rgba,
     pub symlink: Rgba,
@@ -207,6 +211,87 @@ mod tests {
         assert!(Theme::parse(&typo).is_err());
         let bad_mode = TOKYO_NIGHT.replace("mode = \"dark\"", "mode = \"dim\"");
         assert!(Theme::parse(&bad_mode).is_err());
+    }
+
+    /// WCAG relative luminance of an opaque color.
+    fn luminance(c: Rgba) -> f32 {
+        let channel = |v: f32| {
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+
+    /// WCAG contrast ratio, from 1 (none) to 21 (black on white).
+    fn contrast(a: Rgba, b: Rgba) -> f32 {
+        let (la, lb) = (luminance(a), luminance(b));
+        (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+    }
+
+    #[test]
+    fn contrast_is_measured_like_wcag() {
+        assert!((contrast(color("#000000"), color("#ffffff")) - 21.0).abs() < 0.01);
+        assert!((contrast(color("#777777"), color("#ffffff")) - 4.48).abs() < 0.01);
+    }
+
+    /// Every text color against every background it is drawn on reaches
+    /// WCAG AA for normal text (4.5:1); icons and other non-text marks 3:1.
+    #[test]
+    fn text_is_readable_on_its_backgrounds() {
+        let c = Theme::default().colors;
+        let text_on = |fg: Rgba, bgs: &[Rgba]| -> Vec<(Rgba, Rgba, f32)> {
+            bgs.iter().map(|&bg| (fg, bg, 4.5)).collect()
+        };
+        let pairs: Vec<(Rgba, Rgba, f32)> = [
+            text_on(
+                c.text,
+                &[
+                    c.window_bg,
+                    c.panel_bg,
+                    c.header_bg,
+                    c.header_active_bg,
+                    c.cursor_inactive_bg,
+                ],
+            ),
+            // Column details, column titles, footers, status lines, hints, labels.
+            text_on(
+                c.text_secondary,
+                &[c.window_bg, c.panel_bg, c.header_bg, c.cursor_inactive_bg],
+            ),
+            // The inactive side's path header and tabs, placeholders.
+            text_on(c.text_dim, &[c.panel_bg, c.header_bg]),
+            // File names, also under the inactive cursor bar.
+            text_on(c.hidden, &[c.panel_bg, c.cursor_inactive_bg]),
+            text_on(c.directory, &[c.panel_bg, c.cursor_inactive_bg]),
+            text_on(c.symlink, &[c.panel_bg, c.cursor_inactive_bg]),
+            text_on(c.selected, &[c.panel_bg, c.cursor_inactive_bg]),
+            text_on(c.text_on_accent, &[c.accent]),
+            text_on(c.text_on_selected, &[c.selected]),
+            // The status line and dialogs.
+            text_on(c.error, &[c.window_bg, c.panel_bg]),
+            text_on(c.warning, &[c.panel_bg]),
+            text_on(c.success, &[c.panel_bg]),
+            text_on(c.info, &[c.panel_bg]),
+            // The active side's folder glyph.
+            vec![(c.accent, c.header_active_bg, 3.0)],
+        ]
+        .concat();
+        let failing: Vec<_> = pairs
+            .iter()
+            .filter(|(fg, bg, min)| contrast(*fg, *bg) < *min)
+            .map(|(fg, bg, min)| {
+                format!(
+                    "{} on {}: {:.2} < {min}",
+                    to_hex(*fg),
+                    to_hex(*bg),
+                    contrast(*fg, *bg)
+                )
+            })
+            .collect();
+        assert!(failing.is_empty(), "too little contrast: {failing:#?}");
     }
 
     #[test]

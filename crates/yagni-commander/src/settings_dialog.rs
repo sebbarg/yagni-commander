@@ -236,7 +236,7 @@ impl Render for SettingsView {
                     )
                     .child(
                         div()
-                            .text_color(colors.text_dim)
+                            .text_color(colors.text_secondary)
                             .text_size(px(12.0))
                             .child("Older log files are deleted at startup."),
                     )
@@ -245,7 +245,7 @@ impl Render for SettingsView {
                             div()
                                 .id("settings-log-dir")
                                 .debug_selector(|| "settings-log-dir".into())
-                                .text_color(colors.text_dim)
+                                .text_color(colors.text_secondary)
                                 .text_size(px(12.0))
                                 .cursor_pointer()
                                 .hover(|style| style.text_color(colors.text))
@@ -294,7 +294,7 @@ impl Render for SettingsView {
                     ))
                     .child(
                         div()
-                            .text_color(colors.text_dim)
+                            .text_color(colors.text_secondary)
                             .text_size(px(12.0))
                             .child("Name and Size are always shown."),
                     ),

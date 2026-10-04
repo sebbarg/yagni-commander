@@ -686,7 +686,7 @@ impl FileManager {
         );
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
-            let dim = Theme::get(cx).colors.text_dim;
+            let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
             dialog
                 .title("File exists")
@@ -696,7 +696,7 @@ impl FileManager {
                 .child(question.clone())
                 .child(
                     div()
-                        .text_color(dim)
+                        .text_color(secondary)
                         .text_size(px(13.0))
                         .child(
                             div()
@@ -752,7 +752,7 @@ impl FileManager {
         );
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
-            let dim = Theme::get(cx).colors.text_dim;
+            let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
             let checked = for_all.get();
             let for_all = for_all.clone();
@@ -768,7 +768,7 @@ impl FileManager {
                 )
                 .child(
                     div()
-                        .text_color(dim)
+                        .text_color(secondary)
                         .text_size(px(13.0))
                         .child(place.clone()),
                 )
@@ -851,7 +851,7 @@ impl FileManager {
             move |window, cx| input.update(cx, |state, cx| state.focus(window, cx))
         });
         window.open_dialog(cx, move |dialog, _, cx| {
-            let dim = Theme::get(cx).colors.text_dim;
+            let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
             let submit = submit.clone();
             dialog
@@ -867,7 +867,7 @@ impl FileManager {
                 .children(retry.then(|| {
                     div()
                         .debug_selector(|| "password-wrong".into())
-                        .text_color(dim)
+                        .text_color(secondary)
                         .text_size(px(13.0))
                         .child("Wrong password.")
                 }))
@@ -1453,7 +1453,7 @@ impl Render for ProgressView {
             .child(ProgressBar::new("progress").value(fraction(&self.progress) * 100.0))
             .child(
                 div()
-                    .text_color(colors.text_dim)
+                    .text_color(colors.text_secondary)
                     .text_size(px(13.0))
                     .child(status),
             )

@@ -649,7 +649,7 @@ impl Render for FileManager {
             (Some(err), _) => div().text_color(colors.error).child(err.to_owned()),
             (None, Some(notice)) => div().text_color(colors.error).child(notice.clone()),
             (None, None) => div()
-                .text_color(colors.text_dim)
+                .text_color(colors.text_secondary)
                 .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
         };
 

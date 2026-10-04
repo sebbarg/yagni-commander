@@ -137,7 +137,7 @@ impl Render for HotlistPopup {
                 .child(div().flex_1().child(text))
                 .child(
                     div()
-                        .when(!highlighted, |d| d.text_color(colors.text_dim))
+                        .when(!highlighted, |d| d.text_color(colors.text_secondary))
                         .child(entry.path.clone()),
                 )
         });

@@ -954,7 +954,7 @@ impl Render for FindDialog {
                 div()
                     .debug_selector(|| "find-status".into())
                     .h(px(20.0))
-                    .text_color(colors.text_dim)
+                    .text_color(colors.text_secondary)
                     .child(SharedString::from(status_text(&self.status))),
             )
     }

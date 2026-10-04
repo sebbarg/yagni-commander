@@ -1,5 +1,8 @@
 # Tokyo Night (Omarchy's default). Colors are named by role, not hue.
 # Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+# Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
+# (checked by the theme tests); text_dim and hidden are lifted from Tokyo
+# Night's comment colors for that.
 name = "Tokyo Night"
 mode = "dark"
 
@@ -10,10 +13,11 @@ header_bg = "#1f2335"
 header_active_bg = "#2f3549"
 border = "#292e42"
 text = "#c0caf5"
-text_dim = "#565f89"
+text_secondary = "#a9b1d6"
+text_dim = "#8089b0"
 directory = "#7aa2f7"
 symlink = "#7dcfff"
-hidden = "#737aa2"
+hidden = "#8c94ba"
 accent = "#7aa2f7"
 text_on_accent = "#1a1b26"
 cursor_inactive_bg = "#292e42"

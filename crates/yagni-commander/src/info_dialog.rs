@@ -43,7 +43,7 @@ impl Render for InfoView {
                         div()
                             .w(px(LABEL_WIDTH))
                             .flex_none()
-                            .text_color(colors.text_dim)
+                            .text_color(colors.text_secondary)
                             .child(*label),
                     )
                     .child(div().flex_1().min_w_0().child(value.clone()))

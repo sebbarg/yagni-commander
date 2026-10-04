@@ -231,7 +231,7 @@ impl PanelView {
                     .text_color(if sort.key == key {
                         colors.text
                     } else {
-                        colors.text_dim
+                        colors.text_secondary
                     })
                     .child(column.header(sort))
                     .on_mouse_down(
@@ -346,7 +346,7 @@ impl Render for PanelView {
             .items_center()
             .gap(px(10.0))
             .bg(colors.header_bg)
-            .text_color(colors.text_dim)
+            .text_color(colors.text_secondary)
             .text_size(px(12.0))
             .children(search)
             .child(
@@ -429,7 +429,7 @@ fn entry_row(
     let (name, detail) = if row.selected {
         (colors.selected, colors.selected)
     } else {
-        (name_color(entry, colors), colors.text_dim)
+        (name_color(entry, colors), colors.text_secondary)
     };
     let (fg, detail, bg) = match row.cursor {
         Some(true) => {

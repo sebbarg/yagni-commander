@@ -690,7 +690,7 @@ impl Render for ViewerView {
                     .items_center()
                     .bg(colors.header_bg)
                     .text_size(px(12.0))
-                    .text_color(colors.text_dim)
+                    .text_color(colors.text_secondary)
                     .child(match error {
                         Some(e) => div()
                             .text_color(colors.error)

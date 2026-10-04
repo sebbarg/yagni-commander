@@ -212,7 +212,7 @@ impl Render for HotlistDialog {
                 .child(
                     div()
                         .flex_1()
-                        .when(!at_cursor, |d| d.text_color(colors.text_dim))
+                        .when(!at_cursor, |d| d.text_color(colors.text_secondary))
                         .child(entry.path.clone()),
                 )
         });
