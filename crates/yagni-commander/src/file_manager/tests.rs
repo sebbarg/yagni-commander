@@ -1932,6 +1932,7 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
     };
     assert_eq!(key(&crate::actions::Quit, cx).as_deref(), Some(quit));
     assert_eq!(key(&crate::actions::ZoomIn, cx).as_deref(), Some("ctrl-="));
+    assert_eq!(key(&crate::actions::ZoomOut, cx).as_deref(), Some("ctrl--"));
     // The native macOS menu shows an action's first binding instead
     // (gpui-pre-macos `platform.rs`, zed issue 23621).
     let first = |action: &dyn gpui_kit::Action, cx: &mut VisualTestContext| {
@@ -1949,6 +1950,14 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         Some("shift-f8")
     );
     assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
+    assert_eq!(
+        first(&crate::actions::ZoomIn, cx).as_deref(),
+        Some("ctrl-=")
+    );
+    assert_eq!(
+        first(&crate::actions::ZoomOut, cx).as_deref(),
+        Some("ctrl--")
+    );
     for (action, keys) in [
         (&crate::actions::Pack as &dyn gpui_kit::Action, "alt-f5"),
         (&crate::actions::Extract, "alt-f6"),
@@ -5816,6 +5825,15 @@ mod zoom {
     fn ui_font_size(cx: &mut VisualTestContext) -> f32 {
         cx.run_until_parked();
         cx.update(|_, cx| f32::from(cx.theme().font_size))
+    }
+
+    #[gpui_kit::test]
+    fn keypad_plus_and_minus_change_the_ui_level(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("ctrl-add ctrl-add");
+        assert_eq!(ui_font_size(cx), 18.0);
+        cx.simulate_keystrokes("ctrl-subtract");
+        assert_eq!(ui_font_size(cx), 17.0);
     }
 
     #[gpui_kit::test]

@@ -56,7 +56,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 Decided with the owner 2026-10-04, on the `zoom` branch (spec `docs/superpowers/specs/2026-10-04-zoom-design.md`), modeled on Zed.
 
 - Two zoom levels, each a base size in px: UI (the main window, every dialog and popup, the viewer's dialogs) and viewer (the content of every F3 viewer window). Both start at 16 px.
-- In the main window, Ctrl-= or Ctrl-+ makes the UI 1 px larger, Ctrl-- 1 px smaller, Ctrl-0 resets to 16 px. In a viewer window the same keys change the viewer level, for all viewer windows at once.
+- In the main window, Ctrl-= or Ctrl-+ (also keypad +) makes the UI 1 px larger, Ctrl-- (also keypad -) 1 px smaller, Ctrl-0 resets to 16 px. Keys follow the active keyboard layout: on a Danish layout Ctrl-- is the - key right of the period, and Ctrl-+ the + key right of 0. In a viewer window the same keys change the viewer level, for all viewer windows at once.
 - Range 10 to 32 px (62% to 200%). A key at a limit does nothing.
 - Both levels are kept in the state file (`ui_zoom`, `viewer_zoom`, in px) and apply from the first frame after a restart. A missing or out-of-range value means 16 (clamped).
 - Show menu: Zoom in, Zoom out, Actual size, with their keys. They act on the UI level.
@@ -118,8 +118,8 @@ Tabs per side (v1; pulled forward from v2 on 2026-10-02; design: `docs/superpowe
 | Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |
 | In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |
-| Ctrl-=, Ctrl-+ | Zoom in: the UI level in the main window, the viewer level in a viewer window (see Zoom). |
-| Ctrl-- | Zoom out (same levels). |
+| Ctrl-=, Ctrl-+, Ctrl-keypad + | Zoom in: the UI level in the main window, the viewer level in a viewer window (see Zoom). |
+| Ctrl--, Ctrl-keypad - | Zoom out (same levels). |
 | Ctrl-0 | Reset the zoom to 16 px (same levels). |
 | Ctrl-. | Toggle showing hidden files, in both panels (see Hidden files). |
 | F10, Alt (alone) | Open the menu (Linux; see Menu). |

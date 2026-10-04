@@ -196,10 +196,14 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("alt-enter", ShowProperties, context),
         KeyBinding::new("alt-f7", FindFiles, context),
         KeyBinding::new("ctrl-shift-t", OpenTerminal, context),
-        // Ctrl-= is the primary key (shown in the menu), so it comes last.
+        // Ctrl-= and Ctrl-- are the primary keys (shown in the menu), so each
+        // is registered first and last; ctrl-add/ctrl-subtract are the keypad.
         KeyBinding::new("ctrl-=", ZoomIn, context),
         KeyBinding::new("ctrl-+", ZoomIn, context),
+        KeyBinding::new("ctrl-add", ZoomIn, context),
         KeyBinding::new("ctrl-=", ZoomIn, context),
+        KeyBinding::new("ctrl--", ZoomOut, context),
+        KeyBinding::new("ctrl-subtract", ZoomOut, context),
         KeyBinding::new("ctrl--", ZoomOut, context),
         KeyBinding::new("ctrl-0", ZoomReset, context),
         // Only while a panel has focus: a text field's context is deeper, so
@@ -346,10 +350,13 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-a", viewer::SelectAll, ctx),
         KeyBinding::new("ctrl-c", viewer::Copy, ctx),
         KeyBinding::new("ctrl-insert", viewer::Copy, ctx),
-        // The viewer's own level; Ctrl-= is the primary key, so it comes last.
+        // The viewer's own level; primary keys first and last, as above.
         KeyBinding::new("ctrl-=", viewer::ZoomIn, ctx),
         KeyBinding::new("ctrl-+", viewer::ZoomIn, ctx),
+        KeyBinding::new("ctrl-add", viewer::ZoomIn, ctx),
         KeyBinding::new("ctrl-=", viewer::ZoomIn, ctx),
+        KeyBinding::new("ctrl--", viewer::ZoomOut, ctx),
+        KeyBinding::new("ctrl-subtract", viewer::ZoomOut, ctx),
         KeyBinding::new("ctrl--", viewer::ZoomOut, ctx),
         KeyBinding::new("ctrl-0", viewer::ZoomReset, ctx),
     ]);

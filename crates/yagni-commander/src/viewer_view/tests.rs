@@ -1132,6 +1132,15 @@ mod zoom {
     }
 
     #[gpui_kit::test]
+    fn keypad_plus_and_minus_zoom_the_viewer(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut cx) = view(&numbered(10), cx);
+        cx.simulate_keystrokes("ctrl-add ctrl-add ctrl-subtract");
+        cx.run_until_parked();
+        let zoom = cx.update(|_, cx| crate::zoom::Zoom::get(cx));
+        assert_eq!((zoom.ui, zoom.viewer), (16.0, 17.0));
+    }
+
+    #[gpui_kit::test]
     fn a_second_viewer_follows_the_level(cx: &mut TestAppContext) {
         let (tmp, first, mut cx) = view(&numbered(1000), cx);
         let rows = first.read_with(&cx, |v, _| v.screen_rows());
