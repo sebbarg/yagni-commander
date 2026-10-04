@@ -29,7 +29,7 @@ pub struct Config {
     pub show_permissions: bool,
     /// A Nerd Font icon in front of every name (see [`crate::icons`]).
     pub icons: bool,
-    /// The theme's id (`tokyo-night`, `catppuccin-mocha`, `classic`); none
+    /// The theme's id (`tokyo-night`, `gruvbox-dark`, `classic`); none
     /// means the default. Not checked here: the app knows the themes.
     pub theme: Option<String>,
     /// Bookmarked folders (Ctrl-D), edited in the app.
@@ -77,7 +77,7 @@ show_permissions = true
 # An icon in front of every name.
 icons = true
 
-# Color theme: "tokyo-night" (the default), "catppuccin-mocha" or "classic".
+# Color theme: "tokyo-night" (the default), "gruvbox-dark" or "classic".
 # theme = "tokyo-night"
 "#;
 

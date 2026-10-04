@@ -6081,8 +6081,8 @@ mod themes {
                 .unwrap()
                 .contains("theme = \"classic\"")
         );
-        change_setting(Setting::Theme("catppuccin-mocha".into()), cx);
-        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        change_setting(Setting::Theme("gruvbox-dark".into()), cx);
+        assert_eq!(theme_name(cx), "Gruvbox Dark");
         assert!(cx.update(|_, cx| cx.theme().is_dark()));
     }
 
@@ -6179,7 +6179,7 @@ mod themes {
         assert!(dropdown_open(cx));
         cx.simulate_keystrokes("down");
         press(cx, "space");
-        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert_eq!(theme_name(cx), "Gruvbox Dark");
         assert!(settings_open(cx));
         assert!(!dropdown_open(cx));
     }
@@ -6191,7 +6191,7 @@ mod themes {
         use_config(cfg.path(), "", cx);
         open_theme_dropdown(cx);
         cx.simulate_keystrokes("down enter");
-        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert_eq!(theme_name(cx), "Gruvbox Dark");
         assert!(settings_open(cx));
         assert!(!dropdown_open(cx));
         // Enter on the closed dropdown opens it again, still not the OK.
@@ -6234,7 +6234,7 @@ mod themes {
         );
         click_at(cx, second, 1);
         cx.run_until_parked();
-        assert_eq!(theme_name(cx), "Catppuccin Mocha");
+        assert_eq!(theme_name(cx), "Gruvbox Dark");
         assert!(settings_open(cx));
         assert!(!dropdown_open(cx));
     }
@@ -6243,12 +6243,12 @@ mod themes {
     fn the_theme_dropdown_shows_the_current_theme(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
-        use_config(cfg.path(), "theme = \"catppuccin-mocha\"\n", cx);
+        use_config(cfg.path(), "theme = \"gruvbox-dark\"\n", cx);
         cx.simulate_keystrokes("ctrl-r");
         activate(cx);
         cx.simulate_keystrokes("ctrl-,");
         assert!(settings_open(cx));
-        assert_eq!(dropdown_value(cx).as_deref(), Some("Catppuccin Mocha"));
+        assert_eq!(dropdown_value(cx).as_deref(), Some("Gruvbox Dark"));
     }
 
     #[gpui_kit::test]

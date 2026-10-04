@@ -10,14 +10,14 @@ use gpui_kit::{App, Global, Rgba, SharedString};
 use serde::Deserialize;
 
 const TOKYO_NIGHT: &str = include_str!("../assets/themes/tokyo-night.toml");
-const CATPPUCCIN_MOCHA: &str = include_str!("../assets/themes/catppuccin-mocha.toml");
+const GRUVBOX_DARK: &str = include_str!("../assets/themes/gruvbox-dark.toml");
 const CLASSIC: &str = include_str!("../assets/themes/classic.toml");
 
 /// The built-in themes: (id, file), Tokyo Night (the default) first. The id
 /// is what the config's `theme` key holds.
 pub const BUILTIN: [(&str, &str); 3] = [
     ("tokyo-night", TOKYO_NIGHT),
-    ("catppuccin-mocha", CATPPUCCIN_MOCHA),
+    ("gruvbox-dark", GRUVBOX_DARK),
     ("classic", CLASSIC),
 ];
 
@@ -361,12 +361,12 @@ mod tests {
             names,
             vec![
                 ("tokyo-night", "Tokyo Night".to_owned()),
-                ("catppuccin-mocha", "Catppuccin Mocha".to_owned()),
+                ("gruvbox-dark", "Gruvbox Dark".to_owned()),
                 ("classic", "Classic".to_owned()),
             ]
         );
         assert_eq!(Theme::builtin("classic").unwrap().mode, Mode::Light);
-        assert_eq!(Theme::builtin("catppuccin-mocha").unwrap().mode, Mode::Dark);
+        assert_eq!(Theme::builtin("gruvbox-dark").unwrap().mode, Mode::Dark);
     }
 
     #[test]

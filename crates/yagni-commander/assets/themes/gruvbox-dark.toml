@@ -1,0 +1,31 @@
+# Gruvbox Dark (github.com/morhetz/gruvbox, the dark palette). Colors are
+# named by role, not hue.
+# Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+# Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
+# (checked by the theme tests); directory and error are lifted slightly from
+# Gruvbox's bright blue and bright red for that.
+name = "Gruvbox Dark"
+mode = "dark"
+
+[colors]
+window_bg = "#1d2021"
+panel_bg = "#282828"
+dialog_bg = "#282828"
+header_bg = "#32302f"
+header_active_bg = "#3c3836"
+border = "#3c3836"
+text = "#ebdbb2"
+text_secondary = "#d5c4a1"
+text_dim = "#a89984"
+directory = "#8fb0a3"
+symlink = "#8ec07c"
+hidden = "#bdae93"
+accent = "#fabd2f"
+text_on_accent = "#282828"
+cursor_inactive_bg = "#3c3836"
+selected = "#fe8019"
+text_on_selected = "#282828"
+error = "#fb5a46"
+warning = "#fabd2f"
+success = "#b8bb26"
+info = "#83a598"

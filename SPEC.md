@@ -51,8 +51,8 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 ### Themes
 
 - All colors come from a theme file. No hardcoded colors in views. User themes and following the system appearance are v2.
-- Three built-in themes (decided 2026-10-04): **Tokyo Night** (the default), **Catppuccin Mocha** (dark, the official palette) and **Classic** (light: white lists, gray `#d4d0c8` window, headers and dialogs, a navy cursor bar, red marked files; the colors of old Total Commander, not its 3D look).
-- The config key `theme` holds a theme's id: `tokyo-night`, `catppuccin-mocha` or `classic`. Missing means Tokyo Night. The commented template lists the ids.
+- Three built-in themes (decided 2026-10-04): **Tokyo Night** (the default), **Gruvbox Dark** (dark, warm: the original palette, two colors lifted for contrast) and **Classic** (light: white lists, gray `#d4d0c8` window, headers and dialogs, a navy cursor bar, red marked files; the colors of old Total Commander, not its 3D look).
+- The config key `theme` holds a theme's id: `tokyo-night`, `gruvbox-dark` or `classic`. Missing means Tokyo Night. The commented template lists the ids.
 - An unknown id: Tokyo Night is used and the status line says `Unknown theme "x", using Tokyo Night`; every other setting still applies and the file is not rewritten.
 - The Theme dropdown in Settings saves the key and switches at once: the main window, every viewer window, open dialogs and popups. The zoom level is kept. Ctrl-R applies a hand-edited `theme`.
 - Dialogs use their own role (`dialog_bg`); in Classic, text fields are white like the lists.
