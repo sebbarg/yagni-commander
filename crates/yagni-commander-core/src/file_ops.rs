@@ -20,6 +20,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::fs_ops::{rename_noreplace, same_file};
+use crate::mounts::Mounts;
 use crate::oplog::OperationLog;
 
 mod archive_names;
@@ -242,6 +243,9 @@ pub struct Settings {
     pub trash: TrashFn,
     /// Where each file touched is logged, if logging is on.
     pub log: Option<Arc<OperationLog>>,
+    /// The mount points a delete or a move stops at; `None` reads the
+    /// system's table when the operation starts. Tests pass their own.
+    pub mounts: Option<Mounts>,
 }
 
 impl Default for Settings {
@@ -249,6 +253,7 @@ impl Default for Settings {
         Self {
             trash: system_trash,
             log: None,
+            mounts: None,
         }
     }
 }
@@ -284,6 +289,9 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             };
         }
     };
+    // A delete or a move never takes another filesystem's contents along.
+    let mounts = matches!(operation, Operation::Delete { .. } | Operation::Move { .. })
+        .then(|| settings.mounts.clone().unwrap_or_else(Mounts::read));
     let mut engine = Engine {
         observer,
         progress: Progress::default(),
@@ -293,6 +301,8 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         name,
         link_choice: None,
         password: None,
+        mounts,
+        sync_copies: name == "move",
     };
     match to {
         Some(to) => engine.note(format_args!(
@@ -353,6 +363,25 @@ fn resolve(path: &Path) -> PathBuf {
     }
 }
 
+/// Why a delete or a move left a folder alone.
+const MOUNT_POINT: &str =
+    "a mount point: another filesystem is never deleted or moved with its folder";
+
+/// The real path of `path` (its folder's links resolved, not its own) and
+/// the device of that folder.
+fn place(path: &Path) -> Option<(PathBuf, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let name = path.file_name()?;
+    let parent = match path.parent()? {
+        p if p.as_os_str().is_empty() => Path::new("."),
+        p => p,
+    };
+    Some((
+        parent.canonicalize().ok()?.join(name),
+        parent.metadata().ok()?.dev(),
+    ))
+}
+
 /// Outcome of one entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Step {
@@ -382,6 +411,12 @@ struct Engine<'a> {
     link_choice: Option<LinkChoice>,
     /// The last password given, tried first on every encrypted entry.
     password: Option<String>,
+    /// Set for a delete or a move: the mount points they stop at.
+    mounts: Option<Mounts>,
+    /// Copies are flushed to disk before their source is deleted (a move
+    /// to another filesystem), so a pulled drive or a power cut can't lose
+    /// both.
+    sync_copies: bool,
 }
 
 impl Engine<'_> {
@@ -480,7 +515,19 @@ impl Engine<'_> {
     /// Adds the files and bytes under `path` to the progress totals.
     /// Returns `None` if cancelled. Unreadable entries are left out; the copy
     /// itself reports them.
+    /// A delete or a move leaves out mount points, as they will.
     fn scan(&mut self, path: &Path) -> Option<()> {
+        let within = self.mounts.as_ref().and_then(|_| place(path));
+        self.scan_at(
+            path,
+            within.as_ref().map(|(real, dev)| (real.as_path(), *dev)),
+        )
+    }
+
+    /// [`Engine::scan`] of `path`; `within` is its real path and the device
+    /// of the folder the walk started in, if it stops at mount points.
+    fn scan_at(&mut self, path: &Path, within: Option<(&Path, u64)>) -> Option<()> {
+        use std::os::unix::fs::MetadataExt;
         if self.observer.is_cancelled() {
             return None;
         }
@@ -494,10 +541,28 @@ impl Engine<'_> {
             }
             return Some(());
         }
+        if let Some((real, root_dev)) = within
+            && self.is_mount_point(real, meta.dev(), root_dev)
+        {
+            return Some(());
+        }
         for entry in fs::read_dir(path).into_iter().flatten().flatten() {
-            self.scan(&entry.path())?;
+            let real = within.map(|(real, dev)| (real.join(entry.file_name()), dev));
+            self.scan_at(
+                &entry.path(),
+                real.as_ref().map(|(real, dev)| (real.as_path(), *dev)),
+            )?;
         }
         Some(())
+    }
+
+    /// Whether the folder at `real` on device `dev` is a mount point this
+    /// operation stops at; `parent_dev` is the device of the folder above
+    /// (or of the one the walk started in).
+    fn is_mount_point(&self, real: &Path, dev: u64, parent_dev: u64) -> bool {
+        self.mounts
+            .as_ref()
+            .is_some_and(|mounts| mounts.is_mount_point(real, dev, parent_dev))
     }
 
     fn move_entry(&mut self, source: &Path, target: &Path) -> Step {
@@ -624,6 +689,16 @@ impl Engine<'_> {
         meta: &Metadata,
         delete_source: bool,
     ) -> Step {
+        if delete_source && self.mounts.is_some() {
+            use std::os::unix::fs::MetadataExt;
+            match place(source) {
+                Some((real, parent_dev)) if self.is_mount_point(&real, meta.dev(), parent_dev) => {
+                    return self.fail(source, MOUNT_POINT);
+                }
+                Some(_) => {}
+                None => return self.fail(source, "cannot tell whether this is a mount point"),
+            }
+        }
         let created = match fs::create_dir(target) {
             Ok(()) => {
                 self.note(format_args!("created directory {}", target.display()));
@@ -744,6 +819,13 @@ impl Engine<'_> {
                 let _ = out.set_times(FileTimes::new().set_modified(modified));
             }
             let _ = out.set_permissions(meta.permissions());
+            if self.sync_copies
+                && let Err(e) = out.sync_all()
+            {
+                drop(out);
+                let _ = fs::remove_file(path);
+                return self.fail(source, e);
+            }
             return Step::Done;
         }
         drop(out);
@@ -904,7 +986,16 @@ impl Engine<'_> {
         self.progress.bytes_total = 0; // deleting takes no time per byte
         for (source, parent, name) in work {
             let step = match open_dir(parent) {
-                Ok(dir) => self.delete_at(&dir, name, source),
+                Ok(dir) => match parent.canonicalize() {
+                    Ok(real) => {
+                        let real = real.join(name);
+                        match dir_device(&dir) {
+                            Ok(dev) => self.delete_at(&dir, name, source, &real, dev),
+                            Err(e) => self.fail(parent, e),
+                        }
+                    }
+                    Err(e) => self.fail(parent, e),
+                },
                 Err(e) => self.fail(parent, e),
             };
             if step == Step::Cancelled {
@@ -922,9 +1013,19 @@ impl Engine<'_> {
     /// through a symlink (`O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`), so replacing
     /// a directory with a symlink while this runs cannot make it delete
     /// anything outside the tree: the open fails instead. A symlink is
-    /// deleted itself, never its target.
+    /// deleted itself, never its target. A mount point (`real` is the real
+    /// path, `root_dev` the device of the folder the delete started in) is
+    /// left alone with its folders above it, so a mounted share or a bind
+    /// mount never loses its contents.
     #[cfg(unix)]
-    fn delete_at(&mut self, dir: &nix::dir::Dir, name: &std::ffi::OsStr, path: &Path) -> Step {
+    fn delete_at(
+        &mut self,
+        dir: &nix::dir::Dir,
+        name: &std::ffi::OsStr,
+        path: &Path,
+        real: &Path,
+        root_dev: u64,
+    ) -> Step {
         use nix::sys::stat::{FileStat, SFlag, fstatat};
         use nix::unistd::{UnlinkatFlags, unlinkat};
 
@@ -949,6 +1050,9 @@ impl Engine<'_> {
                 Err(e) => self.fail(path, io::Error::from(e)),
             };
         }
+        if self.is_mount_point(real, device(&stat), root_dev) {
+            return self.fail(path, MOUNT_POINT);
+        }
         let mut child = match open_dir_at(dir, name) {
             Ok(child) => child,
             Err(e) => return self.fail(path, e),
@@ -965,7 +1069,13 @@ impl Engine<'_> {
             .collect();
         let mut complete = true;
         for child_name in names {
-            match self.delete_at(&child, &child_name, &path.join(&child_name)) {
+            match self.delete_at(
+                &child,
+                &child_name,
+                &path.join(&child_name),
+                &real.join(&child_name),
+                root_dev,
+            ) {
                 Step::Done => {}
                 Step::Incomplete => complete = false,
                 Step::Cancelled => return Step::Cancelled,
@@ -984,7 +1094,7 @@ impl Engine<'_> {
     }
 
     #[cfg(not(unix))]
-    fn delete_at(&mut self, _: &(), _: &std::ffi::OsStr, path: &Path) -> Step {
+    fn delete_at(&mut self, _: &(), _: &std::ffi::OsStr, path: &Path, _: &Path, _: u64) -> Step {
         self.fail(path, "deleting is not supported on this platform")
     }
 
@@ -1045,6 +1155,21 @@ fn open_dir(path: &Path) -> io::Result<nix::dir::Dir> {
         nix::sys::stat::Mode::empty(),
     )
     .map_err(io::Error::from)
+}
+
+/// The device a stat result is on.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_cast)] // dev_t is u64 on Linux, i32 on macOS
+fn device(stat: &nix::sys::stat::FileStat) -> u64 {
+    stat.st_dev as u64
+}
+
+/// The device the open directory `dir` is on.
+#[cfg(unix)]
+fn dir_device(dir: &nix::dir::Dir) -> io::Result<u64> {
+    nix::sys::stat::fstat(dir)
+        .map(|stat| device(&stat))
+        .map_err(io::Error::from)
 }
 
 /// Opens directory `name` inside `dir`, refusing to follow a symlink.

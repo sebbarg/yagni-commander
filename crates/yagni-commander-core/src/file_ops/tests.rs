@@ -126,6 +126,7 @@ fn settings() -> Settings {
     Settings {
         trash: fake_trash,
         log: None,
+        mounts: None,
     }
 }
 
@@ -769,6 +770,8 @@ fn engine(script: &mut Script) -> Engine<'_> {
         name: "test",
         link_choice: None,
         password: None,
+        mounts: None,
+        sync_copies: false,
     }
 }
 
@@ -979,6 +982,110 @@ fn delete_can_be_cancelled_before_or_between_entries() {
     assert!(src.join("a.txt").exists(), "later sources untouched");
 }
 
+/// Runs `operation` with `mounts` as the mount table: the paths' real
+/// paths, since the table lists those.
+fn run_with_mounts(operation: &Operation, mounts: &[PathBuf], script: &mut Script) -> Report {
+    let settings = Settings {
+        mounts: Some(Mounts::table(
+            mounts.iter().map(|p| p.canonicalize().unwrap()),
+        )),
+        ..settings()
+    };
+    run(operation, script, &settings)
+}
+
+#[test]
+fn delete_leaves_a_mount_point_and_the_folders_above_it() {
+    let (_tmp, src, _) = fixture();
+    let deep = src.join("dir/deep");
+    let mut script = Script::default();
+    let report = run_with_mounts(
+        &delete(&[src.join("dir"), src.join("a.txt")]),
+        std::slice::from_ref(&deep),
+        &mut script,
+    );
+    assert_eq!(report.failures.len(), 1, "{report:?}");
+    assert_eq!(report.failures[0].path, deep);
+    assert_eq!(report.failures[0].message, MOUNT_POINT);
+    assert!(deep.join("c.txt").exists(), "the mount's contents stay");
+    assert_eq!(walk(&src), [deep.join("c.txt")], "everything else went");
+    assert_eq!(script.last.files_total, 2, "the mount is not counted");
+}
+
+#[test]
+fn delete_refuses_a_chosen_mount_point_even_through_a_link() {
+    let (tmp, src, _) = fixture();
+    // The panel's folder is reached through a link; the table has real paths.
+    let via = tmp.path().join("via");
+    symlink(&src, &via).unwrap();
+    let report = run_with_mounts(
+        &delete(&[via.join("dir")]),
+        &[src.join("dir")],
+        &mut Script::default(),
+    );
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].path, via.join("dir"));
+    assert!(src.join("dir/b.txt").exists());
+    assert!(src.join("dir/deep/c.txt").exists());
+}
+
+#[test]
+fn delete_without_a_mount_table_stops_at_another_device() {
+    // macOS: no table, so a device of its own marks a mount point.
+    let (_tmp, src, _) = fixture();
+    let mut script = Script::default();
+    let mut engine = engine(&mut script);
+    engine.mounts = Some(Mounts::default());
+    let dir = open_dir(&src).unwrap();
+    let real = src.canonicalize().unwrap().join("dir");
+    let other_device = dir_device(&dir).unwrap() + 1;
+    let step = engine.delete_at(
+        &dir,
+        std::ffi::OsStr::new("dir"),
+        &src.join("dir"),
+        &real,
+        other_device,
+    );
+    assert_eq!(step, Step::Incomplete);
+    assert_eq!(engine.report.failures[0].message, MOUNT_POINT);
+    assert!(src.join("dir/b.txt").exists());
+}
+
+#[test]
+fn move_by_copy_leaves_a_mount_point() {
+    let (_tmp, src, dst) = fixture();
+    let deep = src.join("dir/deep");
+    let mut script = Script::default();
+    let mut engine = engine(&mut script);
+    engine.mounts = Some(Mounts::table([deep.canonicalize().unwrap()]));
+    engine.sync_copies = true;
+    assert_eq!(
+        engine.copy_entry(&src.join("dir"), &dst.join("dir"), true),
+        Step::Incomplete
+    );
+    assert_eq!(engine.report.failures.len(), 1);
+    assert_eq!(engine.report.failures[0].path, deep);
+    assert_eq!(engine.report.failures[0].message, MOUNT_POINT);
+    assert!(deep.join("c.txt").exists(), "the mount stays");
+    assert!(!src.join("dir/b.txt").exists());
+    assert_eq!(read(dst.join("dir/b.txt")), "bee", "the rest moved");
+    assert!(!dst.join("dir/deep").exists());
+}
+
+#[test]
+fn a_copy_goes_into_a_mount_point() {
+    let (_tmp, src, dst) = fixture();
+    let mut script = Script::default();
+    let report = run_with_mounts(
+        &copy(&[src.join("dir")], &dst),
+        &[src.join("dir/deep")],
+        &mut script,
+    );
+    assert_eq!(report, Report::default());
+    assert_eq!(read(dst.join("dir/deep/c.txt")), "c");
+    assert_eq!(script.last.files_total, 2);
+}
+
 /// Log lines written by `operations`, without their timestamps.
 fn logged(operations: &[(Operation, &[Answer])]) -> Vec<String> {
     let dir = tempfile::tempdir().unwrap();
@@ -987,6 +1094,7 @@ fn logged(operations: &[(Operation, &[Answer])]) -> Vec<String> {
         let settings = Settings {
             trash: fake_trash,
             log: Some(log.clone()),
+            mounts: None,
         };
         run(operation, &mut Script::answering(answers), &settings);
     }
@@ -2689,6 +2797,7 @@ fn the_password_is_never_logged() {
     let settings = Settings {
         trash: fake_trash,
         log: Some(log),
+        mounts: None,
     };
     let mut script = Script::with_passwords(&[pw("wrong-456"), pw("pw-secret-123")]);
     let report = run(&extract_op(&[zip], &out), &mut script, &settings);

@@ -293,6 +293,7 @@ fn the_engine_runs_compare_without_logging() {
     let settings = Settings {
         trash: |_| Err("never".into()),
         log: Some(Arc::new(log)),
+        mounts: None,
     };
     let operation = Operation::Compare {
         first: a,

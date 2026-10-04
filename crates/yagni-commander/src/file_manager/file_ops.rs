@@ -143,7 +143,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (sources, dir, other_dir, one_is_dir, from_archive) = {
+        let (sources, dir, home, other_dir, one_is_dir, from_archive) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
@@ -159,6 +159,7 @@ impl FileManager {
                 source_paths(panel),
                 // Typed relative paths start from a real folder.
                 panel.real_dir().to_path_buf(),
+                commander.home().to_path_buf(),
                 other.path().to_path_buf(),
                 one_is_dir,
                 from_archive,
@@ -191,7 +192,7 @@ impl FileManager {
                 width: COPY_PROMPT_WIDTH,
             },
             Rc::new(move |this, typed, window, cx| {
-                let to = destination(&dir, typed, &sources)?;
+                let to = destination(&dir, &home, typed, &sources)?;
                 let sources = sources.clone();
                 let operation = match (&from_archive, kind) {
                     (Some(from), _) => Operation::ExtractEntries {
@@ -225,13 +226,14 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (sources, dir, other_dir) = {
+        let (sources, dir, home, other_dir) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
             (
                 source_paths(panel),
                 panel.path().to_path_buf(),
+                commander.home().to_path_buf(),
                 other.path().to_path_buf(),
             )
         };
@@ -249,7 +251,7 @@ impl FileManager {
                 width: COPY_PROMPT_WIDTH,
             },
             Rc::new(move |this, typed, window, cx| {
-                let to = zip_path(&dir, typed)?;
+                let to = zip_path(&dir, &home, typed)?;
                 let operation = Operation::Pack {
                     sources: sources.clone(),
                     base: dir.clone(),
@@ -284,13 +286,14 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (archives, dir, other_dir) = {
+        let (archives, dir, home, other_dir) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
             (
                 source_paths(panel),
                 panel.path().to_path_buf(),
+                commander.home().to_path_buf(),
                 other.path().to_path_buf(),
             )
         };
@@ -326,7 +329,7 @@ impl FileManager {
                 width: COPY_PROMPT_WIDTH,
             },
             Rc::new(move |this, typed, window, cx| {
-                let into = extract_folder(&dir, typed)?;
+                let into = extract_folder(&dir, &home, typed)?;
                 let operation = Operation::Extract {
                     archives: archives.clone(),
                     into,
@@ -528,6 +531,7 @@ impl FileManager {
             log: (kind != Kind::View)
                 .then(|| self.commander.read(cx).log().cloned())
                 .flatten(),
+            mounts: None,
         };
         let job = Job::spawn(operation, settings)?;
         let commander = self.commander.read(cx);
@@ -1168,13 +1172,13 @@ fn zip_target(other_dir: &Path, sources: &[PathBuf], current: &Path) -> (String,
 
 /// The zip the Alt-F5 prompt names: relative to `dir`, `.zip` added when
 /// the name doesn't end in it.
-fn zip_path(dir: &Path, typed: &str) -> io::Result<PathBuf> {
+fn zip_path(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     let typed = typed.trim();
     if typed.is_empty() {
         return Err(invalid("give a name for the archive".into()));
     }
-    let mut path = dir.join(typed);
+    let mut path = typed_path(dir, home, typed);
     if inside_archive(&path) {
         return Err(invalid("Can't pack into an archive".into()));
     }
@@ -1299,14 +1303,24 @@ fn extract_title(archives: &[PathBuf]) -> String {
     }
 }
 
+/// A path typed into the F5/F6/Alt-F5/Alt-F6 prompts: `~` and `~/...` in
+/// `home`, like a shell (never a folder named `~`), else relative to `dir`.
+fn typed_path(dir: &Path, home: &Path, typed: &str) -> PathBuf {
+    match typed.strip_prefix('~') {
+        Some("") => home.to_path_buf(),
+        Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        _ => dir.join(typed),
+    }
+}
+
 /// The folder the Alt-F6 prompt names, relative to `dir`; created by the job.
-fn extract_folder(dir: &Path, typed: &str) -> io::Result<PathBuf> {
+fn extract_folder(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     let typed = typed.trim();
     if typed.is_empty() {
         return Err(invalid("give a folder".into()));
     }
-    let into = dir.join(typed);
+    let into = typed_path(dir, home, typed);
     if is_or_inside_archive(&into) {
         return Err(invalid("Can't extract into an archive".into()));
     }
@@ -1323,13 +1337,18 @@ const COPY_PROMPT_WIDTH: f32 = 720.0;
 /// the active panel's directory `dir`. One source: an existing folder (or
 /// text ending in "/") means into it, anything else is its new full path.
 /// More: into the typed folder. Missing folders are created by the job.
-fn destination(dir: &Path, typed: &str, sources: &[PathBuf]) -> io::Result<Destination> {
+fn destination(
+    dir: &Path,
+    home: &Path,
+    typed: &str,
+    sources: &[PathBuf],
+) -> io::Result<Destination> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidInput, message);
     let typed = typed.trim();
     if typed.is_empty() {
         return Err(invalid("give a destination".into()));
     }
-    let to = dir.join(typed);
+    let to = typed_path(dir, home, typed);
     if inside_archive(&to) {
         return Err(invalid("Can't copy into an archive".into()));
     }
@@ -1563,7 +1582,7 @@ mod tests {
         std::fs::create_dir(dir.join("sub")).unwrap();
         std::fs::write(dir.join("f.txt"), b"").unwrap();
         let one = [dir.join("f.txt")];
-        let to = |typed: &str| destination(dir, typed, &one);
+        let to = |typed: &str| destination(dir, home(), typed, &one);
         // A new name, here or anywhere (missing folders are made later).
         assert_eq!(to(" g.txt ").unwrap(), Destination::As(dir.join("g.txt")));
         assert_eq!(
@@ -1588,7 +1607,7 @@ mod tests {
         std::fs::create_dir(dir.join("sub")).unwrap();
         std::fs::write(dir.join("file"), b"").unwrap();
         let two = [dir.join("x"), dir.join("y")];
-        let to = |typed: &str| destination(dir, typed, &two);
+        let to = |typed: &str| destination(dir, home(), typed, &two);
         assert_eq!(to(" sub ").unwrap(), Destination::Into(dir.join("sub")));
         assert_eq!(to("new").unwrap(), Destination::Into(dir.join("new")));
         assert!(to("file").is_err(), "not a directory");
@@ -1597,11 +1616,47 @@ mod tests {
         assert!(
             destination(
                 &dir.join("sub"),
+                home(),
                 "..",
                 &[dir.join("sub/x"), dir.join("sub/y")]
             )
             .is_ok()
         );
+    }
+
+    fn home() -> &'static Path {
+        Path::new("/home/me")
+    }
+
+    #[test]
+    fn a_tilde_means_home_in_every_destination_prompt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let one = [dir.join("f.txt")];
+        assert_eq!(
+            destination(dir, home(), "~/backup/f.txt", &one).unwrap(),
+            Destination::As(home().join("backup/f.txt"))
+        );
+        assert_eq!(
+            destination(dir, home(), " ~/backup/ ", &one).unwrap(),
+            Destination::Into(home().join("backup"))
+        );
+        let two = [dir.join("x"), dir.join("y")];
+        assert_eq!(
+            destination(dir, home(), "~", &two).unwrap(),
+            Destination::Into(home().to_path_buf())
+        );
+        assert_eq!(
+            zip_path(dir, home(), "~/out").unwrap(),
+            home().join("out.zip")
+        );
+        assert_eq!(
+            extract_folder(dir, home(), "~/x").unwrap(),
+            home().join("x")
+        );
+        // Only `~` alone or before a slash: other names are names.
+        assert_eq!(extract_folder(dir, home(), "~x").unwrap(), dir.join("~x"));
+        assert_eq!(extract_folder(dir, home(), "a/~").unwrap(), dir.join("a/~"));
     }
 
     #[test]
@@ -1668,18 +1723,27 @@ mod tests {
     fn zip_is_added_when_missing() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        assert_eq!(zip_path(dir, "out").unwrap(), dir.join("out.zip"));
-        assert_eq!(zip_path(dir, " out.zip ").unwrap(), dir.join("out.zip"));
-        assert_eq!(zip_path(dir, "OUT.ZIP").unwrap(), dir.join("OUT.ZIP"));
-        assert_eq!(zip_path(dir, "sub/x").unwrap(), dir.join("sub/x.zip"));
+        assert_eq!(zip_path(dir, home(), "out").unwrap(), dir.join("out.zip"));
         assert_eq!(
-            zip_path(dir, "/abs/y.zip").unwrap(),
+            zip_path(dir, home(), " out.zip ").unwrap(),
+            dir.join("out.zip")
+        );
+        assert_eq!(
+            zip_path(dir, home(), "OUT.ZIP").unwrap(),
+            dir.join("OUT.ZIP")
+        );
+        assert_eq!(
+            zip_path(dir, home(), "sub/x").unwrap(),
+            dir.join("sub/x.zip")
+        );
+        assert_eq!(
+            zip_path(dir, home(), "/abs/y.zip").unwrap(),
             PathBuf::from("/abs/y.zip")
         );
-        assert!(zip_path(dir, "  ").is_err());
-        assert!(zip_path(dir, "folder/").is_err());
+        assert!(zip_path(dir, home(), "  ").is_err());
+        assert!(zip_path(dir, home(), "folder/").is_err());
         std::fs::create_dir(dir.join("existing")).unwrap();
-        assert!(zip_path(dir, "existing").is_err());
+        assert!(zip_path(dir, home(), "existing").is_err());
     }
 
     #[test]
@@ -1709,13 +1773,16 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         assert_eq!(
-            extract_folder(dir, " out/here ").unwrap(),
+            extract_folder(dir, home(), " out/here ").unwrap(),
             dir.join("out/here")
         );
-        assert_eq!(extract_folder(dir, "/abs").unwrap(), PathBuf::from("/abs"));
-        assert!(extract_folder(dir, "").is_err());
+        assert_eq!(
+            extract_folder(dir, home(), "/abs").unwrap(),
+            PathBuf::from("/abs")
+        );
+        assert!(extract_folder(dir, home(), "").is_err());
         std::fs::write(dir.join("file"), "").unwrap();
-        assert!(extract_folder(dir, "file").is_err());
+        assert!(extract_folder(dir, home(), "file").is_err());
     }
 
     fn pair(folders: bool) -> ComparePair {
@@ -1803,24 +1870,24 @@ mod tests {
         std::fs::write(&zip, b"").unwrap();
         let message = |r: io::Result<PathBuf>| r.unwrap_err().to_string();
         assert_eq!(
-            message(zip_path(dir, "a.zip/out.zip")),
+            message(zip_path(dir, home(), "a.zip/out.zip")),
             "Can't pack into an archive"
         );
         assert_eq!(
-            message(extract_folder(dir, "a.zip/sub")),
+            message(extract_folder(dir, home(), "a.zip/sub")),
             "Can't extract into an archive"
         );
         assert_eq!(
-            message(extract_folder(dir, "a.zip")),
+            message(extract_folder(dir, home(), "a.zip")),
             "Can't extract into an archive"
         );
         let two = [dir.join("x"), dir.join("y")];
-        let err = destination(dir, "a.zip", &two).unwrap_err();
+        let err = destination(dir, home(), "a.zip", &two).unwrap_err();
         assert_eq!(err.to_string(), "Can't copy into an archive");
         // One entry onto an existing zip replaces it (after Overwrite?).
         let one = [dir.join("x")];
         assert!(matches!(
-            destination(dir, "a.zip", &one),
+            destination(dir, home(), "a.zip", &one),
             Ok(Destination::As(_))
         ));
     }

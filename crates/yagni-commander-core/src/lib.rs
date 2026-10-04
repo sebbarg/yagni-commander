@@ -16,6 +16,7 @@ pub mod icons;
 pub mod info;
 pub mod launch;
 mod listing;
+pub mod mounts;
 pub mod oplog;
 mod panel;
 mod quick_search;

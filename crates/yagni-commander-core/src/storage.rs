@@ -136,17 +136,34 @@ pub fn save<T: Serialize>(path: &Path, value: &T) -> Result<(), StorageError> {
 }
 
 /// Writes `path` via a temporary file and a rename, so a crash mid-write
-/// never leaves a truncated file behind.
+/// never leaves a truncated file behind. A symlink (a config kept with
+/// dotfiles) is written through, never replaced; the file keeps its mode.
 pub fn write_atomic(path: &Path, contents: &str) -> Result<(), StorageError> {
     let io_err = |e| StorageError::Io(path.to_owned(), e);
+    let existing = path.symlink_metadata().ok();
+    let path = &match &existing {
+        Some(meta) if meta.is_symlink() => fs::canonicalize(path).map_err(io_err)?,
+        _ => path.to_path_buf(),
+    };
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(io_err)?;
     }
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    fs::write(&tmp, contents).map_err(io_err)?;
-    fs::rename(&tmp, path).map_err(io_err)
+    let written = (|| {
+        let mut file = fs::File::create(&tmp)?;
+        io::Write::write_all(&mut file, contents.as_bytes())?;
+        if let Ok(meta) = fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written.map_err(io_err)
 }
 
 #[cfg(test)]
@@ -244,6 +261,40 @@ mod tests {
         let err = load::<Sample>(tmp.path()).unwrap_err();
         assert!(matches!(err, StorageError::Io(..)));
         assert!(err.to_string().contains(&tmp.path().display().to_string()));
+    }
+
+    #[test]
+    fn a_symlinked_file_is_written_through_and_keeps_its_mode() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("dotfiles/config.toml");
+        fs::create_dir(tmp.path().join("dotfiles")).unwrap();
+        fs::write(&real, "old").unwrap();
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = tmp.path().join("config.toml");
+        symlink("dotfiles/config.toml", &link).unwrap();
+
+        write_atomic(&link, "new").unwrap();
+        assert!(
+            link.symlink_metadata().unwrap().is_symlink(),
+            "still a link"
+        );
+        assert_eq!(fs::read_to_string(&real).unwrap(), "new");
+        let mode = real.metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(!tmp.path().join("dotfiles/config.toml.tmp").exists());
+    }
+
+    #[test]
+    fn a_link_to_nothing_is_an_error_and_stays() {
+        let tmp = tempfile::tempdir().unwrap();
+        let link = tmp.path().join("config.toml");
+        std::os::unix::fs::symlink("missing/config.toml", &link).unwrap();
+        assert!(matches!(
+            write_atomic(&link, "new").unwrap_err(),
+            StorageError::Io(..)
+        ));
+        assert!(link.symlink_metadata().unwrap().is_symlink());
     }
 
     #[test]

@@ -2,17 +2,17 @@
 //! entries included, symlinks never followed, never into another
 //! filesystem.
 
-use std::collections::HashSet;
 use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::masks::Masks;
 use super::text::TextQuery;
 use crate::entry::{Entry, OwnerCache, stat_entry};
+use crate::mounts::Mounts;
 
 /// What to look for, and where.
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ pub fn search(
         Progress::add(&progress.unreadable, &mut summary.unreadable);
         return summary;
     };
-    let mounts = mount_points();
+    let mounts = Mounts::read();
     // Mount points are listed by their real path.
     let real_root = fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     let mut owners = OwnerCache::default();
@@ -147,8 +147,10 @@ pub fn search(
                 }
             }
             if is_dir && query.masks.enters(&label) {
-                let same = meta.dev() == root_meta.dev();
-                if !other_filesystem(same, &real_root.join(&rel), mounts.as_ref()) {
+                // Another device and a mount point: a btrfs subvolume (a
+                // device of its own, no mount) is searched.
+                let (dev, root_dev) = (meta.dev(), root_meta.dev());
+                if dev == root_dev || !mounts.is_mount_point(&real_root.join(&rel), dev, root_dev) {
                     folders.push((path, rel));
                 } else {
                     Progress::add(&progress.other_filesystems, &mut summary.other_filesystems);
@@ -159,53 +161,6 @@ pub fn search(
         stack.extend(folders.into_iter().rev());
     }
     summary
-}
-
-/// Whether the folder at `path` (its real path) is on another filesystem:
-/// another device, and a mount point when the mount table is known. A btrfs
-/// subvolume has a device number of its own but is no mount, so it is
-/// searched.
-fn other_filesystem(same_device: bool, path: &Path, mounts: Option<&HashSet<PathBuf>>) -> bool {
-    !same_device && mounts.is_none_or(|m| m.contains(path))
-}
-
-/// The mount points (Linux); `None` where there is no mount table to read
-/// (macOS), and the device number alone decides.
-fn mount_points() -> Option<HashSet<PathBuf>> {
-    fs::read_to_string("/proc/self/mountinfo")
-        .ok()
-        .map(|text| parse_mountinfo(&text))
-}
-
-/// The fifth field of each line of `/proc/self/mountinfo`, with its octal
-/// escapes (`\040` for a space) decoded.
-fn parse_mountinfo(text: &str) -> HashSet<PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    text.lines()
-        .filter_map(|line| line.split(' ').nth(4))
-        .map(|field| {
-            let bytes = field.as_bytes();
-            let mut out = Vec::with_capacity(bytes.len());
-            let mut i = 0;
-            while i < bytes.len() {
-                let octal = bytes.get(i + 1..i + 4).and_then(|d| {
-                    let d = std::str::from_utf8(d).ok()?;
-                    u8::from_str_radix(d, 8).ok()
-                });
-                match octal {
-                    Some(b) if bytes[i] == b'\\' => {
-                        out.push(b);
-                        i += 4;
-                    }
-                    _ => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            PathBuf::from(OsString::from_vec(out))
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -468,31 +423,6 @@ mod tests {
             "a mount point can match"
         );
         assert!(!names.iter().any(|n| n.starts_with("proc/")));
-    }
-
-    #[test]
-    fn mountinfo_lists_mount_points_with_escapes() {
-        let text = "36 35 98:0 /mnt1 /mnt/a\\040b rw,noatime master:1 - ext3 /dev/root rw\n\
-                    37 35 0:5 / /proc rw - proc proc rw\n\
-                    \n";
-        let points = parse_mountinfo(text);
-        assert!(points.contains(Path::new("/mnt/a b")));
-        assert!(points.contains(Path::new("/proc")));
-        assert_eq!(points.len(), 2);
-    }
-
-    #[test]
-    fn another_device_is_skipped_only_at_a_mount_point() {
-        let mounts: HashSet<PathBuf> = [PathBuf::from("/m")].into();
-        // A btrfs subvolume: another device number, but no mount of its own.
-        assert!(!other_filesystem(false, Path::new("/sub"), Some(&mounts)));
-        assert!(other_filesystem(false, Path::new("/m"), Some(&mounts)));
-        assert!(
-            !other_filesystem(true, Path::new("/m"), Some(&mounts)),
-            "same device"
-        );
-        // Without a mount table (macOS), the device decides.
-        assert!(other_filesystem(false, Path::new("/sub"), None));
     }
 
     #[test]

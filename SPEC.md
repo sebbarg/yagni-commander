@@ -39,7 +39,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - Saving: each change writes only its own key and keeps the rest of the file as it is (comments, layout, hand edits). A key that is only commented out (`# editor = ...`) gets a real line; emptying the editor removes its key. The new text is checked by parsing it before the file is replaced (atomic write). If writing fails, an error box says so and the change still applies for this session.
 - A config file that did not parse, or no config directory: the dialog shows that problem at the top and its fields are disabled. Fix the file, then Ctrl-R. A broken file is never overwritten.
 - Hand edits of the file take effect on restart or Ctrl-R; no file watcher (decided 2026-10-01: with a settings dialog, hand edits are rare). Ctrl-R reloads both panels and re-reads the config, applying editor, sort, logging, columns, icons and theme. If the file does not parse, the status line shows "Config ignored: ..." and the current settings stay (at startup the app runs on defaults instead).
-- Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings dialog edits this file; editing it by hand also works.
+- Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings dialog edits this file; editing it by hand also works. A config file that is a symlink (kept with dotfiles) is written through and stays a link; the file keeps its permissions (2026-10-04).
 
 ### Window position and size, panel folders
 
@@ -114,7 +114,7 @@ Tabs per side (v1; pulled forward from v2 on 2026-10-02). Ctrl-T clones the visi
 | Shift-F4 | Create a file and open it in the editor. Asks for a name, which may be a relative path like `notes/2026/todo.md`: missing folders are created, nothing outside the current directory (like F7), and the cursor goes to the first part. The field starts empty. If that file already exists it is opened as is. Without a configured editor, shows the error instead of asking. |
 | F7 | Create a directory. Nested paths like `a/b/c` are allowed; nothing outside the current directory. |
 | F8, Del | Move the selection, or the entry under the cursor, to the trash, after confirmation. |
-| Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. |
+| Shift-F8, Shift-Del | Delete the selection, or the entry under the cursor, permanently, after confirmation ("This cannot be undone"). Enter confirms, like TC. Runs like F8: background, progress by files, Cancel, error summary. Symlinks are deleted, never followed. A mount point (a mounted share, a bind mount) is never entered: its contents and the folders above it stay, with an error for it (2026-10-04). |
 | Alt-Z | Set the other panel's path to this panel's path. |
 | Ctrl-U | Swap the two sides, with all their tabs. |
 | Ctrl-R | Reload the visible tab of each side and re-read the config (see Config). |
@@ -176,7 +176,7 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 
 - Runs in the background: the UI stays responsive, with a progress dialog and Cancel.
 - If a target exists, ask per file: Overwrite, Skip, Overwrite all, Skip all, Cancel.
-- A move across filesystems becomes copy, then delete.
+- A move across filesystems becomes copy, then delete. Each copied file is flushed to disk before its original is deleted, so a pulled drive or a power cut can't lose both. A mount point inside what is moved stays where it is, with an error (2026-10-04).
 - Symlinks are copied as links. Modification times and permissions are preserved.
 - Errors on individual files are reported without aborting the rest of the operation, with a summary at the end.
 - Affected panels reload when the operation finishes.
@@ -185,7 +185,7 @@ Applies to F5 (copy), F6 (move), F8 (trash) and Shift-F8 (delete).
 - Copying or moving something onto itself, or a directory into itself, is an error for that entry.
 - Times and permissions are preserved best effort: filesystems that can't store them (FAT, some network mounts) are not an error. A symlink's own time is not preserved.
 - Pipes, sockets and device files are not copied (error for that entry).
-- F5/F6 ask for the destination (decided 2026-10-01). The prompt is wide (720 px) for long paths. A relative path is taken from the active panel's directory. Missing folders on the way are created (and logged, like F7). Problems are reported by the prompt, which stays open.
+- F5/F6 ask for the destination (decided 2026-10-01). The prompt is wide (720 px) for long paths. A relative path is taken from the active panel's directory; `~` and `~/...` mean the home folder, as in Alt-F5 and Alt-F6 (never a folder named `~`, 2026-10-04). Missing folders on the way are created (and logged, like F7). Problems are reported by the prompt, which stays open.
   - **One entry (file or folder):** the field holds its full target path, the other panel's folder plus its name, with the name preselected up to the extension (like F2). Typing a new name or path copies or moves it there: a duplicate or a rename within one folder is fine. An existing folder, or text ending in `/`, means into that folder with the name kept. Refused: the entry itself as target, a folder into itself.
   - **Two or more:** the field holds the target folder (the other panel's), editable; the title gives the count ("Move 3 entries to"), with no list of names (owner decision 2026-10-02). Every entry keeps its name. Refused: the source folder itself, a file as target.
 - F8 and Del ask for confirmation first.

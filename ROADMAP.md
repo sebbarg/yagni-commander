@@ -13,6 +13,7 @@ Built and tested in a Linux container (X11 under Xvfb, no window manager); since
 - **Windows and focus:** that a new F3 viewer window gets keyboard focus under KDE and Hyprland, also the viewer of an archive entry; drag and auto-scroll in the viewer under KDE and Hyprland.
 - **Speed:** the viewer on a multi-GB file; a viewer search through one (speed, Escape); F5 byte progress on a real disk (the container clones files, so copies finish instantly); browsing a multi-GB `.tar.xz` (the listing read decompresses it all once); an Alt-F7 search of `/` or home (speed, Stop answering at once).
 - **Directory watcher:** on Wayland (KDE, Hyprland) and on a network mount (only changes made from that machine show).
+- **Mount points (2026-10-04):** on Linux, Shift-F8 on a folder holding a bind mount or a mounted share, and on the mount point itself: the mount's contents stay, with an error for it (the container can't mount, so only reading the real mount table is tested there); on both platforms, F6 to another filesystem of a folder holding a mount.
 - **Archives:** extracting a real-world `.tar.xz` and a Windows-made zip; a 7-Zip AES zip and a Windows Explorer ZipCrypto zip.
 - **Terminal (Ctrl-Shift-T):** Konsole on Kubuntu (`--workdir`, also when started through `x-terminal-emulator`), Omarchy (`$TERMINAL` = `xdg-terminal-exec` reaching an app started from the launcher).
 - **Fonts:** JetBrains Mono NL in the F3 viewer on KDE; that the Size and Modified columns line up under KDE now that they use tabular figures (`tnum`).
@@ -20,7 +21,7 @@ Built and tested in a Linux container (X11 under Xvfb, no window manager); since
 - **Clipboard:** pasting a large viewer copy (tens of MiB) into another app.
 - **Reported, unconfirmed:** the owner saw only Name sorting work; Size and Modified sort correctly in headless tests (owner/permissions sorts look like name sorts where those values are all equal).
 
-Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the native menu, file icons, keys, viewer focus, drag and auto-scroll, the watcher (FSEvents) and its CPU, Terminal.app, F4 (also from the viewer), fonts and tabular figures, zoom keys and menu items (in a viewer window the keys zoom the viewer; every menu item but Quit is disabled there, which the owner accepts); F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE, X11).
+Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the native menu, file icons, keys, viewer focus, drag and auto-scroll, the watcher (FSEvents) and its CPU, Terminal.app, F4 (also from the viewer), fonts and tabular figures, zoom keys and menu items (in a viewer window the keys zoom the viewer; every menu item but Quit is disabled there, which the owner accepts); Shift-F8 stops at a mounted disk image, inside the folder deleted and as the entry itself (macOS, 2026-10-04); F8 trash on Kubuntu lands in `~/.local/share/Trash/files` (Dolphin's trash view needs a manual refresh); Enter on a file on Linux (KDE, X11).
 
 ## Packaging
 
