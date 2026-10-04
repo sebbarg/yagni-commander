@@ -1,6 +1,7 @@
 # Pushing a tag `v<version>` (the version in crates/yagni-commander/Cargo.toml)
 # builds the macOS zip and the Linux tarball with the scripts in `scripts/`
-# and publishes them as a GitHub Release. Actions are pinned to commit SHAs.
+# and uploads them as a draft GitHub Release, published by hand once tried.
+# Actions are pinned to commit SHAs.
 name: Release
 
 on:
@@ -62,4 +63,4 @@ jobs:
         run: |
           (cd dist && sha256sum -- * > SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --draft
