@@ -14,7 +14,7 @@ It does the part of Total Commander that I actually use, not all of it ("you are
 - A viewer (F3) that opens multi-GB files instantly.
 - Panels follow changes made by other programs.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
-- Settings dialog (Ctrl-,) and a plain TOML config file; an optional log of every file operation.
+- Three themes (Tokyo Night, Catppuccin Mocha, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
 
 ## Building
 
@@ -40,6 +40,8 @@ The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R
 - macOS: `~/Library/Application Support/yagni-commander/config.toml`
 
 Set `editor` to the command F4 runs, for example `editor = "code --wait"`.
+
+Set `theme` to `tokyo-night` (the default), `catppuccin-mocha` or `classic` (light), or pick one in the settings dialog; it switches at once.
 
 ## Development
 

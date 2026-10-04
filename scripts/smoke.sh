@@ -602,6 +602,27 @@ check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-comm
 xdotool windowfocus "$window"
 sleep 0.5
 
+echo "themes: Classic through the dropdown, then Catppuccin Mocha (kept through the restart)"
+keys ctrl+comma shift+Tab Return
+sleep 0.5
+shot 07t1-theme-dropdown
+keys Down Down Return
+sleep 0.5
+shot 07t2-settings-classic
+keys Escape
+check "theme saved: classic" grep -q '^theme = "classic"' "$cfg"
+shot 07t3-main-classic
+keys F7
+shot 07t4-prompt-classic
+keys Escape
+keys alt+F7
+shot 07t5-find-classic
+keys Escape
+keys ctrl+comma shift+Tab Return Up Return Escape
+sleep 0.5
+check "theme saved" grep -q '^theme = "catppuccin-mocha"' "$cfg"
+shot 07t6-main-mocha
+
 echo "zoom: 150% in the main window, a prompt, the Show menu and the viewer"
 keys ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal
 sleep 0.5
@@ -642,6 +663,7 @@ echo "restart without arguments: same folders, right panel active"
 pids+=($!)
 check "reopened on the right folder" xdotool search --name "^$right - yagni-commander\$"
 shot 12-restart
+check "theme kept" grep -q '^theme = "catppuccin-mocha"' "$cfg"
 xdotool windowfocus "$(xdotool search --name "^$right - yagni-commander\$" | head -1)"
 sleep 0.5
 keys Tab ctrl+Tab

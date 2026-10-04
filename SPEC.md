@@ -29,6 +29,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 ### Config
 
 - Settings dialog (decided 2026-10-01): a modal dialog titled "Settings", opened with Ctrl-, (all platforms) or the menu (Linux: Files > Settings..., above Quit; macOS: the app menu's Settings...). Fields, top to bottom:
+  - **Theme** (`theme`): dropdown of the built-in themes (see Themes). Enter or Space on it opens the list; arrows and Enter pick; Escape closes the list before the dialog. Switches at once.
   - **Editor** (`editor`): text field, hint "e.g. code --wait". Empty means no editor. Applied and saved when the field loses focus or the dialog closes. A "Browse..." button that picks the program with a file dialog and fills in its path (v2, decided 2026-10-01); the field stays editable for arguments like `--wait`.
   - **Sort names case-sensitively** (`case_sensitive_sort`): switch. Applies at once: both panels re-sort, keeping their selection.
   - **Log file operations** (`log`): switch. On starts the log at once (including the startup cleanup of old log files); off stops logging. A copy or move already running keeps logging until it ends.
@@ -37,7 +38,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
   - One button, Close (our `ButtonRow`). Escape closes; Enter closes too. Both save what was typed first. While the days value is invalid, Enter and Close keep the dialog open with the error showing; Escape closes and drops it. Tab/Shift-Tab move through the fields and the button; Space toggles a switch.
 - Saving: each change writes only its own key and keeps the rest of the file as it is (comments, layout, hand edits). A key that is only commented out (`# editor = ...`) gets a real line; emptying the editor removes its key. The new text is checked by parsing it before the file is replaced (atomic write). If writing fails, an error box says so and the change still applies for this session.
 - A config file that did not parse, or no config directory: the dialog shows that problem at the top and its fields are disabled. Fix the file, then Ctrl-R. A broken file is never overwritten.
-- Hand edits of the file take effect on restart or Ctrl-R; no file watcher (decided 2026-10-01: with a settings dialog, hand edits are rare). Ctrl-R reloads both panels and re-reads the config, applying editor, sort, logging, columns and icons. If the file does not parse, the status line shows "Config ignored: ..." and the current settings stay (at startup the app runs on defaults instead).
+- Hand edits of the file take effect on restart or Ctrl-R; no file watcher (decided 2026-10-01: with a settings dialog, hand edits are rare). Ctrl-R reloads both panels and re-reads the config, applying editor, sort, logging, columns, icons and theme. If the file does not parse, the status line shows "Config ignored: ..." and the current settings stay (at startup the app runs on defaults instead).
 - Stored as a TOML config file in the platform config directory (e.g. `~/.config/yagni-commander/config.toml` on Linux, `~/Library/Application Support/yagni-commander/` on macOS). The settings dialog edits this file; editing it by hand also works.
 
 ### Window position and size, panel folders
@@ -49,7 +50,12 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 
 ### Themes
 
-- All colors come from a theme file; one built-in theme (Tokyo Night). No hardcoded colors in views. Theme selection, user themes and following the system appearance are v2.
+- All colors come from a theme file. No hardcoded colors in views. User themes and following the system appearance are v2.
+- Three built-in themes (decided 2026-10-04): **Tokyo Night** (the default), **Catppuccin Mocha** (dark, the official palette) and **Classic** (light: white lists, gray `#d4d0c8` window, headers and dialogs, a navy cursor bar, red marked files; the colors of old Total Commander, not its 3D look).
+- The config key `theme` holds a theme's id: `tokyo-night`, `catppuccin-mocha` or `classic`. Missing means Tokyo Night. The commented template lists the ids.
+- An unknown id: Tokyo Night is used and the status line says `Unknown theme "x", using Tokyo Night`; every other setting still applies and the file is not rewritten.
+- The Theme dropdown in Settings saves the key and switches at once: the main window, every viewer window, open dialogs and popups. The zoom level is kept. Ctrl-R applies a hand-edited `theme`.
+- Dialogs use their own role (`dialog_bg`); in Classic, text fields are white like the lists.
 
 ### Zoom
 
