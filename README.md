@@ -26,15 +26,25 @@ Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS and KDE on X1
 
 ## Installing
 
-Download the file for your system from [Releases](https://github.com/sebbarg/yagni-commander/releases), or build it yourself (below). `SHA256SUMS` there lists each file's checksum.
+On macOS (Apple Silicon and Intel) and Linux (x86_64):
 
-**macOS** (`yagni-commander-<version>-macos.zip`, Apple Silicon and Intel): unzip it and move `yagni-commander.app` to Applications. The app is not notarized by Apple (that needs a paid developer account), so macOS refuses to open a downloaded copy. Remove the download mark once:
+```sh
+curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh
+```
+
+It downloads the latest release, checks it against the release's `SHA256SUMS`, and installs it for you alone, no root needed: on macOS `yagni-commander.app` in `~/Applications`, on Linux the binary, a launcher entry and the icons in `~/.local`, so it shows in your app menu. Run it again to update. To remove it: `... | sh -s -- --uninstall`. The script is short; download it and read it first if you prefer.
+
+### By hand
+
+Download the file for your system from [Releases](https://github.com/sebbarg/yagni-commander/releases), or build it yourself (below).
+
+**macOS** (`yagni-commander-<version>-macos.zip`): unzip it and move `yagni-commander.app` to Applications. The app is not notarized by Apple (that needs a paid developer account), so macOS refuses to open a copy downloaded with a browser. Remove the download mark once:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/yagni-commander.app
 ```
 
-or try to open it, then choose Open Anyway in System Settings > Privacy & Security. Built from source, it opens without this step.
+or try to open it, then choose Open Anyway in System Settings > Privacy & Security. The install script and a build from source don't need this step.
 
 **Linux** (`yagni-commander-<version>-linux-x86_64.tar.gz`, built on Ubuntu 22.04, so it needs glibc 2.35 or newer):
 
@@ -44,7 +54,7 @@ cd yagni-commander-*-linux-x86_64
 ./install.sh
 ```
 
-It installs into `~/.local` (the binary, a launcher entry and the icons), so it shows in your app menu; no root needed. `./install.sh uninstall` removes it.
+`./install.sh uninstall` removes it.
 
 ## Building
 
