@@ -6173,7 +6173,7 @@ mod themes {
         let cfg = tempfile::tempdir().unwrap();
         let path = use_config(cfg.path(), "", cx);
         open_theme_dropdown(cx);
-        cx.simulate_keystrokes("down down enter");
+        cx.simulate_keystrokes("down down down down enter"); // Classic, the last
         assert_eq!(theme_name(cx), "Classic");
         assert_eq!(config(cx).theme.as_deref(), Some("classic"));
         assert!(

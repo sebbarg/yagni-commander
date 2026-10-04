@@ -607,7 +607,7 @@ echo "themes: Classic through the dropdown, then Gruvbox Dark (kept through the 
 keys ctrl+comma Tab Return
 sleep 0.5
 shot 07t1-theme-dropdown
-keys Down Down Return
+keys Down Down Down Down Return  # Classic, the last
 sleep 0.5
 shot 07t2-settings-classic
 keys Escape
@@ -619,7 +619,7 @@ keys Escape
 keys alt+F7
 shot 07t5-find-classic
 keys Escape
-keys ctrl+comma Tab Return Up Return Escape
+keys ctrl+comma Tab Return Up Up Up Return Escape  # Classic -> Gruvbox Dark
 sleep 0.5
 check "theme saved" grep -q '^theme = "gruvbox-dark"' "$cfg"
 shot 07t6-main-gruvbox

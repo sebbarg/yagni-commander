@@ -1,0 +1,31 @@
+# Everforest Dark, medium contrast (github.com/sainnhe/everforest). Colors are
+# named by role, not hue.
+# Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+# Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
+# (checked by the theme tests); the grays (text_secondary, text_dim, hidden)
+# are lifted from Everforest's grey0-2 for that.
+name = "Everforest Dark"
+mode = "dark"
+
+[colors]
+window_bg = "#232a2e"
+panel_bg = "#2d353b"
+dialog_bg = "#2d353b"
+header_bg = "#343f44"
+header_active_bg = "#3d484d"
+border = "#475258"
+text = "#d3c6aa"
+text_secondary = "#b4beb6"
+text_dim = "#a3aca6"
+directory = "#7fbbb3"
+symlink = "#83c092"
+hidden = "#a3aca6"
+accent = "#a7c080"
+text_on_accent = "#2d353b"
+cursor_inactive_bg = "#343f44"
+selected = "#e69875"
+text_on_selected = "#2d353b"
+error = "#e67e80"
+warning = "#dbbc7f"
+success = "#a7c080"
+info = "#7fbbb3"
