@@ -2235,6 +2235,8 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
             &crate::actions::DirectoryHotlist as &dyn gpui_kit::Action,
             "ctrl-d",
         ),
+        (&crate::actions::MountsLeft, "alt-f1"),
+        (&crate::actions::MountsRight, "alt-f2"),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
         (&crate::actions::CloseTab, "ctrl-w"),
         (&crate::actions::NextTab, "ctrl-tab"),
@@ -3302,6 +3304,251 @@ fn the_icons_switch_turns_icons_off_at_once_and_saves(cx: &mut TestAppContext) {
     click(cx, "settings-icons", 1);
     cx.run_until_parked();
     assert!(cx.debug_bounds("icon-left-1").is_some());
+}
+
+mod mounts {
+    use super::*;
+    use yagni_commander_core::mounts::Place;
+
+    /// Entries Root -> the test folder, Home -> a, bee -> b, box -> b/c.
+    pub(super) fn use_places(tmp: &tempfile::TempDir, cx: &mut VisualTestContext) {
+        std::fs::create_dir(tmp.path().join("b/c")).unwrap();
+        let places =
+            [("Root", ""), ("Home", "a"), ("bee", "b"), ("box", "b/c")].map(|(label, path)| {
+                Place {
+                    label: label.into(),
+                    path: if path.is_empty() {
+                        tmp.path().to_path_buf()
+                    } else {
+                        tmp.path().join(path)
+                    },
+                }
+            });
+        file_manager(cx).update(cx, |this, _| this.places = Some(places.to_vec()));
+    }
+
+    fn open_side(cx: &mut VisualTestContext) -> Option<Side> {
+        cx.run_until_parked();
+        file_manager(cx).read_with(cx, |this, _| this.mounts.as_ref().map(|open| open.side))
+    }
+
+    fn highlight(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.mounts.as_ref().unwrap().popup.read(cx).highlight()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn alt_f1_opens_the_left_dropdown_and_escape_closes_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f1");
+        assert_eq!(open_side(cx), Some(Side::Left));
+        assert!(bounds(cx, "mounts-row-3".into()).is_some());
+        assert_eq!(highlight(cx), 0, "on the entry holding the folder");
+        cx.simulate_keystrokes("down up up");
+        assert_eq!(highlight(cx), 3, "wraps");
+        cx.simulate_keystrokes("escape");
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        cx.simulate_keystrokes("down");
+        assert_eq!(
+            cursor(&commander, Side::Left, cx),
+            1,
+            "keys reach the panel"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_f2_navigates_the_right_panel_and_makes_it_active(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f2");
+        assert_eq!(open_side(cx), Some(Side::Right));
+        cx.simulate_keystrokes("down down enter");
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path().join("b"));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Right));
+        // Reopened, it starts on the entry holding the folder.
+        cx.simulate_keystrokes("alt-f2");
+        assert_eq!(highlight(cx), 2);
+    }
+
+    #[gpui_kit::test]
+    fn escape_leaves_the_active_side_as_it_was(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f2 escape");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+    }
+
+    #[gpui_kit::test]
+    fn a_letter_moves_or_goes_at_once_when_unique(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f1 b");
+        assert_eq!(highlight(cx), 2);
+        cx.simulate_keystrokes("shift-b");
+        assert_eq!(highlight(cx), 3);
+        cx.simulate_keystrokes("b");
+        assert_eq!(highlight(cx), 2, "wraps");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path(), "not yet");
+        cx.simulate_keystrokes("h");
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn other_keys_are_ignored_while_it_is_open(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f1 f7 tab space ctrl-a x alt-f2");
+        assert_eq!(open_side(cx), Some(Side::Left));
+        assert!(!dialog_open(cx), "F7 did nothing");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+        assert_eq!(search(&commander, cx), None, "x started no search");
+    }
+
+    #[gpui_kit::test]
+    fn the_button_opens_and_closes_it_and_a_click_picks(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        click(cx, "mounts-right", 1);
+        assert_eq!(open_side(cx), Some(Side::Right));
+        click(cx, "mounts-right", 1);
+        assert_eq!(open_side(cx), None, "a second click closes it");
+        click(cx, "mounts-right", 1);
+        click(cx, "mounts-left", 1);
+        assert_eq!(open_side(cx), Some(Side::Left), "the other side's opens");
+        click(cx, "mounts-row-1", 1);
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+    }
+
+    #[gpui_kit::test]
+    fn a_click_elsewhere_closes_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        cx.simulate_keystrokes("alt-f1");
+        click(cx, "row-right-1", 1);
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn it_opens_under_the_path_header_left_aligned_with_its_button(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        for (keys, side) in [("alt-f1", "left"), ("escape alt-f2", "right")] {
+            cx.simulate_keystrokes(keys);
+            let popup = bounds(cx, "mounts-popup".into()).unwrap();
+            let button = bounds(cx, format!("mounts-{side}")).unwrap();
+            let tab = bounds(cx, format!("tab-{side}-0")).unwrap();
+            // The panel's 1 px border, then the 32 px path header.
+            let below_header = tab.bottom() + px(1.0) + px(32.0);
+            assert_eq!(popup.origin.y, below_header, "{side}");
+            assert_eq!(popup.origin.x, button.origin.x, "{side}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_button_holds_the_folder_glyph_at_the_left_of_the_path(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let button = bounds(cx, "mounts-left".into()).unwrap();
+        let pwd = bounds(cx, "pwd-left".into()).unwrap();
+        let tab = bounds(cx, "tab-left-0".into()).unwrap();
+        assert!(button.contains(&pwd.center()));
+        assert!(button.origin.x - tab.origin.x < px(8.0), "at the left");
+        // The glyph stays where it was before the button: past the 1 px
+        // border, 10 px in.
+        assert_eq!(pwd.origin.x - tab.origin.x, px(11.0));
+        // Without icons the chevron alone stays clickable.
+        commander.update(cx, |c, cx| {
+            c.set_icons(false);
+            cx.notify();
+        });
+        click(cx, "mounts-left", 1);
+        assert_eq!(open_side(cx), Some(Side::Left));
+    }
+
+    #[gpui_kit::test]
+    fn the_hotlist_and_the_dropdown_replace_each_other(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_places(&tmp, cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        // The hotlist popup opens over the left path header, so the right
+        // side's button.
+        cx.simulate_keystrokes("ctrl-d");
+        click(cx, "mounts-right", 1);
+        assert_eq!(open_side(cx), Some(Side::Right));
+        assert!(!super::hotlist::hotlist_open(cx));
+    }
+}
+
+mod cursor_focus {
+    use super::*;
+
+    /// Whether each side's cursor bar is bright, (left, right).
+    fn bright(cx: &mut VisualTestContext) -> (bool, bool) {
+        cx.run_until_parked();
+        let (left, right) =
+            file_manager(cx).read_with(cx, |this, _| (this.left.clone(), this.right.clone()));
+        cx.update(|window, cx| {
+            (
+                left.read(cx).cursor_bright(window, cx),
+                right.read(cx).cursor_bright(window, cx),
+            )
+        })
+    }
+
+    #[gpui_kit::test]
+    fn only_the_active_panel_is_bright_while_it_has_focus(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        assert_eq!(bright(cx), (true, false));
+        cx.simulate_keystrokes("tab");
+        assert_eq!(bright(cx), (false, true));
+    }
+
+    #[gpui_kit::test]
+    fn popups_mute_the_cursor(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        activate(cx);
+        super::mounts::use_places(&tmp, cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        for keys in ["alt-f1", "alt-f2", "ctrl-d"] {
+            cx.simulate_keystrokes(keys);
+            assert_eq!(bright(cx), (false, false), "{keys}");
+            cx.simulate_keystrokes("escape");
+            assert_eq!(bright(cx), (true, false), "{keys} closed");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_dialog_mutes_the_cursor(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("f7");
+        assert!(dialog_open(cx));
+        assert_eq!(bright(cx), (false, false));
+        cx.simulate_keystrokes("escape");
+        assert!(!dialog_open(cx));
+        assert_eq!(bright(cx), (true, false));
+    }
+
+    #[gpui_kit::test]
+    fn another_window_in_front_mutes_the_cursor(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.deactivate_window();
+        assert_eq!(bright(cx), (false, false));
+        activate(cx);
+        assert_eq!(bright(cx), (true, false));
+    }
 }
 
 mod hotlist {

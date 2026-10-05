@@ -429,6 +429,23 @@ keys l
 check "back in left by the hotlist letter" title_is "$left"
 shot 07i-hotlist-back
 
+echo "Alt-F1/Alt-F2 mounts dropdown: Root by its letter on both sides"
+keys alt+F1
+shot 07j-mounts-left
+keys r
+check "Root from the mounts dropdown" title_is "/"
+keys ctrl+d l
+check "left back in left" title_is "$left"
+keys Tab ctrl+t Tab     # a throwaway tab on the right; the left is active
+keys alt+F2
+shot 07k-mounts-right
+keys r
+check "Root on the right, which became active" title_is "/"
+keys ctrl+w
+check "right back in right" title_is "$right"
+keys Tab
+check "left active again" title_is "$left"
+
 echo "menu: Alt-H opens Help; Go to config file, Go to operation log"
 keys alt+h
 shot 07i0-help-menu

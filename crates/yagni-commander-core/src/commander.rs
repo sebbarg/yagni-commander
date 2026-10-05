@@ -541,14 +541,20 @@ impl Commander {
     /// ends the quick search. A failed read leaves the panel where it was
     /// and sets [`Commander::error`].
     pub fn go_to(&mut self, dir: PathBuf) {
-        let active = self.active;
-        if self.panel(active).loading().is_some() {
+        self.go_to_on(self.active, dir);
+    }
+
+    /// The mounts dropdown (Alt-F1/Alt-F2): like [`Commander::go_to`], on
+    /// `side`, which becomes the active one. Ignored while that side loads.
+    pub fn go_to_on(&mut self, side: Side, dir: PathBuf) {
+        if self.panel(side).loading().is_some() {
             return;
         }
+        self.active = side;
         self.error = None;
         self.search.clear();
         self.request(
-            active,
+            side,
             Navigation {
                 target: dir,
                 select: None,
@@ -2497,6 +2503,23 @@ mod tests {
         assert_eq!(c.search(), None);
         // Still loading "a": a second go_to is ignored.
         c.go_to(tmp.path().join("b"));
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+    }
+
+    #[test]
+    fn go_to_on_navigates_that_side_and_makes_it_active() {
+        let tmp = tree();
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.go_to_on(Side::Right, tmp.path().join("b"));
+        c.run_loads_now();
+        assert_eq!(c.active(), Side::Right);
+        assert_eq!(c.panel(Side::Right).path(), tmp.path().join("b"));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        // A loading side ignores it and stays inactive.
+        c.go_to_on(Side::Left, tmp.path().join("a"));
+        c.go_to_on(Side::Left, tmp.path().join("b"));
+        c.execute(Command::Focus(Side::Right));
         c.run_loads_now();
         assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
     }

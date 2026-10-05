@@ -9,10 +9,10 @@ use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
     About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist,
-    Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog, MakeDirectory, Move, NewTab,
-    NextTab, OpenSettings, OpenTerminal, Pack, PrevTab, Quit, Reload, Rename, SelectAll,
-    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
-    SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog, MakeDirectory, MountsLeft,
+    MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal, Pack, PrevTab, Quit, Reload,
+    Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -193,6 +193,8 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Swap panels", SwapPanels),
                 item("Reload", Reload),
                 item("Directory hotlist", DirectoryHotlist),
+                item("Mounts left", MountsLeft),
+                item("Mounts right", MountsRight),
                 item("Find files...", FindFiles),
                 item("Open terminal here", OpenTerminal),
                 MenuEntry::Separator,
@@ -357,6 +359,8 @@ mod tests {
                 "Swap panels",
                 "Reload",
                 "Directory hotlist",
+                "Mounts left",
+                "Mounts right",
                 "Find files...",
                 "Open terminal here",
                 "-",

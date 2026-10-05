@@ -22,16 +22,18 @@ use crate::actions::{
     About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath,
     CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
     Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig, GoToLog, GoUp, MakeDirectory, MenuAlt,
-    Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab,
-    Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner,
-    SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden,
-    ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    MountsLeft, MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, Pack,
+    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, ShowProperties, SortByModified,
+    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel,
+    SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut,
+    ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
 use crate::hotlist_popup::{self, HotlistEvent, HotlistPopup};
 use crate::menu_bar::{self, MenuBar};
 use crate::menus::{self, MenuState};
+use crate::mounts_popup::{MountsEvent, MountsPopup};
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
@@ -58,6 +60,13 @@ pub fn execute(commander: &Entity<Commander>, command: Command, cx: &mut App) {
 fn window_title(commander: &Commander) -> String {
     let path = commander.panel(commander.active()).path();
     format!("{} - yagni-commander", path.display())
+}
+
+/// The open mounts dropdown and the side it belongs to.
+pub(crate) struct OpenMounts {
+    pub side: Side,
+    pub popup: Entity<MountsPopup>,
+    _subscriptions: Vec<Subscription>,
 }
 
 /// The open hotlist popup and the side it belongs to.
@@ -131,6 +140,10 @@ pub struct FileManager {
     pub(crate) find: Option<Entity<crate::find_dialog::FindDialog>>,
     /// The open Ctrl-D popup.
     pub(crate) hotlist: Option<OpenHotlist>,
+    /// The open mounts dropdown (Alt-F1/Alt-F2).
+    pub(crate) mounts: Option<OpenMounts>,
+    /// The mounts dropdown's entries in place of the system's (app tests).
+    pub(crate) places: Option<Vec<yagni_commander_core::mounts::Place>>,
     /// The open hotlist Configure dialog's view.
     pub(crate) hotlist_dialog: Option<Entity<crate::hotlist_dialog::HotlistDialog>>,
     /// What the menus' check marks show; `None` before the first update.
@@ -151,9 +164,9 @@ impl FileManager {
         cx: &mut Context<Self>,
     ) -> Self {
         crate::columns::measure(window, cx);
-        let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, cx));
-        let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, cx));
         let focus = cx.focus_handle();
+        let left = cx.new(|cx| PanelView::new(commander.clone(), Side::Left, focus.clone(), cx));
+        let right = cx.new(|cx| PanelView::new(commander.clone(), Side::Right, focus.clone(), cx));
         window.focus(&focus, cx);
         let menu_bar = cfg!(not(target_os = "macos"))
             .then(|| cx.new(|_| MenuBar::new(Vec::new(), focus.clone())));
@@ -179,6 +192,7 @@ impl FileManager {
                     this.alt_armed = false;
                     // Like the menu, the hotlist popup closes.
                     this.close_hotlist(window, cx);
+                    this.close_mounts(window, cx);
                     if let Some(bar) = this.menu_bar.clone() {
                         bar.update(cx, |bar, cx| bar.close(window, cx));
                     }
@@ -198,7 +212,7 @@ impl FileManager {
                     }
                     if window.window_handle() == handle
                         && let Some(this) = this.upgrade()
-                        && this.read(cx).hotlist.is_some()
+                        && (this.read(cx).hotlist.is_some() || this.read(cx).mounts.is_some())
                         && !hotlist_popup::passes(&event.keystroke)
                     {
                         cx.stop_propagation();
@@ -260,6 +274,8 @@ impl FileManager {
             menu_bar,
             find: None,
             hotlist: None,
+            mounts: None,
+            places: None,
             hotlist_dialog: None,
             menu_state: None,
             alt_armed: false,
@@ -373,6 +389,96 @@ impl FileManager {
                 .absolute()
                 .top(rems_from_px(crate::panel_view::BELOW_TABS))
                 .left(rems_from_px(4.0))
+                .child(deferred(
+                    anchored()
+                        .snap_to_window_with_margin(px(8.0))
+                        .child(open.popup.clone()),
+                )),
+        )
+    }
+
+    /// Alt-F1/Alt-F2 or the path header's button: opens `side`'s mounts
+    /// dropdown, or closes it if it is open. Not while that side loads.
+    pub(crate) fn toggle_mounts(
+        &mut self,
+        side: Side,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was = self.mounts.as_ref().map(|open| open.side);
+        self.close_mounts(window, cx);
+        let commander = self.commander.read(cx);
+        if was == Some(side) || commander.panel(side).loading().is_some() {
+            return;
+        }
+        let places = self
+            .places
+            .clone()
+            .unwrap_or_else(|| yagni_commander_core::mounts::places(commander.home()));
+        let highlight =
+            yagni_commander_core::mounts::containing(&places, commander.panel(side).real_dir());
+        self.close_hotlist(window, cx);
+        self.end_search(cx);
+        let popup = cx.new(|cx| MountsPopup::new(places, highlight, cx));
+        let picked = cx.subscribe_in(
+            &popup,
+            window,
+            move |this, _, event: &MountsEvent, window, cx| this.on_mounts(side, event, window, cx),
+        );
+        let focus = popup.focus_handle(cx);
+        // Like the hotlist popup: focus went elsewhere, just drop it.
+        let blurred = cx.on_focus_out(&focus, window, |this, _, _, cx| {
+            if this.mounts.take().is_some() {
+                cx.notify();
+            }
+        });
+        focus.focus(window, cx);
+        self.mounts = Some(OpenMounts {
+            side,
+            popup,
+            _subscriptions: vec![picked, blurred],
+        });
+        cx.notify();
+    }
+
+    /// Closes the dropdown; focus goes back to the panels.
+    fn close_mounts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mounts.take().is_some() {
+            self.focus.focus(window, cx);
+            cx.notify();
+        }
+    }
+
+    fn on_mounts(
+        &mut self,
+        side: Side,
+        event: &MountsEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_mounts(window, cx);
+        if let MountsEvent::Pick(dir) = event {
+            let dir = dir.clone();
+            self.notice = None;
+            self.commander.update(cx, |c, cx| {
+                c.go_to_on(side, dir);
+                cx.notify();
+            });
+        }
+    }
+
+    /// The dropdown, right under `side`'s path header, left-aligned with
+    /// its button.
+    fn mounts_overlay(&self, side: Side) -> Option<impl IntoElement + use<>> {
+        let open = self.mounts.as_ref().filter(|open| open.side == side)?;
+        Some(
+            div()
+                .absolute()
+                .top(rems_from_px(crate::panel_view::BELOW_HEADER))
+                .left(rems_from_px(6.0))
+                // Past the panel's 1 px border, which stays px.
+                .pt(px(1.0))
+                .pl(px(1.0))
                 .child(deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.0))
@@ -820,6 +926,12 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &DirectoryHotlist, window, cx| {
                 this.directory_hotlist(window, cx)
             }))
+            .on_action(cx.listener(|this, _: &MountsLeft, window, cx| {
+                this.toggle_mounts(Side::Left, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &MountsRight, window, cx| {
+                this.toggle_mounts(Side::Right, window, cx)
+            }))
             .on_action(cx.listener(|this, action: &OpenMenu, window, cx| {
                 this.open_menu(action.0, window, cx)
             }))
@@ -864,7 +976,8 @@ impl Render for FileManager {
                             .flex_none()
                             .h_full()
                             .child(self.left.clone())
-                            .children(self.hotlist_overlay(Side::Left)),
+                            .children(self.hotlist_overlay(Side::Left))
+                            .children(self.mounts_overlay(Side::Left)),
                     )
                     .child(divider)
                     .child(
@@ -874,7 +987,8 @@ impl Render for FileManager {
                             .min_w_0()
                             .h_full()
                             .child(self.right.clone())
-                            .children(self.hotlist_overlay(Side::Right)),
+                            .children(self.hotlist_overlay(Side::Right))
+                            .children(self.mounts_overlay(Side::Right)),
                     ),
             )
             .child(

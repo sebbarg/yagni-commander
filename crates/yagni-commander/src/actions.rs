@@ -75,7 +75,10 @@ actions!(
         ToggleMenu,
         MenuAlt,
         OpenSettings,
-        DirectoryHotlist
+        DirectoryHotlist,
+        /// Alt-F1/Alt-F2: the mounts dropdown of the left or right panel.
+        MountsLeft,
+        MountsRight
     ]
 );
 
@@ -130,6 +133,14 @@ pub mod select {
 /// Hotlist popup actions; a module of their own because the names repeat.
 pub mod hotlist {
     gpui_kit::actions!(hotlist, [Up, Down, Pick, Close]);
+}
+
+/// Key context of the mounts dropdown (Alt-F1/Alt-F2).
+pub const MOUNTS_CONTEXT: &str = "Mounts";
+
+/// Mounts dropdown actions.
+pub mod mounts {
+    gpui_kit::actions!(mounts, [Up, Down, Pick, Close]);
 }
 
 /// Key context of the hotlist Configure dialog's list.
@@ -262,6 +273,8 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PrevTab, context),
         KeyBinding::new("ctrl-r", Reload, context),
         KeyBinding::new("ctrl-d", DirectoryHotlist, context),
+        KeyBinding::new("alt-f1", MountsLeft, context),
+        KeyBinding::new("alt-f2", MountsRight, context),
         KeyBinding::new("ctrl-.", ToggleHidden, context),
         KeyBinding::new("ctrl-,", OpenSettings, context),
         KeyBinding::new("escape", CancelSearch, context),
@@ -334,6 +347,13 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("down", hotlist::Down, popup),
         KeyBinding::new("enter", hotlist::Pick, popup),
         KeyBinding::new("escape", hotlist::Close, popup),
+    ]);
+    let popup = Some(MOUNTS_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", mounts::Up, popup),
+        KeyBinding::new("down", mounts::Down, popup),
+        KeyBinding::new("enter", mounts::Pick, popup),
+        KeyBinding::new("escape", mounts::Close, popup),
     ]);
     let list = Some(HOTLIST_LIST_CONTEXT);
     cx.bind_keys([

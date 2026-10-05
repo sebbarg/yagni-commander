@@ -6,13 +6,14 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
-    App, Context, Div, Entity, MouseButton, MouseDownEvent, Rgba, ScrollStrategy, Subscription,
-    UniformListScrollHandle, Window, div, prelude::*, relative, uniform_list,
+    App, Context, Div, Entity, FocusHandle, MouseButton, MouseDownEvent, Rgba, ScrollStrategy,
+    Subscription, UniformListScrollHandle, Window, div, prelude::*, relative, uniform_list,
 };
 use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
 };
 
+use gpui_kit::component::{Icon, IconName};
 use yagni_commander_core::{icons, label};
 
 use crate::columns::{
@@ -37,6 +38,9 @@ const COLUMN_HEADER_HEIGHT: f32 = 26.0;
 /// Distance from a panel's top to the bottom of its tabs. The hotlist popup
 /// opens there, over the path header.
 pub(crate) const BELOW_TABS: f32 = TAB_HEIGHT;
+/// Distance from a panel's top to the bottom of its path header, where the
+/// mounts dropdown opens.
+pub(crate) const BELOW_HEADER: f32 = TAB_HEIGHT + HEADER_HEIGHT;
 const FOOTER_HEIGHT: f32 = 24.0;
 /// Space between a row's edge and its first and last cell.
 const ROW_PADDING: f32 = 10.0;
@@ -53,6 +57,10 @@ pub struct PanelView {
     level: f32,
     /// The left panel's share of the width (`FileManager`'s divider).
     pub split: f32,
+    /// `FileManager`'s focus: the cursor bar is bright only while it has
+    /// focus in the active window, so an open popup or dialog, a menu, or
+    /// another app in front mutes it.
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -64,7 +72,12 @@ struct Revealed {
 }
 
 impl PanelView {
-    pub fn new(commander: Entity<Commander>, side: Side, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        commander: Entity<Commander>,
+        side: Side,
+        focus: FocusHandle,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscription = cx.observe(&commander, |this, _, cx| {
             this.reveal_cursor(cx);
             cx.notify();
@@ -79,8 +92,18 @@ impl PanelView {
             revealed: None,
             level: Zoom::get(cx).ui,
             split: crate::file_manager::START_SPLIT,
+            focus,
             _subscriptions: vec![subscription, zoom],
         }
+    }
+
+    /// Whether this panel's cursor bar is bright: the active panel, while
+    /// the file manager has focus in the active window. gpui redraws the
+    /// window on every focus and activation change.
+    pub fn cursor_bright(&self, window: &Window, cx: &App) -> bool {
+        self.commander.read(cx).active() == self.side
+            && window.is_window_active()
+            && self.focus.is_focused(window)
     }
 
     /// Number of fully visible rows, once the list has been laid out.
@@ -172,13 +195,13 @@ impl PanelView {
         let colors = &Theme::get(cx).colors;
         let commander = self.commander.read(cx);
         let panel = commander.panel(side);
-        let is_active = commander.active() == side;
+        let bright = self.cursor_bright(window, cx);
         let icons = commander.shows_icons();
         range
             .map(|ix| {
                 let entry = &panel.entries()[ix];
                 let row = RowState {
-                    cursor: (ix == panel.cursor()).then_some(is_active),
+                    cursor: (ix == panel.cursor()).then_some(bright),
                     selected: panel.is_selected(entry),
                 };
                 let icon = icons.then(|| icon_slot(commander.icon(side, entry), side, ix));
@@ -301,6 +324,69 @@ impl PanelView {
     }
 }
 
+impl PanelView {
+    /// The mounts dropdown's button at the left end of the path header: the
+    /// "you are here" folder glyph (while icons are on; accent on the active
+    /// side) and a chevron. It acts in the capture phase and stops there, so
+    /// a click on it while the dropdown is open closes it rather than
+    /// closing and reopening it (the dropdown's own click-outside handler
+    /// would run first otherwise).
+    fn mounts_button(
+        &self,
+        shows_icons: bool,
+        is_active: bool,
+        colors: &Colors,
+    ) -> impl IntoElement {
+        let side = self.side;
+        let hover_bg = colors.panel_bg;
+        div()
+            .id("mounts-button")
+            .debug_selector(move || format!("mounts-{}", side_name(side)))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(rems_from_px(2.0))
+            .px(rems_from_px(4.0))
+            .py(rems_from_px(2.0))
+            .rounded(rems_from_px(4.0))
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
+            .capture_any_mouse_down(move |event, window, cx| {
+                if event.button != MouseButton::Left {
+                    return;
+                }
+                cx.stop_propagation();
+                let action: Box<dyn gpui_kit::Action> = match side {
+                    Side::Left => Box::new(crate::actions::MountsLeft),
+                    Side::Right => Box::new(crate::actions::MountsRight),
+                };
+                window.dispatch_action(action, cx);
+            })
+            .when(shows_icons, |button| {
+                button.child(
+                    div()
+                        .debug_selector(move || format!("pwd-{}", side_name(side)))
+                        .font_family(icons::FONT_FAMILY)
+                        .text_color(if is_active {
+                            colors.accent
+                        } else {
+                            colors.text_dim
+                        })
+                        .child(icons::CURRENT_FOLDER.to_string()),
+                )
+            })
+            .child(
+                Icon::new(IconName::ChevronDown)
+                    .size(rems_from_px(12.0))
+                    .text_color(if is_active {
+                        colors.text_secondary
+                    } else {
+                        colors.text_dim
+                    }),
+            )
+    }
+}
+
 impl Render for PanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.render_tabs(cx);
@@ -317,7 +403,9 @@ impl Render for PanelView {
         let header = div()
             .h(rems_from_px(HEADER_HEIGHT))
             .flex_none()
-            .px(rems_from_px(10.0))
+            // The mounts button's own padding brings its glyph to 10 px.
+            .pl(rems_from_px(6.0))
+            .pr(rems_from_px(10.0))
             .flex()
             .items_center()
             .bg(if is_active {
@@ -331,21 +419,9 @@ impl Render for PanelView {
                 colors.text_dim
             })
             .gap(rems_from_px(8.0))
-            // "You are here": an accent glyph on the active side.
-            .when(commander.shows_icons(), |header| {
-                header.child(
-                    div()
-                        .debug_selector(|| format!("pwd-{}", side_name(self.side)))
-                        .flex_none()
-                        .font_family(icons::FONT_FAMILY)
-                        .text_color(if is_active {
-                            colors.accent
-                        } else {
-                            colors.text_dim
-                        })
-                        .child(icons::CURRENT_FOLDER.to_string()),
-                )
-            })
+            // "You are here" (an accent glyph on the active side) and the
+            // mounts dropdown.
+            .child(self.mounts_button(commander.shows_icons(), is_active, colors))
             .child(match &loading {
                 Some(text) => div()
                     .debug_selector(|| format!("loading-{}", side_name(self.side)))
@@ -456,7 +532,8 @@ impl Render for PanelView {
 
 #[derive(Clone, Copy)]
 struct RowState {
-    /// `None` if not under the cursor, `Some(panel_is_active)` otherwise.
+    /// `None` if not under the cursor, `Some(bright)` otherwise: bright on
+    /// the active panel while the file manager has focus.
     cursor: Option<bool>,
     selected: bool,
 }
