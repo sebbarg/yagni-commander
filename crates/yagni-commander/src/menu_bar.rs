@@ -10,12 +10,13 @@
 use gpui_kit::base::actions::{SelectLeft, SelectRight};
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, MouseButton, ParentElement, Render, StatefulInteractiveElement, Styled,
-    Subscription, Window, anchored, deferred, div, prelude::FluentBuilder, px,
+    Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, HighlightStyle,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, Render,
+    StatefulInteractiveElement, Styled, StyledText, Subscription, UnderlineStyle, Window, anchored,
+    deferred, div, prelude::FluentBuilder, px,
 };
 
-use crate::menus::{MenuDef, popup};
+use crate::menus::{MenuDef, TITLES, letter, popup};
 use crate::theme::Theme;
 use crate::zoom::rems_from_px;
 
@@ -72,10 +73,10 @@ impl MenuBar {
         }
     }
 
-    /// Alt-F: opens the first menu (Files), unless it is already open.
-    pub fn open_first(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.open_index() != Some(0) {
-            self.open(0, window, cx);
+    /// Alt-letter: opens the menu at `index`, unless it is already open.
+    pub fn open_at(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_index() != Some(index) {
+            self.open(index, window, cx);
         }
     }
 
@@ -133,7 +134,11 @@ pub fn passes(keystroke: &gpui_kit::Keystroke) -> bool {
         alt: true,
         ..Default::default()
     };
-    if keystroke.modifiers == alt_only && keystroke.key == "f" {
+    if keystroke.modifiers == alt_only
+        && TITLES
+            .iter()
+            .any(|title| keystroke.key == letter(title).to_string())
+    {
         return true;
     }
     !keystroke.modifiers.modified()
@@ -141,6 +146,20 @@ pub fn passes(keystroke: &gpui_kit::Keystroke) -> bool {
             keystroke.key.as_str(),
             "up" | "down" | "left" | "right" | "enter" | "escape" | "f10" | "alt"
         )
+}
+
+/// The title with its Alt letter (the first) underlined, as on KDE and
+/// Windows; always, since the bar is always shown.
+fn underlined_letter(title: &'static str) -> StyledText {
+    let underline = HighlightStyle {
+        underline: Some(UnderlineStyle {
+            thickness: px(1.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let first = title.chars().next().map_or(0, char::len_utf8);
+    StyledText::new(title).with_highlights([(0..first, underline)])
 }
 
 impl Render for MenuBar {
@@ -167,7 +186,7 @@ impl Render for MenuBar {
                     d.bg(colors.accent).text_color(colors.text_on_accent)
                 })
                 .when(!is_open, |d| d.hover(|d| d.bg(colors.header_active_bg)))
-                .child(title)
+                .child(underlined_letter(title))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _, window, cx| {
@@ -227,7 +246,8 @@ mod tests {
     #[test]
     fn only_menu_keys_pass_while_open() {
         for k in [
-            "up", "down", "left", "right", "enter", "escape", "f10", "alt", "alt-f",
+            "up", "down", "left", "right", "enter", "escape", "f10", "alt", "alt-f", "alt-c",
+            "alt-s", "alt-h",
         ] {
             assert!(passes(&key(k)), "{k}");
         }
@@ -239,6 +259,7 @@ mod tests {
             "ctrl-a",
             "shift-f4",
             "alt-z",
+            "alt-x",
             "alt-shift-f",
             "ctrl-alt-f",
             "shift-down",

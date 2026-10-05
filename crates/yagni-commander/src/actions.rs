@@ -74,11 +74,16 @@ actions!(
         GoToLog,
         ToggleMenu,
         MenuAlt,
-        OpenFilesMenu,
         OpenSettings,
         DirectoryHotlist
     ]
 );
+
+/// Alt-letter: opens the menu bar's menu at this index (Linux), also from
+/// another open menu. The letter is the title's first ([`crate::menus::letter`]).
+#[derive(gpui_kit::Action, Clone, PartialEq)]
+#[action(namespace = yagni_commander, no_json)]
+pub struct OpenMenu(pub usize);
 
 /// Key context of a viewer window.
 pub const VIEWER_CONTEXT: &str = "Viewer";
@@ -268,8 +273,16 @@ pub fn bind_default_keys(cx: &mut App) {
         cx.bind_keys([
             KeyBinding::new("f10", ToggleMenu, context),
             KeyBinding::new("alt", MenuAlt, context),
-            KeyBinding::new("alt-f", OpenFilesMenu, context),
         ]);
+        cx.bind_keys(
+            crate::menus::TITLES
+                .iter()
+                .enumerate()
+                .map(|(index, title)| {
+                    let key = format!("alt-{}", crate::menus::letter(title));
+                    KeyBinding::new(&key, OpenMenu(index), context)
+                }),
+        );
     }
     // Text fields: the classic clipboard keys next to gpui-base's Ctrl-C/X/V.
     // Registered after gpui-base's own, so Shift-Del cuts instead of deleting

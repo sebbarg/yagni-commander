@@ -429,13 +429,13 @@ keys l
 check "back in left by the hotlist letter" title_is "$left"
 shot 07i-hotlist-back
 
-echo "menu: Help > Go to config file, Go to operation log"
-keys F10 Left
+echo "menu: Alt-H opens Help; Go to config file, Go to operation log"
+keys alt+h
 shot 07i0-help-menu
 keys Down Down Down Return
 check "went to the config folder" title_is "$work/config/yagni-commander"
 shot 07i1-go-to-config
-keys F10 Left Down Down Down Down Return
+keys alt+h Down Down Down Down Return
 check "went to the log folder" title_is "$logs"
 shot 07i2-go-to-log
 keys ctrl+d l

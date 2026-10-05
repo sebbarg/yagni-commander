@@ -22,8 +22,8 @@ use crate::actions::{
     About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath,
     CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
     Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig, GoToLog, GoUp, MakeDirectory, MenuAlt,
-    Move, NewTab, NextTab, OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp,
-    PrevTab, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner,
+    Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab,
+    Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner,
     SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden,
     ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
@@ -299,11 +299,11 @@ impl FileManager {
         }
     }
 
-    /// Alt-F: opens the Files menu, also from another open menu.
-    fn open_files_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Alt-F/C/S/H: opens that menu, also from another open menu.
+    fn open_menu(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         if let Some(bar) = self.menu_bar.clone() {
-            bar.update(cx, |bar, cx| bar.open_first(window, cx));
+            bar.update(cx, |bar, cx| bar.open_at(index, window, cx));
         }
     }
 
@@ -820,9 +820,9 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &DirectoryHotlist, window, cx| {
                 this.directory_hotlist(window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &OpenFilesMenu, window, cx| this.open_files_menu(window, cx)),
-            )
+            .on_action(cx.listener(|this, action: &OpenMenu, window, cx| {
+                this.open_menu(action.0, window, cx)
+            }))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 // Wayland reports an Alt still held from Alt-Tab right after
                 // the window gets focus; that press belongs to the switch.

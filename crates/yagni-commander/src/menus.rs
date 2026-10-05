@@ -93,6 +93,16 @@ fn check(label: &'static str, action: impl Action, checked: bool) -> MenuEntry {
     }
 }
 
+/// The menu bar's titles on Linux, in bar order. macOS adds the app menu
+/// in front and has no Alt-letter keys.
+pub const TITLES: [&str; 4] = ["Files", "Commands", "Show", "Help"];
+
+/// The letter that opens a menu with Alt, underlined in its title: the
+/// first, lowercase.
+pub fn letter(title: &str) -> char {
+    title.chars().next().map_or(' ', |c| c.to_ascii_lowercase())
+}
+
 const ABOUT: &str = "About yagni-commander";
 const CHECK_FOR_UPDATES: &str = "Check for updates...";
 const SETTINGS: &str = "Settings...";
@@ -173,11 +183,11 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
     ]);
     let mut defs = vec![
         MenuDef {
-            title: "Files",
+            title: TITLES[0],
             entries: files,
         },
         MenuDef {
-            title: "Commands",
+            title: TITLES[1],
             entries: vec![
                 item("Same folder in other panel", SyncOtherPanel),
                 item("Swap panels", SwapPanels),
@@ -193,7 +203,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
             ],
         },
         MenuDef {
-            title: "Show",
+            title: TITLES[2],
             entries: show,
         },
     ];
@@ -211,7 +221,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         };
         defs.insert(0, app);
         defs.push(MenuDef {
-            title: "Help",
+            title: TITLES[3],
             entries: go_to_items().into(),
         });
     } else {
@@ -222,7 +232,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         ];
         help.extend(go_to_items());
         defs.push(MenuDef {
-            title: "Help",
+            title: TITLES[3],
             entries: help,
         });
     }
@@ -382,6 +392,17 @@ mod tests {
                 "Go to operation log"
             ]
         );
+    }
+
+    #[test]
+    fn menu_letters_are_distinct() {
+        let titles: Vec<_> = menus(STATE, false).iter().map(|d| d.title).collect();
+        assert_eq!(titles, TITLES);
+        let mut letters: Vec<_> = TITLES.iter().map(|t| letter(t)).collect();
+        assert_eq!(letters, ['f', 'c', 's', 'h']);
+        letters.sort();
+        letters.dedup();
+        assert_eq!(letters.len(), TITLES.len());
     }
 
     #[test]

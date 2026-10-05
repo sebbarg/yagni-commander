@@ -3004,6 +3004,28 @@ mod menu_bar {
     }
 
     #[gpui_kit::test]
+    fn alt_c_s_h_open_commands_show_and_help(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("b alt-h");
+        assert_eq!(menu_open(cx), Some(3));
+        assert_eq!(search(&commander, cx), None, "Alt-H ends the quick search");
+        // From one open menu straight to another.
+        cx.simulate_keystrokes("alt-c");
+        assert_eq!(menu_open(cx), Some(1));
+        cx.simulate_keystrokes("alt-s");
+        assert_eq!(menu_open(cx), Some(2));
+        cx.simulate_keystrokes("alt-s");
+        assert_eq!(menu_open(cx), Some(2), "no toggle");
+        // Other Alt letters are still ignored while a menu is open.
+        cx.simulate_keystrokes("alt-x");
+        assert_eq!(menu_open(cx), Some(2));
+        cx.simulate_keystrokes("escape");
+        assert_eq!(menu_open(cx), None);
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    }
+
+    #[gpui_kit::test]
     fn left_and_right_wrap_between_menus(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         cx.simulate_keystrokes("f10 left");
