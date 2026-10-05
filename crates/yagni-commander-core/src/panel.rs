@@ -597,6 +597,32 @@ impl Panel {
         self.move_cursor(1);
     }
 
+    /// A Shift-move to `to` (clamped): toggles every entry the cursor
+    /// leaves, the target too when `inclusive` (Shift-Home/End, a move cut
+    /// short by an edge), and the entry under the cursor when it can't
+    /// move. ".." is never selected.
+    pub(crate) fn toggle_to(&mut self, to: usize, inclusive: bool) {
+        let Some(last) = self.entries.len().checked_sub(1) else {
+            return;
+        };
+        let from = self.cursor;
+        let to = to.min(last);
+        let range = if from == to || inclusive {
+            from.min(to)..=from.max(to)
+        } else if from < to {
+            from..=to - 1
+        } else {
+            to + 1..=from
+        };
+        for ix in range {
+            let entry = &self.entries[ix];
+            if entry.kind != EntryKind::Parent && !self.selection.remove(&entry.name) {
+                self.selection.insert(entry.name.clone());
+            }
+        }
+        self.cursor = to;
+    }
+
     /// Ctrl-A: selects every file and directory.
     pub(crate) fn select_all(&mut self) {
         self.selection = self
@@ -981,6 +1007,14 @@ mod tests {
         panel.toggle_selection();
         assert_eq!(selected_labels(&panel), ["file.txt"]);
         assert_eq!(panel.cursor_entry().unwrap().label, "file.txt");
+    }
+
+    #[test]
+    fn toggling_in_an_unread_panel_does_nothing() {
+        let mut panel = Panel::empty(PathBuf::from("/"), true);
+        panel.toggle_to(3, true);
+        assert_eq!(panel.selection().count(), 0);
+        assert_eq!(panel.cursor(), 0);
     }
 
     #[test]

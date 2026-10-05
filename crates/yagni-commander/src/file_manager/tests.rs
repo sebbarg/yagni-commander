@@ -242,6 +242,38 @@ fn space_selects_and_moves_down(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn shift_down_toggles_the_entries_it_leaves(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("down shift-down shift-down");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a", "b"]);
+    assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    // Like Space: back up toggles f on, then b off.
+    cx.simulate_keystrokes("shift-up shift-up");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a", "f"]);
+}
+
+#[gpui_kit::test]
+fn shift_down_deselects_selected_entries(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-a home down shift-down shift-down");
+    assert_eq!(selected(&commander, Side::Left, cx), ["f"]);
+}
+
+#[gpui_kit::test]
+fn shift_end_home_and_pages_toggle_ranges(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("down shift-end");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a", "b", "f"]);
+    assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    cx.simulate_keystrokes("shift-home");
+    assert!(selected(&commander, Side::Left, cx).is_empty());
+    cx.simulate_keystrokes("shift-pagedown");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a", "b", "f"]);
+    cx.simulate_keystrokes("shift-pageup");
+    assert!(selected(&commander, Side::Left, cx).is_empty());
+}
+
+#[gpui_kit::test]
 fn ctrl_a_selects_all_in_active_panel(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
     cx.simulate_keystrokes("tab ctrl-a");

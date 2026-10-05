@@ -9,7 +9,9 @@ use gpui_kit::{
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use yagni_commander_core::{Command, Commander, Config, Setting, Side, SortKey, config, oplog};
+use yagni_commander_core::{
+    Command, Commander, Config, Setting, Side, SortKey, Step, config, oplog,
+};
 
 pub(crate) mod commands;
 mod file_ops;
@@ -23,10 +25,10 @@ use crate::actions::{
     CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
     Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig, GoToLog, GoUp, MakeDirectory, MenuAlt,
     MountsLeft, MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, Pack,
-    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, ShowProperties, SortByModified,
-    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel,
-    SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut,
-    ZoomReset,
+    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, SelectDown, SelectEnd, SelectHome,
+    SelectPageDown, SelectPageUp, SelectUp, ShowProperties, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel,
+    ToggleHidden, ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -729,6 +731,12 @@ impl FileManager {
     }
 
     fn page(&mut self, down: bool, cx: &mut Context<Self>) {
+        let delta = self.page_rows(down, cx);
+        self.execute(Command::CursorBy(delta), cx);
+    }
+
+    /// One page of the active panel, signed: its visible rows less one.
+    fn page_rows(&self, down: bool, cx: &App) -> isize {
         let panel = match self.commander.read(cx).active() {
             Side::Left => &self.left,
             Side::Right => &self.right,
@@ -738,7 +746,7 @@ impl FileManager {
             .visible_rows(cx)
             .unwrap_or(FALLBACK_PAGE_ROWS);
         let delta = rows.saturating_sub(1).max(1) as isize;
-        self.execute(Command::CursorBy(if down { delta } else { -delta }), cx);
+        if down { delta } else { -delta }
     }
 
     fn on_mouse_move(
@@ -847,6 +855,26 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &PageDown, _, cx| this.page(true, cx)))
+            .on_action(cx.listener(|this, _: &SelectUp, _, cx| {
+                this.execute(Command::ToggleTo(Step::By(-1)), cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectDown, _, cx| {
+                this.execute(Command::ToggleTo(Step::By(1)), cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectPageUp, _, cx| {
+                let delta = this.page_rows(false, cx);
+                this.execute(Command::ToggleTo(Step::By(delta)), cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectPageDown, _, cx| {
+                let delta = this.page_rows(true, cx);
+                this.execute(Command::ToggleTo(Step::By(delta)), cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectHome, _, cx| {
+                this.execute(Command::ToggleTo(Step::Home), cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectEnd, _, cx| {
+                this.execute(Command::ToggleTo(Step::End), cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &SwapPanels, _, cx| this.execute(Command::SwapPanels, cx)),
             )

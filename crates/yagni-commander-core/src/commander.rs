@@ -51,6 +51,9 @@ pub enum Command {
     SortBy(Side, SortKey),
     /// Space: toggle selection of the entry under the cursor, then move down.
     ToggleSelection,
+    /// Shift with a cursor key: toggle the selection of every entry the
+    /// cursor leaves (see [`Step`]).
+    ToggleTo(Step),
     /// Ctrl-A: select all files and directories.
     SelectAll,
     /// Ctrl-U: swap the two panels.
@@ -70,6 +73,19 @@ pub enum Command {
     PrevTab,
     /// A click on a tab: brings that side and tab to the front.
     SelectTab(Side, usize),
+}
+
+/// A Shift-move: where the cursor goes while toggling the selection of
+/// each entry it leaves, like Space on each one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Step {
+    /// Up/Down by one, or PageUp/PageDown by a page. Cut short by the top
+    /// or bottom, it toggles the entry it stops on too.
+    By(isize),
+    /// To the first entry, which is toggled too.
+    Home,
+    /// To the last entry, which is toggled too.
+    End,
 }
 
 /// Result of a command that the UI may need to act on.
@@ -983,6 +999,24 @@ impl Commander {
             }
             Command::ToggleSelection => {
                 panel.toggle_selection();
+                Ok(())
+            }
+            Command::ToggleTo(step) => {
+                let (to, inclusive) = match step {
+                    // A move cut short by the top or bottom toggles the
+                    // entry it stops on.
+                    Step::By(delta) => {
+                        let target = panel.cursor() as isize + delta;
+                        let last = panel.entries().len() as isize - 1;
+                        (
+                            target.clamp(0, last.max(0)) as usize,
+                            !(0..=last).contains(&target),
+                        )
+                    }
+                    Step::Home => (0, true),
+                    Step::End => (usize::MAX, true),
+                };
+                panel.toggle_to(to, inclusive);
                 Ok(())
             }
             Command::SelectAll => {
@@ -3230,5 +3264,105 @@ mod archive_fix_tests {
         c.run_loads_now();
         assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
         assert_eq!(labels(&c, Side::Left), ["..", "a", "new"]);
+    }
+}
+
+#[cfg(test)]
+mod toggle_to_tests {
+    use super::*;
+
+    /// "..", then f1 to f5; the cursor on `cursor`.
+    fn five(cursor: usize) -> (tempfile::TempDir, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        for n in 1..=5 {
+            std::fs::write(tmp.path().join(format!("f{n}")), b"").unwrap();
+        }
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.execute(Command::CursorTo(Side::Left, cursor));
+        (tmp, c)
+    }
+
+    fn selected(c: &Commander) -> Vec<String> {
+        let panel = c.panel(Side::Left);
+        panel
+            .selection()
+            .map(|e| e.name.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn cursor(c: &Commander) -> usize {
+        c.panel(Side::Left).cursor()
+    }
+
+    const DOWN: Command = Command::ToggleTo(Step::By(1));
+    const UP: Command = Command::ToggleTo(Step::By(-1));
+
+    #[test]
+    fn each_entry_the_cursor_leaves_is_toggled() {
+        let (_tmp, mut c) = five(1);
+        c.execute(DOWN);
+        c.execute(DOWN);
+        assert_eq!(selected(&c), ["f1", "f2"]);
+        assert_eq!(cursor(&c), 3);
+        // Turning back toggles what the cursor leaves, like Space: f3 on,
+        // then f2 off.
+        c.execute(UP);
+        c.execute(UP);
+        assert_eq!(selected(&c), ["f1", "f3"]);
+        assert_eq!(cursor(&c), 1);
+    }
+
+    #[test]
+    fn selected_entries_in_the_way_are_deselected() {
+        let (_tmp, mut c) = five(2);
+        c.execute(Command::ToggleSelection); // f2 on, cursor on f3
+        c.execute(Command::CursorTo(Side::Left, 1));
+        for _ in 0..3 {
+            c.execute(DOWN);
+        }
+        assert_eq!(selected(&c), ["f1", "f3"]);
+    }
+
+    #[test]
+    fn at_an_edge_the_entry_under_the_cursor_is_toggled() {
+        let (_tmp, mut c) = five(5);
+        c.execute(DOWN);
+        assert_eq!(selected(&c), ["f5"]);
+        assert_eq!(cursor(&c), 5);
+        c.execute(DOWN);
+        assert!(selected(&c).is_empty());
+    }
+
+    #[test]
+    fn pages_leave_the_target_and_home_end_include_it() {
+        let (_tmp, mut c) = five(1);
+        c.execute(Command::ToggleTo(Step::By(2)));
+        assert_eq!(selected(&c), ["f1", "f2"]);
+        // A page cut short by the bottom includes the last entry.
+        c.execute(Command::ToggleTo(Step::By(10)));
+        assert_eq!(selected(&c), ["f1", "f2", "f3", "f4", "f5"]);
+        c.execute(Command::CursorTo(Side::Left, 3));
+        c.execute(Command::ToggleTo(Step::By(-10))); // f3 to the top
+        assert_eq!(selected(&c), ["f4", "f5"]);
+        assert_eq!(cursor(&c), 0);
+        c.execute(Command::CursorTo(Side::Left, 4));
+        c.execute(Command::ToggleTo(Step::End)); // f4 and f5 off
+        assert!(selected(&c).is_empty());
+        assert_eq!(cursor(&c), 5);
+        c.execute(Command::CursorTo(Side::Left, 2));
+        c.execute(Command::ToggleTo(Step::Home)); // f2, f1 on; ".." never
+        assert_eq!(selected(&c), ["f1", "f2"]);
+        assert_eq!(cursor(&c), 0);
+    }
+
+    #[test]
+    fn the_parent_entry_is_never_selected() {
+        let (_tmp, mut c) = five(0);
+        c.execute(DOWN); // leaves ".."
+        assert!(selected(&c).is_empty());
+        c.execute(UP); // leaves f1
+        assert_eq!(selected(&c), ["f1"]);
+        c.execute(UP); // at the top, on ".."
+        assert_eq!(selected(&c), ["f1"]);
     }
 }

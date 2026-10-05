@@ -130,6 +130,13 @@ typed no
 shot 02-quick-search
 keys Escape
 
+echo "Shift-Down toggles the entries it leaves, Shift-Up toggles them back"
+keys Home Down shift+Down shift+Down
+shot 02a-shift-select
+keys Up shift+Up shift+Up
+shot 02b-shift-deselect
+keys Home
+
 echo "Enter on a file hands it to xdg-open"
 typed notes
 keys Escape Return

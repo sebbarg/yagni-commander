@@ -32,7 +32,7 @@ pub mod viewer;
 pub mod watch;
 
 pub use archive::ArchiveIndex;
-pub use commander::{Command, Commander, Outcome, Side, StartTabs};
+pub use commander::{Command, Commander, Outcome, Side, StartTabs, Step};
 pub use config::{Config, Setting};
 pub use entry::{Entry, EntryKind};
 pub use format::{format_count, format_modified, format_permissions, format_size};
