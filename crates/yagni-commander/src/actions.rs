@@ -70,6 +70,8 @@ actions!(
         SortByPermissions,
         About,
         CheckForUpdates,
+        GoToConfig,
+        GoToLog,
         ToggleMenu,
         MenuAlt,
         OpenFilesMenu,

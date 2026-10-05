@@ -21,11 +21,11 @@ mod watch;
 use crate::actions::{
     About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath,
     CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
-    Extract, FILE_MANAGER_CONTEXT, FindFiles, GoUp, MakeDirectory, MenuAlt, Move, NewTab, NextTab,
-    OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
-    SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
-    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection,
-    Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig, GoToLog, GoUp, MakeDirectory, MenuAlt,
+    Move, NewTab, NextTab, OpenFilesMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp,
+    PrevTab, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner,
+    SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden,
+    ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -115,6 +115,9 @@ pub struct FileManager {
     pub(crate) settings: Option<Entity<crate::settings_dialog::SettingsView>>,
     /// Where the operation log goes. Tests replace it.
     pub(crate) log_dir: Option<PathBuf>,
+    /// The state file, for Help > Go to operation log without a log file.
+    /// Tests replace it.
+    pub(crate) state_file: Option<PathBuf>,
     /// Where F3 inside an archive puts its private copies. Tests replace it.
     pub(crate) temp_dir: Option<PathBuf>,
     /// The open Properties box.
@@ -248,6 +251,7 @@ impl FileManager {
             changes,
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
+            state_file: yagni_commander_core::storage::state_file(),
             // This instance's own folder, so others' cleanup leaves it alone.
             temp_dir: yagni_commander_core::storage::viewer_temp_dir()
                 .map(|dir| dir.join(std::process::id().to_string())),
@@ -804,6 +808,10 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &CheckForUpdates, window, cx| {
                 this.check_for_updates(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &GoToConfig, window, cx| this.go_to_config(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &GoToLog, window, cx| this.go_to_log(window, cx)))
             .on_action(
                 cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
             )

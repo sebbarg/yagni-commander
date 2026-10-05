@@ -665,6 +665,42 @@ pub(super) fn about_text() -> String {
 
 impl FileManager {
     /// The menu's About item.
+    /// Help > Go to config file: the active panel shows the config file's
+    /// folder with the cursor on it. Also while the file is broken, since
+    /// that is when it needs editing.
+    pub(super) fn go_to_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = cx.global::<CurrentConfig>().path.clone();
+        self.go_to_app_file(path, "No config folder found", window, cx);
+    }
+
+    /// Help > Go to operation log: the newest log file, else the state
+    /// file (the log is off or has written nothing yet).
+    pub(super) fn go_to_log(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let path = (self.log_dir.as_deref())
+            .and_then(yagni_commander_core::oplog::newest)
+            .or_else(|| self.state_file.clone());
+        self.go_to_app_file(path, "No state folder found", window, cx);
+    }
+
+    fn go_to_app_file(
+        &mut self,
+        path: Option<std::path::PathBuf>,
+        missing: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = path else {
+            let refocus = Some(self.focus.clone());
+            show_error("Cannot go there", missing, refocus, window, cx);
+            return;
+        };
+        self.notice = None;
+        self.commander.update(cx, |c, cx| {
+            c.go_to_file(&path);
+            cx.notify();
+        });
+    }
+
     pub(super) fn about(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         let refocus = Some(self.focus.clone());

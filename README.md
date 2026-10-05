@@ -96,7 +96,7 @@ To install your build as an app with its icon:
 
 ## Configuration
 
-The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R re-reads it.
+The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R re-reads it. Help > Go to config file shows it in the active panel, ready for F4.
 
 - Linux: `~/.config/yagni-commander/config.toml`
 - macOS: `~/Library/Application Support/yagni-commander/config.toml`

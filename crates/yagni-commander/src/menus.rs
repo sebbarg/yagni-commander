@@ -9,10 +9,10 @@ use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
     About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist,
-    Edit, EditNewFile, Extract, FindFiles, MakeDirectory, Move, NewTab, NextTab, OpenSettings,
-    OpenTerminal, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
-    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
-    ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog, MakeDirectory, Move, NewTab,
+    NextTab, OpenSettings, OpenTerminal, Pack, PrevTab, Quit, Reload, Rename, SelectAll,
+    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
+    SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -97,8 +97,16 @@ const ABOUT: &str = "About yagni-commander";
 const CHECK_FOR_UPDATES: &str = "Check for updates...";
 const SETTINGS: &str = "Settings...";
 
+/// Help's own items, on both platforms.
+fn go_to_items() -> [MenuEntry; 2] {
+    [
+        item("Go to config file", GoToConfig),
+        item("Go to operation log", GoToLog),
+    ]
+}
+
 /// Every menu, in bar order. With `mac`, About and Quit go to the app menu
-/// (the platform's convention) and there is no Help menu.
+/// (the platform's convention) and Help keeps only the go-to items.
 pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
     let mut files = vec![
         item("View", View),
@@ -202,10 +210,20 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
             ],
         };
         defs.insert(0, app);
-    } else {
         defs.push(MenuDef {
             title: "Help",
-            entries: vec![item(ABOUT, About), item(CHECK_FOR_UPDATES, CheckForUpdates)],
+            entries: go_to_items().into(),
+        });
+    } else {
+        let mut help = vec![
+            item(ABOUT, About),
+            item(CHECK_FOR_UPDATES, CheckForUpdates),
+            MenuEntry::Separator,
+        ];
+        help.extend(go_to_items());
+        defs.push(MenuDef {
+            title: "Help",
+            entries: help,
         });
     }
     defs
@@ -356,7 +374,13 @@ mod tests {
         );
         assert_eq!(
             labels(&defs[3]),
-            ["About yagni-commander", "Check for updates..."]
+            [
+                "About yagni-commander",
+                "Check for updates...",
+                "-",
+                "Go to config file",
+                "Go to operation log"
+            ]
         );
     }
 
@@ -364,7 +388,14 @@ mod tests {
     fn macos_puts_about_and_quit_in_the_app_menu() {
         let defs = menus(STATE, true);
         let titles: Vec<_> = defs.iter().map(|d| d.title).collect();
-        assert_eq!(titles, ["yagni-commander", "Files", "Commands", "Show"]);
+        assert_eq!(
+            titles,
+            ["yagni-commander", "Files", "Commands", "Show", "Help"]
+        );
+        assert_eq!(
+            labels(&defs[4]),
+            ["Go to config file", "Go to operation log"]
+        );
         assert_eq!(
             labels(&defs[0]),
             [

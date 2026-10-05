@@ -118,6 +118,21 @@ pub fn start(
     }
 }
 
+/// The newest log file in `dir` (by the date in its name), for Help > Go
+/// to operation log. `None` if there is none or `dir` can't be read.
+pub fn newest(dir: &Path) -> Option<PathBuf> {
+    fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|entry| {
+            let date = entry.file_name().to_str().and_then(file_date)?;
+            Some((date, entry.path()))
+        })
+        .max_by_key(|(date, _)| *date)
+        .map(|(_, path)| path)
+}
+
 /// Deletes log files in `dir` dated more than `keep_days` days before today.
 /// Only files named like ours are touched. Returns how many were deleted.
 pub fn prune(dir: &Path, keep_days: u32) -> io::Result<usize> {
@@ -155,6 +170,23 @@ mod tests {
 
     fn at(day: Date, time: &str) -> Zoned {
         format!("{day}T{time}[UTC]").parse().unwrap()
+    }
+
+    #[test]
+    fn newest_is_the_latest_dated_log_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(newest(&tmp.path().join("missing")), None);
+        assert_eq!(newest(tmp.path()), None);
+        for day in [date(2026, 9, 30), date(2026, 10, 2), date(2026, 10, 1)] {
+            fs::write(tmp.path().join(file_name(day)), "").unwrap();
+        }
+        fs::write(tmp.path().join("operations-2027-01-01.txt"), "").unwrap();
+        fs::write(tmp.path().join("notes.log"), "").unwrap();
+        fs::create_dir(tmp.path().join(file_name(date(2026, 12, 1)))).unwrap();
+        assert_eq!(
+            newest(tmp.path()),
+            Some(tmp.path().join(file_name(date(2026, 10, 2))))
+        );
     }
 
     #[test]

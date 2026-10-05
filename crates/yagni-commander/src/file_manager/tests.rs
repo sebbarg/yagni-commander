@@ -33,6 +33,7 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
         // Never GitHub: nothing listens on port 1.
         this.update_url = "http://127.0.0.1:1/".into();
         this.temp_dir = None;
+        this.state_file = None;
     });
     cx
 }
@@ -1959,6 +1960,93 @@ fn about_shows_a_dialog_and_ok_returns_to_the_panels(cx: &mut TestAppContext) {
     assert!(!dialog_open(cx));
     cx.simulate_keystrokes("down");
     assert_eq!(cursor(&commander, Side::Left, cx), 1);
+}
+
+mod go_to_app_files {
+    use super::*;
+
+    fn cursor_name(commander: &Entity<Commander>, cx: &VisualTestContext) -> String {
+        commander.read_with(cx, |c, _| {
+            let entry = c.panel(c.active()).cursor_entry().unwrap();
+            entry.name.to_string_lossy().into_owned()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn go_to_config_puts_the_cursor_on_the_config_file(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.toml"), "").unwrap();
+        // Also while the file is broken: that's when it needs editing.
+        use_config(dir.path(), "not toml [", cx);
+        cx.simulate_keystrokes("tab");
+        cx.dispatch_action(crate::actions::GoToConfig);
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Right, cx), dir.path());
+        assert_eq!(cursor_name(&commander, cx), "config.toml");
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn go_to_config_without_a_config_folder_says_so(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.update(|_, cx| cx.set_global(crate::config_state::CurrentConfig::load(None)));
+        cx.dispatch_action(crate::actions::GoToConfig);
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn go_to_log_picks_the_newest_log_file(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "operations-2026-10-01.log",
+            "operations-2026-10-03.log",
+            "z.txt",
+        ] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        use_log_dir(dir.path(), cx);
+        cx.dispatch_action(crate::actions::GoToLog);
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), dir.path());
+        assert_eq!(cursor_name(&commander, cx), "operations-2026-10-03.log");
+    }
+
+    #[gpui_kit::test]
+    fn go_to_log_without_a_log_file_shows_the_state_file(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.toml"), "").unwrap();
+        std::fs::write(dir.path().join("state.toml"), "").unwrap();
+        use_log_dir(&dir.path().join("logs"), cx);
+        let state = dir.path().join("state.toml");
+        let view = file_manager(cx);
+        view.update(cx, |this, _| this.state_file = Some(state));
+        cx.dispatch_action(crate::actions::GoToLog);
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), dir.path());
+        assert_eq!(cursor_name(&commander, cx), "state.toml");
+    }
+
+    #[gpui_kit::test]
+    fn go_to_log_without_a_state_folder_says_so(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        let view = file_manager(cx);
+        view.update(cx, |this, _| this.log_dir = None);
+        cx.dispatch_action(crate::actions::GoToLog);
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        // Focus is back on the panels.
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    }
 }
 
 #[gpui_kit::test]
