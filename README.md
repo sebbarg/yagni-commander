@@ -120,11 +120,10 @@ The version lives in one place, `version` under `[workspace.package]` in the roo
 
 ```sh
 git push
-scripts/release.sh 1.1.0                  # sets the version, updates Cargo.lock, runs the tests, commits and tags v1.1.0
-git push --atomic origin main v1.1.0      # the tag starts the release workflow
+scripts/release.sh 1.1.0    # asks once, then sets the version, updates Cargo.lock, runs the tests, commits, tags v1.1.0 and pushes
 ```
 
-`--atomic` pushes the release commit and the tag together or not at all, so a release is never built from a commit that isn't on `main`.
+The script asks for confirmation before the slow part, then runs to the end on its own. It pushes the release commit and the tag with `git push --atomic origin main v1.1.0`: both or neither, so a release is never built from a commit that isn't on `main`. The tag starts the release workflow. If the push fails, the commit and tag stay local and the script prints that command to retry.
 
 The workflow builds the macOS zip and the Linux tarball and uploads them, with `install.sh` and `SHA256SUMS`, as a draft release. Try the files, then publish the draft on the Releases page (`gh release edit v1.1.0 --draft=false`); only then does `releases/latest` serve it.
 

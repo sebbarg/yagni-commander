@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Prepares release <version>: sets the workspace version, updates
-# Cargo.lock, runs the tests, commits "Release v<version>" and tags it.
-# Pushing is left to you; the tag starts the release workflow.
+# Releases <version>: sets the workspace version, updates Cargo.lock, runs
+# the tests, commits "Release v<version>", tags it and pushes both to
+# origin, which starts the release workflow. It asks once, before the slow
+# part, so nothing waits for an answer at the end.
 #
 #   scripts/release.sh 0.2.0
 set -euo pipefail
@@ -35,6 +36,9 @@ for older in $current $released; do
     [[ $version != "$older" && $newest == "$version" ]] || fail "$version is not newer than $older"
 done
 
+read -r -p "Release $current -> $version and push main and $tag to origin? [y/N] " answer || true
+[[ ${answer:-} == [yY] ]] || fail "cancelled"
+
 # Only the version line of [workspace.package].
 sed -i.bak "/^\[workspace.package\]/,/^\[/ s/^version = \".*\"/version = \"$version\"/" Cargo.toml
 rm Cargo.toml.bak
@@ -44,5 +48,7 @@ rm Cargo.toml.bak
 
 git commit -q -am "Release $tag"
 git tag -a "$tag" -m "$tag"
-echo "Release $tag committed and tagged. Publish it with:"
-echo "  git push --atomic origin main $tag"
+# Atomic: if origin moved meanwhile, neither main nor the tag is pushed.
+git push -q --atomic origin main "$tag" ||
+    fail "push failed; the release commit and tag are local. Retry with: git push --atomic origin main $tag"
+echo "Pushed $tag; the release workflow builds a draft release on GitHub."
