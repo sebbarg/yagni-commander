@@ -108,6 +108,8 @@ A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some
 
 | Key | Action |
 |---|---|
+| Up/Down, PageUp/PageDown | Move the cursor one row or one screen. |
+| Home, Ctrl-Home / End, Ctrl-End | Move the cursor to the first / last entry (owner, 2026-10-05: Ctrl too, like the viewer). |
 | Space | Toggle selection of the entry under the cursor and move the cursor down. Selected entries are orange. ".." can't be selected. Changing directory clears the selection. |
 | Ctrl-A | Select all files and directories in the panel. |
 | Ctrl-C, Ctrl-Ins (also Cmd-C on macOS) | Copy the full path of the entry under the cursor (the panel's folder on "..") to the clipboard as text. Only while a panel has focus: in a text field these keys copy its text. Ignores the selection. Decided by the owner 2026-10-03. |

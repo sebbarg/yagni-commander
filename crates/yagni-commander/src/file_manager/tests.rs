@@ -60,7 +60,7 @@ fn cursor(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -> 
 }
 
 #[gpui_kit::test]
-fn arrow_keys_home_and_end_move_the_cursor(cx: &mut TestAppContext) {
+fn arrow_keys_home_end_and_ctrl_home_end_move_the_cursor(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
     cx.simulate_keystrokes("down down");
     assert_eq!(cursor(&commander, Side::Left, cx), 2);
@@ -69,6 +69,10 @@ fn arrow_keys_home_and_end_move_the_cursor(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("end");
     assert_eq!(cursor(&commander, Side::Left, cx), 3);
     cx.simulate_keystrokes("home");
+    assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    cx.simulate_keystrokes("ctrl-end");
+    assert_eq!(cursor(&commander, Side::Left, cx), 3);
+    cx.simulate_keystrokes("ctrl-home");
     assert_eq!(cursor(&commander, Side::Left, cx), 0);
 }
 
