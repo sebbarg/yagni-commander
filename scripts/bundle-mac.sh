@@ -56,6 +56,17 @@ else
     cp "$root/target/release/$app" "$bundle/Contents/MacOS/$app"
 fi
 strip "$bundle/Contents/MacOS/$app"
+
+# Only the system's libraries may be linked: a -sys crate that finds a
+# Homebrew library through pkg-config links its path, and the app then dies
+# at launch on Macs without it (1.2.0 and Homebrew's liblzma).
+foreign=$(otool -L -arch all "$bundle/Contents/MacOS/$app" |
+    awk '/^\t/ && $1 !~ /^\/(usr\/lib|System)\// { print $1 }' | sort -u)
+if [[ -n $foreign ]]; then
+    echo "$0: linked to libraries outside the system:" >&2
+    echo "$foreign" >&2
+    exit 1
+fi
 iconutil -c icns "$root/packaging/icons/$app.iconset" -o "$bundle/Contents/Resources/$app.icns"
 "$root/scripts/copy-licenses.sh" "$bundle/Contents/Resources"
 

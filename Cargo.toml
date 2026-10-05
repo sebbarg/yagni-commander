@@ -44,7 +44,9 @@ zip = { version = "8.6", default-features = false, features = ["deflate-flate2-z
 tar = "0.4"
 flate2 = "1"
 bzip2 = "0.6"
-liblzma = "0.4"
+# static: build xz from source. Without it liblzma-sys links whatever
+# pkg-config finds (Homebrew's xz on the macOS runner), which users lack.
+liblzma = { version = "0.4", features = ["static"] }
 zstd = "0.14"
 # Check AES zip entries' authentication codes (the versions zip uses).
 hmac = "0.13"
