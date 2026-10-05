@@ -26,7 +26,7 @@ Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the nativ
 
 ## v2
 
-- **Mounts dropdown** (owner, 2026-10-05; built on the branch `mounts-dropdown`, not merged): a dropdown at the far right of each path header, Alt-F1/Alt-F2, listing Root, Home and the real mounts (SPEC, Mounts). Replaces the toolbar with drive icons; no other toolbar is planned. To verify on real machines: the filtered list on Kubuntu and Omarchy (USB stick, NFS/SMB share, sshfs, btrfs subvolumes not repeated; Home absent on a single-filesystem install, present with a `/home` partition) and `/Volumes` on macOS.
+- **Mounts dropdown** (owner, 2026-10-05): a button at the left of each path header (the folder glyph and a chevron), Alt-F1/Alt-F2, listing Root, Home when it is its own filesystem, and the real mounts (SPEC, Mounts). Replaces the toolbar with drive icons; no other toolbar is planned. Verified by the owner (2026-10-05): a USB stick listed on Kubuntu and on macOS. Still to verify: an NFS/SMB share and sshfs, btrfs subvolumes not repeated and no Home on Omarchy, Home present with a `/home` partition.
 - **File operations:** a queue of operations, like TC's F2 queue (now one operation at a time).
 
 ## v3
