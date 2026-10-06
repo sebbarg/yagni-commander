@@ -1099,6 +1099,59 @@ fn a_reload_shifting_the_cursor_keeps_a_wheel_scrolled_view(cx: &mut TestAppCont
     assert!(bounds(cx, "row-left-0".into()).is_some());
 }
 
+/// Many folders, the view at the end and the cursor on its top row: where
+/// `Nearest` from another folder's view would put it at the bottom edge.
+fn cursor_at_the_top_of_a_scrolled_view(
+    cx: &mut TestAppContext,
+) -> (
+    tempfile::TempDir,
+    Entity<Commander>,
+    &mut VisualTestContext,
+    gpui_kit::Pixels,
+) {
+    let (tmp, commander, cx) = open(cx);
+    for i in 0..200 {
+        std::fs::create_dir(tmp.path().join(format!("dir{i:03}"))).unwrap();
+    }
+    cx.simulate_keystrokes("ctrl-r end");
+    let rows = file_manager(cx)
+        .read_with(cx, |fm, cx| fm.left.read(cx).visible_rows(cx))
+        .unwrap();
+    for _ in 1..rows {
+        cx.simulate_keystrokes("up");
+    }
+    let at = cursor(&commander, Side::Left, cx);
+    let top = bounds(cx, format!("row-left-{at}")).unwrap().top();
+    let list = bounds(cx, "list-left".into()).unwrap().top();
+    assert!(top - list < gpui_kit::px(22.0), "on the top row");
+    (tmp, commander, cx, top)
+}
+
+#[gpui_kit::test]
+fn going_up_shows_the_parent_as_it_was(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx, top) = cursor_at_the_top_of_a_scrolled_view(cx);
+    let at = cursor(&commander, Side::Left, cx);
+    cx.simulate_keystrokes("enter");
+    assert!(
+        bounds(cx, "row-left-0".into()).is_some(),
+        "the child at its top"
+    );
+    cx.simulate_keystrokes("backspace");
+    assert_eq!(cursor(&commander, Side::Left, cx), at);
+    assert_eq!(bounds(cx, format!("row-left-{at}")).unwrap().top(), top);
+}
+
+#[gpui_kit::test]
+fn switching_tabs_shows_each_as_it_was(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx, top) = cursor_at_the_top_of_a_scrolled_view(cx);
+    let at = cursor(&commander, Side::Left, cx);
+    cx.simulate_keystrokes("ctrl-t home");
+    assert!(bounds(cx, "row-left-0".into()).is_some());
+    cx.simulate_keystrokes("ctrl-tab");
+    assert_eq!(cursor(&commander, Side::Left, cx), at);
+    assert_eq!(bounds(cx, format!("row-left-{at}")).unwrap().top(), top);
+}
+
 #[gpui_kit::test]
 fn dragging_the_divider_resizes_the_panels(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);

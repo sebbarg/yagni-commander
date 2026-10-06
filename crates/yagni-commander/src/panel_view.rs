@@ -1,16 +1,17 @@
 //! One side of the file manager: the tab header, then the tab in front:
 //! path header, column headers, the entry list and a summary footer. Reads its panel from the shared [`Commander`].
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     App, Context, Div, Entity, FocusHandle, MouseButton, MouseDownEvent, Rgba, ScrollStrategy,
-    Subscription, UniformListScrollHandle, Window, div, prelude::*, relative, uniform_list,
+    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, relative, uniform_list,
 };
 use yagni_commander_core::{
-    Command, Commander, Entry, EntryKind, Side, SortKey, Summary, format_size,
+    Command, Commander, Entry, EntryKind, PanelId, Side, SortKey, Summary, format_size,
 };
 
 use gpui_kit::component::{Icon, IconName};
@@ -53,6 +54,10 @@ pub struct PanelView {
     /// cursor moves (or a tab switch), so mouse-wheel scrolling isn't undone
     /// by unrelated updates such as activity in the other panel.
     revealed: Option<Revealed>,
+    /// The scroll offset in rows each tab's view had when it left a folder, so coming
+    /// back (to the parent, or to the tab) shows the folder as it was. Only
+    /// live tabs and folders on the way up from each tab's folder are kept.
+    tops: HashMap<(PanelId, PathBuf), f32>,
     /// The UI level the scroll offset (in px) was last valid for.
     level: f32,
     /// The left panel's share of the width (`FileManager`'s divider).
@@ -66,6 +71,7 @@ pub struct PanelView {
 
 struct Revealed {
     tab: usize,
+    id: PanelId,
     path: PathBuf,
     cursor: usize,
     name: Option<OsString>,
@@ -90,6 +96,7 @@ impl PanelView {
             side,
             scroll: UniformListScrollHandle::new(),
             revealed: None,
+            tops: HashMap::new(),
             level: Zoom::get(cx).ui,
             split: crate::file_manager::START_SPLIT,
             focus,
@@ -134,6 +141,7 @@ impl PanelView {
         let panel = commander.panel(self.side);
         let now = Revealed {
             tab: commander.tabs(self.side).index(),
+            id: panel.id(),
             path: panel.path().to_path_buf(),
             cursor: panel.cursor(),
             name: panel.cursor_entry().map(|e| e.name.clone()),
@@ -153,9 +161,45 @@ impl PanelView {
                 return;
             }
         }
-        self.scroll
-            .scroll_to_item(now.cursor, ScrollStrategy::Nearest);
+        // Another folder or tab: remember where this one's view was, and
+        // put the new one back where it was if the cursor is still in it.
+        // The scroll offset is still the old folder's here.
+        if let Some(last) = self.revealed.take()
+            && (last.id, &last.path) != (now.id, &now.path)
+            && let Some(top) = self.top_row(cx)
+        {
+            self.tops.insert((last.id, last.path), top);
+        }
+        let commander = self.commander.read(cx);
+        let tabs = commander.tabs(self.side);
+        self.tops.retain(|(id, path), _| {
+            tabs.iter()
+                .any(|panel| panel.id() == *id && panel.path().starts_with(path))
+        });
+        let rows = self.visible_rows(cx).unwrap_or(0) as f32;
+        let cursor = now.cursor as f32;
+        match self.tops.get(&(now.id, now.path.clone())) {
+            // The list clamps an offset past its end on layout.
+            Some(&top) if top <= cursor && cursor + 1.0 <= top + rows => {
+                let mut state = self.scroll.0.borrow_mut();
+                state.deferred_scroll_to_item = None;
+                let mut offset = state.base_handle.offset();
+                offset.y = px(-top * row_height(cx));
+                state.base_handle.set_offset(offset);
+            }
+            _ => self
+                .scroll
+                .scroll_to_item(now.cursor, ScrollStrategy::Nearest),
+        }
         self.revealed = Some(now);
+    }
+
+    /// The scroll offset in rows (so a zoom in between doesn't matter),
+    /// once the list has been laid out.
+    fn top_row(&self, cx: &App) -> Option<f32> {
+        self.visible_rows(cx)?;
+        let offset = f32::from(self.scroll.0.borrow().base_handle.offset().y);
+        Some((-offset / row_height(cx)).max(0.0))
     }
 
     /// Whether row `ix` is on screen (true before the list's first layout).
