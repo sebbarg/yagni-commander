@@ -1142,6 +1142,27 @@ fn going_up_shows_the_parent_as_it_was(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_restored_view_scrolls_normally_afterwards(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx, _top) = cursor_at_the_top_of_a_scrolled_view(cx);
+    let at = cursor(&commander, Side::Left, cx);
+    cx.simulate_keystrokes("enter backspace");
+    // Scroll up past the restored view, then come back down into it: the
+    // view must not snap back to where it was restored.
+    for _ in 0..5 {
+        cx.simulate_keystrokes("up");
+    }
+    let first = bounds(cx, format!("row-left-{}", at - 5)).unwrap().top();
+    for _ in 0..6 {
+        cx.simulate_keystrokes("down");
+    }
+    assert_eq!(cursor(&commander, Side::Left, cx), at + 1);
+    assert_eq!(
+        bounds(cx, format!("row-left-{}", at - 5)).map(|b| b.top()),
+        Some(first)
+    );
+}
+
+#[gpui_kit::test]
 fn switching_tabs_shows_each_as_it_was(cx: &mut TestAppContext) {
     let (_tmp, commander, cx, top) = cursor_at_the_top_of_a_scrolled_view(cx);
     let at = cursor(&commander, Side::Left, cx);

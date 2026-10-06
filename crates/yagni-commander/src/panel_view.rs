@@ -163,9 +163,14 @@ impl PanelView {
         }
         // Another folder or tab: remember where this one's view was, and
         // put the new one back where it was if the cursor is still in it.
-        // The scroll offset is still the old folder's here.
-        if let Some(last) = self.revealed.take()
-            && (last.id, &last.path) != (now.id, &now.path)
+        // The scroll offset is still the old folder's here. Only on arrival:
+        // later cursor moves in the folder must not snap back to it.
+        let last = self.revealed.take();
+        let arrived = last
+            .as_ref()
+            .is_none_or(|last| (last.id, &last.path) != (now.id, &now.path));
+        if arrived
+            && let Some(last) = last
             && let Some(top) = self.top_row(cx)
         {
             self.tops.insert((last.id, last.path), top);
@@ -178,9 +183,14 @@ impl PanelView {
         });
         let rows = self.visible_rows(cx).unwrap_or(0) as f32;
         let cursor = now.cursor as f32;
-        match self.tops.get(&(now.id, now.path.clone())) {
+        let saved = if arrived {
+            self.tops.remove(&(now.id, now.path.clone()))
+        } else {
+            None
+        };
+        match saved {
             // The list clamps an offset past its end on layout.
-            Some(&top) if top <= cursor && cursor + 1.0 <= top + rows => {
+            Some(top) if top <= cursor && cursor + 1.0 <= top + rows => {
                 let mut state = self.scroll.0.borrow_mut();
                 state.deferred_scroll_to_item = None;
                 let mut offset = state.base_handle.offset();
