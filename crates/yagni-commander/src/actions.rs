@@ -44,6 +44,10 @@ actions!(
         Edit,
         EditNewFile,
         CopyPath,
+        /// Ctrl-Shift-C: copy the name of the entry under the cursor.
+        CopyName,
+        /// Ctrl-Alt-C: copy the folder holding the entry under the cursor.
+        CopyParentPath,
         MakeDirectory,
         Copy,
         Move,
@@ -217,6 +221,11 @@ pub fn bind_default_keys(cx: &mut App) {
     } else {
         "ctrl-c"
     };
+    let (copy_name, copy_parent) = if cfg!(target_os = "macos") {
+        ("cmd-shift-c", "cmd-alt-c")
+    } else {
+        ("ctrl-shift-c", "ctrl-alt-c")
+    };
     cx.bind_keys([
         KeyBinding::new(quit, Quit, None),
         KeyBinding::new("tab", SwitchPanel, context),
@@ -259,6 +268,12 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-c", CopyPath, context),
         KeyBinding::new("ctrl-insert", CopyPath, context),
         KeyBinding::new(copy_path, CopyPath, context),
+        KeyBinding::new(copy_name, CopyName, context),
+        KeyBinding::new("ctrl-shift-c", CopyName, context),
+        KeyBinding::new(copy_name, CopyName, context),
+        KeyBinding::new(copy_parent, CopyParentPath, context),
+        KeyBinding::new("ctrl-alt-c", CopyParentPath, context),
+        KeyBinding::new(copy_parent, CopyParentPath, context),
         KeyBinding::new("f2", Rename, context),
         KeyBinding::new("f3", View, context),
         KeyBinding::new("f4", Edit, context),

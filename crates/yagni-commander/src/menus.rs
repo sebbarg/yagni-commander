@@ -8,11 +8,12 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath, Delete, DirectoryHotlist,
-    Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog, MakeDirectory, MountsLeft,
-    MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal, Pack, PrevTab, Quit, Reload,
-    Rename, SelectAll, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
-    SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyName, CopyParentPath, CopyPath,
+    Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog,
+    MakeDirectory, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal,
+    Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
+    View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -134,6 +135,8 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         MenuEntry::Separator,
         item("Select all", SelectAll),
         item("Copy path", CopyPath),
+        item("Copy name", CopyName),
+        item("Copy parent path", CopyParentPath),
         item("Properties...", ShowProperties),
     ];
     if !mac {
@@ -345,6 +348,8 @@ mod tests {
                 "-",
                 "Select all",
                 "Copy path",
+                "Copy name",
+                "Copy parent path",
                 "Properties...",
                 "-",
                 "Settings...",

@@ -2,6 +2,7 @@
 //! F7, Shift-F4), launching the editor (F4) and quick search.
 
 use std::ops::Range;
+use std::path::Path;
 use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
@@ -232,12 +233,36 @@ impl FileManager {
     /// Ctrl-C/Ctrl-Ins (also Cmd-C on macOS): copy the full path of the
     /// entry under the cursor (or the directory, on "..") as text.
     pub(super) fn copy_path(&mut self, cx: &mut Context<Self>) {
+        self.copy_part(cx, |path| Some(path.display().to_string()));
+    }
+
+    /// Ctrl-Shift-C (also Cmd-Shift-C on macOS): copy only the name of the
+    /// entry under the cursor (the panel's folder name, on "..").
+    pub(super) fn copy_name(&mut self, cx: &mut Context<Self>) {
+        self.copy_part(cx, |path| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        });
+    }
+
+    /// Ctrl-Alt-C (also Cmd-Alt-C on macOS): copy the folder holding the
+    /// entry under the cursor (the panel folder's parent, on "..").
+    pub(super) fn copy_parent_path(&mut self, cx: &mut Context<Self>) {
+        self.copy_part(cx, |path| {
+            path.parent().map(|dir| dir.display().to_string())
+        });
+    }
+
+    /// Copies `part` of the cursor path, if it has one (`/` has no name and
+    /// no parent, though only an empty root listing leaves the cursor there).
+    fn copy_part(&mut self, cx: &mut Context<Self>, part: impl FnOnce(&Path) -> Option<String>) {
         if self.active_loading(cx) {
             return;
         }
         self.end_search(cx);
-        let path = self.active_panel(cx).cursor_path();
-        cx.write_to_clipboard(ClipboardItem::new_string(path.display().to_string()));
+        if let Some(text) = part(&self.active_panel(cx).cursor_path()) {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
     }
 
     /// Enter (or a double-click): enters a folder, runs a program, or hands

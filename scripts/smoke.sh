@@ -268,7 +268,7 @@ else
     echo "  skip  no zip command: the password prompt is not checked"
 fi
 
-echo "Ctrl-C and Ctrl-Ins copy the full path under the cursor"
+echo "Ctrl-C and Ctrl-Ins copy the full path under the cursor, Ctrl-Shift-C the name, Ctrl-Alt-C the parent"
 clipboard() { [[ $(xclip -o -selection clipboard) == "$1" ]]; }
 typed notes
 keys Escape ctrl+c
@@ -276,6 +276,10 @@ check "Ctrl-C copied the path" clipboard "$left/notes.txt"
 typed docs
 keys Escape ctrl+Insert
 check "Ctrl-Ins copied the path" clipboard "$left/docs"
+keys ctrl+shift+c
+check "Ctrl-Shift-C copied the name" clipboard docs
+keys ctrl+alt+c
+check "Ctrl-Alt-C copied the parent" clipboard "$left"
 echo "Ctrl-C in a text field copies its text"
 keys F7
 typed typed-text

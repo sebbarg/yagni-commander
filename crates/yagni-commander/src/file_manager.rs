@@ -21,14 +21,15 @@ mod properties;
 mod watch;
 
 use crate::actions::{
-    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyPath,
-    CursorDown, CursorEnd, CursorHome, CursorUp, Delete, DirectoryHotlist, Edit, EditNewFile,
-    Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig, GoToLog, GoUp, MakeDirectory, MenuAlt,
-    MountsLeft, MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, Pack,
-    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, SelectDown, SelectEnd, SelectHome,
-    SelectPageDown, SelectPageUp, SelectUp, ShowProperties, SortByModified, SortByName,
-    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel,
-    ToggleHidden, ToggleMenu, ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyName,
+    CopyParentPath, CopyPath, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
+    DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig,
+    GoToLog, GoUp, MakeDirectory, MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab,
+    OpenMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
+    SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
+    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
+    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
+    View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -899,6 +900,8 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
             .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
+            .on_action(cx.listener(|this, _: &CopyName, _, cx| this.copy_name(cx)))
+            .on_action(cx.listener(|this, _: &CopyParentPath, _, cx| this.copy_parent_path(cx)))
             .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))
             .on_action(cx.listener(|this, _: &Pack, window, cx| this.pack(window, cx)))
             .on_action(cx.listener(|this, _: &Extract, window, cx| this.extract(window, cx)))
