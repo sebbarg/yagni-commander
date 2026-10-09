@@ -284,7 +284,11 @@ mod tests {
             "0 keeps only today"
         );
         assert_eq!(prune(&dir.join("missing"), 7).unwrap(), 0);
-        assert_eq!(prune(dir, 7).unwrap(), 0, "today's date: nothing that old");
+        // Today's real date: a log written today is kept.
+        let real = tempfile::tempdir().unwrap();
+        fs::write(real.path().join(file_name(Zoned::now().date())), b"").unwrap();
+        assert_eq!(prune(real.path(), 7).unwrap(), 0);
+        assert_eq!(fs::read_dir(real.path()).unwrap().count(), 1);
     }
 
     #[test]
