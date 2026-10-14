@@ -802,8 +802,6 @@ impl Render for FileManager {
             .h_full()
             .flex_none()
             .cursor_col_resize()
-            .when(self.dragging_split, |d| d.bg(colors.accent))
-            .hover(|d| d.bg(colors.accent))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseDownEvent, _, cx| {
@@ -987,6 +985,9 @@ impl Render for FileManager {
                     cx.notify();
                 }),
             )
+            // The divider is never highlighted (owner, 2026-10-14): only the
+            // cursor shows it, kept while a drag runs past it.
+            .when(self.dragging_split, |d| d.cursor_col_resize())
             .size_full()
             .flex()
             .flex_col()
