@@ -9,8 +9,10 @@ icon is the project's own and MIT like the rest:
 - a black rounded tile in the middle, with a gap around it, splitting the
   band into an upper-right and a lower-left piece;
 - every convex corner of the pieces rounded;
-- "yc" on the tile in blocky 8-bit pixels (two-pixel
-  strokes, like the fonts of 8-bit games).
+- "yc" on the tile in blocky 8-bit pixels (one-pixel strokes, like the
+  fonts of 8-bit games). A letter pixel is 1/32 of the canvas and the
+  letters are an even number of pixels wide and high, so they sit centered
+  with every edge on a whole screen pixel at 32 and 64 px (and 128 and up).
 
 The output is plain filled paths (no masks, clip paths or strokes), which
 every SVG renderer draws the same, including Qt's for KDE icons. Files:
@@ -52,7 +54,7 @@ GAP = 30
 TILE_SIDE = 420
 TILE_RADIUS = 100
 CORNER = 26  # rounding of the pieces' corners
-PIXEL = 26  # side of one letter pixel
+PIXEL = SIZE // 32  # side of one letter pixel: one screen pixel at 32 px
 ARC_STEPS = 24
 
 
@@ -99,13 +101,12 @@ def pieces():
 
 # "yc", one character per pixel.
 GLYPHS = [
-    "##..##..#####",
-    "##..##.##....",
-    "##..##.##....",
-    "##..##.##....",
-    ".#####.##....",
-    "....##.##....",
-    "#####...#####",
+    "#...#.####",
+    "#...#.#...",
+    "#...#.#...",
+    ".####.#...",
+    "....#.#...",
+    "####..####",
 ]
 
 
@@ -129,9 +130,11 @@ def pixel_art(glyphs, pixel):
         if cell == "#"
     ]
     shape = unary_union(pixels).simplify(0)
-    # Center the drawing on the tile.
+    # Center the drawing on the tile; the glyphs' even sizes keep it on the pixel grid.
     x0, y0, x1, y1 = shape.bounds
-    return affinity.translate(shape, C - (x0 + x1) / 2, C - (y0 + y1) / 2)
+    dx, dy = C - (x0 + x1) / 2, C - (y0 + y1) / 2
+    assert dx % pixel == 0 and dy % pixel == 0, "glyphs must be an even number of pixels wide and high"
+    return affinity.translate(shape, dx, dy)
 
 
 def path(shape):
