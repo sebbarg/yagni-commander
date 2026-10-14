@@ -174,7 +174,8 @@ impl Theme {
         colors.caret = hex(c.text);
         colors.ring = hex(c.accent);
         colors.selection = hex(with_alpha(c.accent, 0.35));
-        colors.accent = hex(c.cursor_inactive_bg);
+        // The menu and dropdown cursor (also the hover of a few widgets).
+        colors.accent = hex(menu_cursor(c));
         colors.accent_foreground = hex(c.text);
         colors.primary = hex(c.accent);
         colors.primary_foreground = hex(c.text_on_accent);
@@ -223,6 +224,12 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
         b: lerp(a.b, b.b),
         a: a.a,
     }
+}
+
+/// The cursor bar in gpui-component's menus (drawn on `header_bg`): a
+/// touch of the accent, so `text` stays readable on it.
+fn menu_cursor(c: &Colors) -> Rgba {
+    mix(c.header_bg, c.accent, 0.15)
 }
 
 fn with_alpha(color: Rgba, a: f32) -> Rgba {
@@ -431,6 +438,20 @@ mod tests {
         assert_eq!(config.colors.danger, Some(to_hex(c.error)));
         assert_eq!(config.colors.list_active, Some("#7aa2f733".into()));
         assert_ne!(config.colors.primary_hover, config.colors.primary);
+    }
+
+    /// Everforest Dark once drew the menu cursor in the menu's own color.
+    #[test]
+    fn menu_cursor_stands_out_and_keeps_text_readable() {
+        for (id, _) in BUILTIN {
+            let c = Theme::builtin(id).unwrap().colors;
+            let cursor = menu_cursor(&c);
+            assert!(
+                contrast(cursor, c.header_bg) >= 1.25,
+                "{id}: cursor too faint"
+            );
+            assert!(contrast(c.text, cursor) >= 4.5, "{id}: text unreadable");
+        }
     }
 
     #[test]
