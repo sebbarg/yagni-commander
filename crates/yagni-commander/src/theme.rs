@@ -80,7 +80,8 @@ pub struct Colors {
     pub text_dim: Rgba,
     pub directory: Rgba,
     pub symlink: Rgba,
-    /// Names of hidden entries (dot files), dimmer than `text`.
+    /// The viewer's `·` for control characters and invalid bytes, dimmer
+    /// than `text`.
     pub hidden: Rgba,
     /// Focus color: the active panel's cursor bar and border, primary buttons.
     pub accent: Rgba,
@@ -326,8 +327,9 @@ mod tests {
                 ),
                 // The inactive side's path header and tabs, placeholders.
                 text_on(c.text_dim, &[c.panel_bg, c.dialog_bg, c.header_bg]),
-                // File names, also under the inactive cursor bar.
+                // The viewer's dim marks.
                 text_on(c.hidden, &[c.panel_bg, c.cursor_inactive_bg]),
+                // File names, also under the inactive cursor bar.
                 text_on(c.directory, &[c.panel_bg, c.cursor_inactive_bg]),
                 text_on(c.symlink, &[c.panel_bg, c.cursor_inactive_bg]),
                 text_on(c.selected, &[c.panel_bg, c.cursor_inactive_bg]),

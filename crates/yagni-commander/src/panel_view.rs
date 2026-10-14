@@ -698,10 +698,8 @@ fn side_name(side: Side) -> &'static str {
     }
 }
 
+/// By kind only: a hidden entry looks like any other (owner, 2026-10-14).
 fn name_color(entry: &Entry, colors: &Colors) -> Rgba {
-    if entry.is_hidden() {
-        return colors.hidden;
-    }
     match entry.kind {
         EntryKind::Parent | EntryKind::Dir if entry.is_symlink => colors.symlink,
         EntryKind::Parent | EntryKind::Dir => colors.directory,
@@ -729,6 +727,35 @@ pub(crate) fn tab_label(panel: &yagni_commander_core::Panel) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_entries_take_their_kinds_color() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".git")).unwrap();
+        std::fs::write(dir.path().join(".env"), "").unwrap();
+        std::os::unix::fs::symlink(".git", dir.path().join(".link")).unwrap();
+        let request = yagni_commander_core::LoadRequest {
+            id: 0,
+            path: dir.path().into(),
+            fallback: None,
+            progress: Default::default(),
+            cancel: Default::default(),
+            archive: None,
+            results: None,
+            up_if_missing: false,
+            quiet: false,
+        };
+        let listing = yagni_commander_core::read_listing(&request).unwrap();
+        let colors = Theme::default().colors;
+        let color = |name: &str| {
+            let entry = listing.entries.iter().find(|e| e.label == name).unwrap();
+            assert!(entry.is_hidden());
+            name_color(entry, &colors)
+        };
+        assert_eq!(color(".git"), colors.directory);
+        assert_eq!(color(".env"), colors.text);
+        assert_eq!(color(".link"), colors.symlink);
+    }
 
     #[test]
     fn footer_shows_totals_without_selection() {

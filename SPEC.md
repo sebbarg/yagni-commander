@@ -185,10 +185,9 @@ A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some
 
 - Hidden means the name starts with `.` (Linux and macOS). Files hidden only by the macOS Finder flag are always shown.
 - Hidden files are not shown by default. Ctrl-. toggles them for both panels, and the choice is remembered across runs (state file).
-- When shown, hidden entries are drawn in a dimmer color (a theme role).
+- When shown, hidden entries are drawn like any other entry: a hidden folder in the folder color, a hidden file in the file color (owner, 2026-10-14). Only the leading `.` marks them.
 - Hiding them deselects any selected hidden entries, so file operations never act on something invisible. Quick search only matches visible entries.
 - If the cursor is on an entry that gets hidden, it moves to the nearest visible entry (the next one below, else above).
-- One theme role (`hidden`) colors all hidden names, so a hidden directory is not drawn in the directory color.
 - If the entry under the cursor disappears on a re-read (deleted, or renamed to a hidden name), the cursor stays on the same row.
 
 ### F3 viewer

@@ -52,7 +52,7 @@ mkdir -p "$logs"
 
 left=$work/left
 right=$work/right
-mkdir -p "$left/docs" "$right"
+mkdir -p "$left/docs" "$left/.config" "$right"
 printf hello >"$left/notes.txt"
 printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
