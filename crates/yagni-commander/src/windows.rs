@@ -2,7 +2,7 @@
 //! every viewer and quits, so no viewer is left without a file manager (and
 //! macOS doesn't keep a windowless process around).
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{AnyWindowHandle, App, Subscription, WindowBounds};
 
@@ -22,6 +22,31 @@ pub fn close_all_when_main_closes(main: AnyWindowHandle, cx: &mut App) -> Subscr
         }
         cx.quit();
     })
+}
+
+/// How long `when_displays_known` waits for the displays at most, and how
+/// often it looks.
+const DISPLAYS_WAIT: Duration = Duration::from_millis(500);
+const DISPLAYS_POLL: Duration = Duration::from_millis(5);
+
+/// Runs `open` once gpui knows the displays, or after `DISPLAYS_WAIT`. On
+/// Wayland gpui calls the launch callback before its event loop has read the
+/// outputs, so `cx.displays()` is empty there and a window opened at once
+/// could neither be checked against the displays nor sized to one. X11 and
+/// macOS know them at once, so `open` runs right away.
+pub fn when_displays_known(cx: &mut App, open: impl FnOnce(&mut App) + 'static) {
+    if !cx.displays().is_empty() {
+        open(cx);
+        return;
+    }
+    cx.spawn(async move |cx| {
+        let start = Instant::now();
+        while start.elapsed() < DISPLAYS_WAIT && cx.update(|cx| cx.displays().is_empty()) {
+            cx.background_executor().timer(DISPLAYS_POLL).await;
+        }
+        cx.update(open);
+    })
+    .detach();
 }
 
 /// How long after opening a window `maximize_late` looks: by then the window

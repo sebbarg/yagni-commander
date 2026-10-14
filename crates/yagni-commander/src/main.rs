@@ -100,12 +100,6 @@ fn main() {
             // gpui has no built-in quit. The menus are set by the FileManager.
             cx.on_action(|_: &Quit, cx| cx.quit());
 
-            let bounds = app_state.initial_bounds(cx);
-            let options = WindowOptions {
-                window_bounds: Some(bounds),
-                app_id: Some(windows::APP_ID.into()),
-                ..Default::default()
-            };
             cx.set_global(app_state);
             cx.on_app_quit(|cx| {
                 cx.global::<AppState>().save();
@@ -114,13 +108,21 @@ fn main() {
             .detach();
 
             let commander = cx.new(|_| commander);
-            // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
-            let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| FileManager::new(commander, notice, window, cx))
-            })
-            .expect("failed to open window");
-            windows::maximize_late(main_window, bounds, cx);
-            windows::close_all_when_main_closes(main_window, cx).detach();
-            cx.activate(true);
+            windows::when_displays_known(cx, move |cx| {
+                let bounds = cx.global::<AppState>().initial_bounds(cx);
+                let options = WindowOptions {
+                    window_bounds: Some(bounds),
+                    app_id: Some(windows::APP_ID.into()),
+                    ..Default::default()
+                };
+                // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
+                let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
+                    cx.new(|cx| FileManager::new(commander, notice, window, cx))
+                })
+                .expect("failed to open window");
+                windows::maximize_late(main_window, bounds, cx);
+                windows::close_all_when_main_closes(main_window, cx).detach();
+                cx.activate(true);
+            });
         });
 }

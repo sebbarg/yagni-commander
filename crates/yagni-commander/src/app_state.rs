@@ -198,12 +198,14 @@ impl SavedWindow {
     }
 
     /// The saved geometry if it is sane and still overlaps one of `displays`
-    /// (a monitor may have been unplugged since).
+    /// (a monitor may have been unplugged since). With no displays known
+    /// (Wayland, if they never arrived) only sanity is checked.
     pub fn restore(&self, displays: &[Bounds<Pixels>]) -> Option<WindowBounds> {
         let sane =
             self.width >= 200.0 && self.height >= 150.0 && self.x.is_finite() && self.y.is_finite();
         let bounds = self.bounds();
-        if !sane || !displays.iter().any(|d| d.intersects(&bounds)) {
+        let shown = displays.is_empty() || displays.iter().any(|d| d.intersects(&bounds));
+        if !sane || !shown {
             return None;
         }
         Some(if self.maximized {
@@ -514,13 +516,25 @@ mod tests {
     #[test]
     fn off_screen_or_tiny_windows_are_not_restored() {
         assert!(saved(5000.0, 5000.0).restore(&[display()]).is_none());
-        assert!(saved(100.0, 100.0).restore(&[]).is_none());
         let tiny = SavedWindow {
             width: 10.0,
             ..saved(100.0, 100.0)
         };
         assert!(tiny.restore(&[display()]).is_none());
         assert!(saved(f32::NAN, 0.0).restore(&[display()]).is_none());
+    }
+
+    #[test]
+    fn without_known_displays_a_sane_window_is_restored() {
+        assert_eq!(
+            saved(0.0, 0.0).restore(&[]),
+            Some(WindowBounds::Windowed(saved(0.0, 0.0).bounds()))
+        );
+        let tiny = SavedWindow {
+            width: 50.0,
+            ..saved(0.0, 0.0)
+        };
+        assert_eq!(tiny.restore(&[]), None);
     }
 
     #[test]
