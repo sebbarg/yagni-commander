@@ -7,13 +7,13 @@
 
 An opinionated, keyboard-first, dual-pane file manager for macOS and Linux. It does the part of a classic commander that I actually use, not all of it. Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), Zed's UI framework.
 
-More than a little inspired by these GOATs:
+Strongly inspired by these classics:
 
 - [DOS Navigator](https://en.wikipedia.org/wiki/DOS_Navigator)
 - [Total Commander](https://en.wikipedia.org/wiki/Total_Commander)
 - [Double Commander](https://en.wikipedia.org/wiki/Double_Commander)
 
-and of course the OG, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
+and of course the original, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
 
 Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and Wayland) and Omarchy (Hyprland). Early days.
 
