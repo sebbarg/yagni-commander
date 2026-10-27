@@ -94,6 +94,8 @@ pub enum Outcome {
     Done,
     /// Enter was pressed on a file.
     OpenFile(PathBuf),
+    /// Enter was pressed on a file of a remote folder.
+    RemoteFile,
 }
 
 /// One side's folders at startup and which one is in front.
@@ -1227,6 +1229,7 @@ impl Commander {
                     Ok(())
                 }
                 Enter::File(path) => return Outcome::OpenFile(path),
+                Enter::Remote => return Outcome::RemoteFile,
                 Enter::None => Ok(()),
             },
         };
@@ -3554,11 +3557,7 @@ mod remote_tests {
         assert_eq!(labels(&c), ["..", "b", "f"]);
 
         put_cursor(&mut c, "f");
-        assert_eq!(
-            run(&mut c, Command::Activate),
-            Outcome::Done,
-            "a file: nothing"
-        );
+        assert_eq!(run(&mut c, Command::Activate), Outcome::RemoteFile);
         assert_eq!(c.panel(c.active()).path(), top.join("a"));
 
         run(&mut c, Command::GoUp);

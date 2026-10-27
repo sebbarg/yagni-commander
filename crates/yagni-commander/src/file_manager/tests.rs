@@ -7307,7 +7307,7 @@ mod open_with {
 mod remote_folders {
     use super::*;
     use std::os::unix::ffi::OsStrExt;
-    use yagni_commander_core::remote::{self, ON_REMOTE};
+    use yagni_commander_core::remote::{self, ON_REMOTE, OPEN_ON_REMOTE};
 
     /// Every host is this machine, through OpenSSH's `sftp-server` over
     /// pipes (no ssh).
@@ -7371,6 +7371,38 @@ mod remote_folders {
         );
         cx.simulate_keystrokes("backspace");
         cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), remote_path(tmp.path()));
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_remote_file_explains_why_nothing_runs(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        std::fs::write(tmp.path().join("run.sh"), "#!/bin/sh\ntouch ran\n").unwrap();
+        std::fs::set_permissions(
+            tmp.path().join("run.sh"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        for name in ["f", "run.sh"] {
+            let ix = labels(&commander, Side::Left, cx)
+                .iter()
+                .position(|l| l == name)
+                .unwrap();
+            commander.update(cx, |c, cx| {
+                c.execute(Command::CursorTo(Side::Left, ix));
+                cx.notify();
+            });
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
+            assert_eq!(
+                refusal(cx),
+                format!("On a remote folder\n{OPEN_ON_REMOTE}"),
+                "{name}"
+            );
+        }
+        assert!(!tmp.path().join("ran").exists());
         assert_eq!(path(&commander, Side::Left, cx), remote_path(tmp.path()));
     }
 
@@ -7592,7 +7624,10 @@ mod remote_folders {
         cx.deactivate_window();
         save(cx, "mine");
         watch_until(cx, dialog_open);
-        assert!(cx.update(|window, _| window.is_window_active()), "brought forward");
+        assert!(
+            cx.update(|window, _| window.is_window_active()),
+            "brought forward"
+        );
         assert!(cx.debug_bounds("remote-changed").is_some());
         assert_eq!(remote_text(&tmp, "f"), "someone else");
         cx.simulate_keystrokes("left enter"); // Upload

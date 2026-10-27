@@ -323,6 +323,7 @@ impl FileManager {
 
     /// Enter (or a double-click): enters a folder, runs a program, or hands
     /// any other file to the system's opener, which picks the application.
+    /// A file on a remote folder gets a box saying why neither works.
     pub(super) fn activate(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.notice = None;
         let outcome = self.commander.update(cx, |commander, cx| {
@@ -330,8 +331,16 @@ impl FileManager {
             cx.notify();
             outcome
         });
-        if let Outcome::OpenFile(path) = outcome {
-            self.open_file(&path, window, cx);
+        match outcome {
+            Outcome::OpenFile(path) => self.open_file(&path, window, cx),
+            Outcome::RemoteFile => show_error(
+                "On a remote folder",
+                yagni_commander_core::remote::OPEN_ON_REMOTE,
+                Some(self.focus.clone()),
+                window,
+                cx,
+            ),
+            Outcome::Done => {}
         }
     }
 

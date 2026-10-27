@@ -33,6 +33,10 @@ pub const SCHEME: &str = "sftp://";
 /// Why a command that writes refuses on a remote panel.
 pub const ON_REMOTE: &str = "Not available on a remote folder.";
 
+/// Why Enter on a file in a remote panel does nothing.
+pub const OPEN_ON_REMOTE: &str = "Files on a remote folder can't be run or opened in an application. \
+Use F3 to view a file, or F4 to edit it.";
+
 /// The last bytes of ssh's error output kept for a failure message.
 const STDERR_KEPT: usize = 4096;
 

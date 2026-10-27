@@ -114,6 +114,8 @@ pub(crate) struct Navigation {
 pub(crate) enum Enter {
     Dir(Navigation),
     File(PathBuf),
+    /// A file on a remote folder: it can't be run or opened.
+    Remote,
     None,
 }
 
@@ -168,6 +170,8 @@ pub(crate) enum Activation {
     Navigated,
     /// The cursor is on a file. The UI decides what to do with it.
     File(PathBuf),
+    /// The cursor is on a file of a remote folder.
+    Remote,
     /// Nothing to activate (empty listing).
     None,
 }
@@ -302,7 +306,8 @@ impl Panel {
             }),
             // No archives in archives, nothing runs from one or a remote
             // folder.
-            EntryKind::File if self.in_archive() || self.is_remote() => Enter::None,
+            EntryKind::File if self.is_remote() => Enter::Remote,
+            EntryKind::File if self.in_archive() => Enter::None,
             EntryKind::File if Format::from_name(&entry.name).is_some() => {
                 let file = self.path.join(&entry.name);
                 Enter::Dir(Navigation {
@@ -751,6 +756,7 @@ impl Panel {
         match self.enter_target() {
             Enter::Dir(nav) => self.follow(nav).map(|()| Activation::Navigated),
             Enter::File(path) => Ok(Activation::File(path)),
+            Enter::Remote => Ok(Activation::Remote),
             Enter::None => Ok(Activation::None),
         }
     }
