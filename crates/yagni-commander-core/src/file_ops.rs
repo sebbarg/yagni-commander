@@ -129,8 +129,10 @@ pub struct Progress {
 pub struct Conflict {
     pub source: PathBuf,
     pub target: PathBuf,
-    /// Set when the new file comes from an archive.
+    /// Set when the new file comes from an archive or a host.
     pub incoming: Option<Incoming>,
+    /// Set when the existing file is on a host (nothing to `stat` here).
+    pub existing: Option<Incoming>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1017,6 +1019,17 @@ impl Engine<'_> {
     }
 
     fn choose(&mut self, source: &Path, target: &Path, incoming: Option<Incoming>) -> Choice {
+        self.choose_between(source, target, incoming, None)
+    }
+
+    /// [`Engine::choose`], describing an existing file on a host too.
+    fn choose_between(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        incoming: Option<Incoming>,
+        existing: Option<Incoming>,
+    ) -> Choice {
         match self.always {
             Some(true) => return Choice::Overwrite,
             Some(false) => return Choice::Skip,
@@ -1026,6 +1039,7 @@ impl Engine<'_> {
             source: source.to_path_buf(),
             target: target.to_path_buf(),
             incoming,
+            existing,
         };
         match self.observer.conflict(&conflict) {
             Answer::Overwrite => Choice::Overwrite,

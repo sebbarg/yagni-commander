@@ -129,8 +129,9 @@ pub(crate) fn join(dir: &[u8], name: &[u8]) -> Vec<u8> {
     path
 }
 
-/// Builds the command whose standard input and output speak SFTP to `host`.
-pub type Connector = fn(&str) -> Command;
+/// Builds the command whose standard input and output speak SFTP to `host`;
+/// with `share` false it uses no shared connection (see [`connect_unshared`]).
+pub type Connector = fn(&str, bool) -> Command;
 
 static CONNECTOR: RwLock<Connector> = RwLock::new(ssh_command);
 
@@ -159,17 +160,17 @@ pub fn set_asking(asking: Asking) {
 const CONTROL_PERSIST: &str = "ControlPersist=600";
 
 /// `ssh -s host sftp`. With [`Asking`] set, ssh asks the user through the
-/// app and shares one authenticated connection per host, so a host asks
-/// once; without it ssh never asks (`BatchMode`).
-pub fn ssh_command(host: &str) -> Command {
+/// app and, with `share`, shares one authenticated connection per host, so
+/// a host asks once; without it ssh never asks (`BatchMode`).
+pub fn ssh_command(host: &str, share: bool) -> Command {
     let asking = ASKING
         .read()
         .unwrap_or_else(PoisonError::into_inner)
         .clone();
-    ssh_command_with(host, asking.as_ref())
+    ssh_command_with(host, asking.as_ref(), share)
 }
 
-fn ssh_command_with(host: &str, asking: Option<&Asking>) -> Command {
+fn ssh_command_with(host: &str, asking: Option<&Asking>, share: bool) -> Command {
     let mut command = crate::shell_path::command("ssh");
     command.args([
         "-o",
@@ -184,7 +185,10 @@ fn ssh_command_with(host: &str, asking: Option<&Asking>) -> Command {
             command.envs(asking.env.iter().map(|(k, v)| (k, v)));
             // Too long a folder: no sharing (each connection asks again)
             // rather than no connection at all.
-            if crate::askpass::fits_control_path(&asking.control_dir) {
+            if !share {
+                // Not even an existing shared connection (it may be dead).
+                command.args(["-o", "ControlPath=none"]);
+            } else if crate::askpass::fits_control_path(&asking.control_dir) {
                 let path = asking.control_dir.join(control_name(std::process::id()));
                 let mut control_path = OsString::from("ControlPath=");
                 control_path.push(path.as_os_str());
@@ -308,7 +312,21 @@ pub fn connect(host: &str) -> io::Result<Session> {
         ));
     }
     let connector = *CONNECTOR.read().unwrap_or_else(PoisonError::into_inner);
-    connect_with(host, connector(host))
+    connect_with(host, connector(host, true))
+}
+
+/// [`connect`] without ssh's shared connection: when the shared one may be
+/// dead (a kept session died, or one in use is stuck), a session through
+/// it would hang just the same. A password host asks again.
+pub fn connect_unshared(host: &str) -> io::Result<Session> {
+    if !valid_host(host) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("not a host name: {host}"),
+        ));
+    }
+    let connector = *CONNECTOR.read().unwrap_or_else(PoisonError::into_inner);
+    connect_with(host, connector(host, false))
 }
 
 /// [`connect`] through `command`.
@@ -427,7 +445,7 @@ pub fn with_session<T>(
             Err(std::sync::TryLockError::WouldBlock)
                 if started.elapsed() >= BUSY_WAIT && !slot.connecting.load(Ordering::Relaxed) =>
             {
-                let mut own = connect(host)?;
+                let mut own = connect_unshared(host)?;
                 return f(&mut own.client).map_err(|e| own.explain(e));
             }
             Err(std::sync::TryLockError::WouldBlock) => {
@@ -439,7 +457,13 @@ pub fn with_session<T>(
     for attempt in 0..2 {
         if session.is_none() {
             slot.connecting.store(true, Ordering::Relaxed);
-            let connected = connect(host);
+            // The retry after a dead session: not through the shared
+            // connection, which likely died with it.
+            let connected = if attempt == 0 {
+                connect(host)
+            } else {
+                connect_unshared(host)
+            };
             slot.connecting.store(false, Ordering::Relaxed);
             *session = Some(connected?);
         }
@@ -476,8 +500,9 @@ pub(crate) fn read_listing(
             format!("not a remote folder: {}", path.display()),
         )
     })?;
-    progress.store(0, Ordering::Relaxed);
     let (dir, names, targets) = with_session(location.host, |client| {
+        // Again on a retry: the count starts over with the listing.
+        progress.store(0, Ordering::Relaxed);
         let dir = if location.path.is_empty() {
             client.realpath(b".")?
         } else {
@@ -580,7 +605,7 @@ pub(crate) mod tests {
     /// Every remote host is this machine, through a local `sftp-server`;
     /// on host `dies-soon` the server ends after 0.3 s.
     pub(crate) fn use_local_server() {
-        fn local(host: &str) -> Command {
+        fn local(host: &str, _share: bool) -> Command {
             let server = crate::sftp::tests::server_program();
             if host == "dies-soon" {
                 let mut command = Command::new("timeout");
@@ -664,7 +689,7 @@ pub(crate) mod tests {
 
     #[test]
     fn without_asking_ssh_never_prompts_and_options_end_before_the_host() {
-        let args = args(&ssh_command_with("box", None));
+        let args = args(&ssh_command_with("box", None, true));
         assert!(args.iter().any(|a| a == "BatchMode=yes"));
         assert!(!args.iter().any(|a| a.starts_with("ControlMaster")));
         let dashes = args.iter().position(|a| a == "--").unwrap();
@@ -677,7 +702,7 @@ pub(crate) mod tests {
             env: vec![("SSH_ASKPASS".into(), "/bin/helper".into())],
             control_dir: PathBuf::from("/run/yc"),
         };
-        let command = ssh_command_with("box", Some(&asking));
+        let command = ssh_command_with("box", Some(&asking), true);
         let args = args(&command);
         assert!(!args.iter().any(|a| a == "BatchMode=yes"));
         assert!(args.iter().any(|a| a == "ControlMaster=auto"));
@@ -774,12 +799,23 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn an_unshared_session_uses_no_shared_connection() {
+        let asking = Asking {
+            env: Vec::new(),
+            control_dir: PathBuf::from("/run/yc"),
+        };
+        let args = args(&ssh_command_with("box", Some(&asking), false));
+        assert!(args.iter().any(|a| a == "ControlPath=none"));
+        assert!(!args.iter().any(|a| a.starts_with("ControlMaster")));
+    }
+
+    #[test]
     fn a_too_long_control_folder_turns_sharing_off() {
         let asking = Asking {
             env: Vec::new(),
             control_dir: Path::new("/x").join("y".repeat(80)),
         };
-        let args = args(&ssh_command_with("box", Some(&asking)));
+        let args = args(&ssh_command_with("box", Some(&asking), true));
         assert!(!args.iter().any(|a| a.starts_with("Control")));
         assert!(!args.iter().any(|a| a == "BatchMode=yes"), "still asks");
     }

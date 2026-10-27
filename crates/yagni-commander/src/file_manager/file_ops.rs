@@ -637,6 +637,11 @@ impl FileManager {
 
     /// Handles the job's pending events. Returns whether it is still running.
     fn poll_job(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // An ssh question is on top: nothing of the job's may open over it
+        // or close it. A job waiting for that answer has nothing to say yet.
+        if self.asking > 0 {
+            return self.job.is_some();
+        }
         let Some(running) = &mut self.job else {
             return false;
         };
@@ -740,7 +745,11 @@ impl FileManager {
             None => describe_file(&conflict.source),
         };
         let new = SharedString::from(format!("New:       {new_text}"));
-        let old = SharedString::from(format!("Existing: {}", describe_file(&conflict.target)));
+        let old_text = match conflict.existing {
+            Some(existing) => describe_incoming(existing),
+            None => describe_file(&conflict.target),
+        };
+        let old = SharedString::from(format!("Existing: {old_text}"));
         let this = cx.entity().downgrade();
         let button = |label: &'static str, answer: Answer| -> (&'static str, OnPress) {
             let this = this.clone();

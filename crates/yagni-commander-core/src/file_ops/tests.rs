@@ -268,6 +268,7 @@ fn skip_keeps_the_target_and_overwrite_replaces_it() {
             source: src.join("a.txt"),
             target: dst.join("a.txt"),
             incoming: None,
+            existing: None,
         }]
     );
     assert_eq!(script.last.bytes_done, 5, "skipped bytes count as done");
@@ -717,6 +718,7 @@ fn job_dropped_while_asking_cancels() {
         source: PathBuf::new(),
         target: PathBuf::new(),
         incoming: None,
+        existing: None,
     };
     assert_eq!(observer.conflict(&conflict), Answer::Cancel);
 }
@@ -756,6 +758,7 @@ fn job_conflict_without_a_listener_cancels() {
         source: PathBuf::new(),
         target: PathBuf::new(),
         incoming: None,
+        existing: None,
     };
     assert_eq!(observer.conflict(&conflict), Answer::Cancel);
 }
@@ -3712,6 +3715,109 @@ mod across {
             fs::symlink_metadata(there.path().join("rlink"))
                 .unwrap()
                 .is_symlink()
+        );
+    }
+
+    #[test]
+    fn a_move_between_two_names_of_one_file_keeps_it() {
+        // The local folder and the "host" are one file system here, as for
+        // a host under two names, or `sftp://localhost`.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("d")).unwrap();
+        fs::write(tmp.path().join("d/f"), "only copy").unwrap();
+        let mut script = Script::answering(&[Answer::OverwriteAll]);
+        let report = run_across(
+            Operation::Move {
+                sources: vec![tmp.path().join("d")],
+                to: Destination::Into(remote("alias", tmp.path())),
+            },
+            &mut script,
+        );
+        assert_eq!(
+            report.failures[0].message,
+            "the source and the target are the same file under two names"
+        );
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("d/f")).unwrap(),
+            "only copy"
+        );
+        let names: Vec<_> = fs::read_dir(tmp.path().join("d"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["f"], "nothing left beside it");
+        // Two names of one host.
+        let report = run_across(
+            Operation::Move {
+                sources: vec![remote("alias", &tmp.path().join("d/f"))],
+                to: Destination::Into(remote("alias-too", &tmp.path().join("d"))),
+            },
+            &mut Script::answering(&[Answer::Overwrite]),
+        );
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("d/f")).unwrap(),
+            "only copy"
+        );
+    }
+
+    #[test]
+    fn the_conflict_describes_an_existing_file_on_a_host() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(from.path().join("a"), "new!").unwrap();
+        fs::write(to.path().join("a"), "old").unwrap();
+        let mut script = Script::answering(&[Answer::Skip]);
+        copy(
+            vec![from.path().join("a")],
+            Destination::Into(remote("describe", to.path())),
+            &mut script,
+        );
+        assert_eq!(script.conflicts[0].existing.unwrap().size, 3);
+        let mut script = Script::answering(&[Answer::Skip]);
+        copy(
+            vec![remote("describe", &from.path().join("a"))],
+            Destination::Into(to.path().to_path_buf()),
+            &mut script,
+        );
+        assert_eq!(
+            script.conflicts[0].existing, None,
+            "a local one is looked at"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_is_really_a_link_is_never_gone_into() {
+        // As from a server whose listing describes a symlink by its target.
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), "k").unwrap();
+        let link = tmp.path().join("link");
+        symlink(outside.path(), &link).unwrap();
+        let mut script = Script::default();
+        let mut engine = Engine {
+            observer: &mut script,
+            progress: Progress::default(),
+            always: None,
+            report: Report::default(),
+            log: None,
+            name: "delete",
+            link_choice: None,
+            password: None,
+            mounts: None,
+            sync_copies: false,
+        };
+        let listed = super::super::vfs::Meta {
+            kind: super::super::vfs::Kind::Dir,
+            size: 0,
+            mtime: None,
+            mode: None,
+        };
+        let step = engine.delete_one_across(&mut super::super::vfs::LocalFs, &link, &listed);
+        assert_eq!(step, Step::Done);
+        assert!(fs::symlink_metadata(&link).is_err(), "the link is removed");
+        assert!(
+            outside.path().join("keep").exists(),
+            "its target is not touched"
         );
     }
 

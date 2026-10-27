@@ -217,6 +217,11 @@ impl FileManager {
     /// Uploads each copy saved since its last upload, and takes in the
     /// uploads that ended.
     fn check_edits(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Its boxes would land on a job's progress dialog, which closes the
+        // top one when the job ends: uploads wait for the job.
+        if self.job.is_some() {
+            return;
+        }
         for ix in 0..self.edited.len() {
             let edited = &mut self.edited[ix];
             if let Some(result) = &edited.uploading {

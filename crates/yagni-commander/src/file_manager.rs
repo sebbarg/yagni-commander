@@ -164,6 +164,9 @@ pub struct FileManager {
     pub(crate) edited: Vec<remote_edit::Edited>,
     /// The watch over `edited` is running.
     edit_watch: bool,
+    /// ssh questions open. Their dialogs are on top: a job's own dialogs
+    /// (progress, conflicts, its end) wait, since dialogs close from the top.
+    pub(crate) asking: usize,
     /// The home folder whose `.ssh/config` the Connect dialog reads; `None`
     /// is the commander's home. App tests point it at a temporary folder.
     pub(crate) ssh_home: Option<PathBuf>,
@@ -305,6 +308,7 @@ impl FileManager {
             connect_dialog: None,
             edited: Vec::new(),
             edit_watch: false,
+            asking: 0,
             ssh_home: None,
             menu_state: None,
             alt_armed: false,

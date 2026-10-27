@@ -7314,7 +7314,7 @@ mod remote_folders {
     /// The host `nowhere` fails as ssh does for an unknown name. (One
     /// connector for every test: they run at once, so none may swap it.)
     pub(super) fn use_local_server() {
-        fn local(host: &str) -> std::process::Command {
+        fn local(host: &str, _share: bool) -> std::process::Command {
             if host == "nowhere" {
                 let mut command = std::process::Command::new("sh");
                 command.args([
@@ -8164,6 +8164,40 @@ mod ssh_questions {
         cx.simulate_keystrokes("left enter");
         cx.run_until_parked();
         assert_eq!(answer.try_recv().unwrap().as_deref(), Some("yes"));
+    }
+
+    #[gpui_kit::test]
+    fn a_job_keeps_its_dialogs_behind_an_open_question(cx: &mut TestAppContext) {
+        let (tmp, send, cx) = asking(cx);
+        super::use_fake_trash(cx);
+        std::fs::write(tmp.path().join("hold"), "").unwrap();
+        cx.simulate_keystrokes("end f8 enter"); // trash `f`, held
+        cx.run_until_parked();
+        assert!(job_running(cx));
+        let (question, answer) = Question::new("password: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        assert!(cx.debug_bounds("ssh-question").is_some());
+        // Long past the progress dialog's delay, and the job ends meanwhile.
+        std::fs::remove_file(tmp.path().join("hold")).unwrap();
+        for _ in 0..20 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            !super::progress_open(cx),
+            "no progress dialog over the question"
+        );
+        assert!(job_running(cx), "its end waits for the answer");
+        assert!(cx.debug_bounds("ssh-question").is_some(), "still on top");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(answer.try_recv().unwrap(), None);
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "nothing left open");
+        assert!(!tmp.path().join("f").exists());
     }
 
     #[gpui_kit::test]

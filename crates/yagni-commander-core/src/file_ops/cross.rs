@@ -209,19 +209,60 @@ impl Engine<'_> {
                 target.display()
             ));
             if delete_source {
-                return match src.remove_file(source) {
-                    Ok(()) => {
-                        self.note(format_args!("removed {}", source.display()));
-                        Step::Done
-                    }
-                    Err(e) => self.fail(
-                        source,
-                        format!("copied, but cannot delete the original: {e}"),
-                    ),
-                };
+                return self.remove_moved(src, dst, source, target);
             }
         }
         step
+    }
+
+    /// After a move's copy: deletes the original, unless it is the target
+    /// itself under another name (two names for one host, or a host that
+    /// is this machine), which only the file systems can tell. It is moved
+    /// aside first: if the target went with it, it is put back.
+    fn remove_moved(
+        &mut self,
+        src: &mut dyn Fs,
+        dst: &mut dyn Fs,
+        source: &Path,
+        target: &Path,
+    ) -> Step {
+        let cannot =
+            |e: &dyn std::fmt::Display| format!("copied, but cannot delete the original: {e}");
+        let name = vfs::file_name(source).unwrap_or_default();
+        let folder = vfs::parent(source).unwrap_or_default();
+        let mut aside = None;
+        for n in 0..100 {
+            let candidate = folder.join(format!(".{}.yagni-moving-{n}", name.to_string_lossy()));
+            match src.rename(source, &candidate) {
+                Ok(()) => {
+                    aside = Some(candidate);
+                    break;
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return self.fail(source, cannot(&e)),
+            }
+        }
+        let Some(aside) = aside else {
+            return self.fail(source, cannot(&"no free temporary name"));
+        };
+        // Not found, or not even readable now: keep the original, to be safe.
+        if dst.lstat(target).is_err() {
+            let _ = src.rename(&aside, source);
+            return self.fail(
+                source,
+                "the source and the target are the same file under two names",
+            );
+        }
+        match src.remove_file(&aside) {
+            Ok(()) => {
+                self.note(format_args!("removed {}", source.display()));
+                Step::Done
+            }
+            Err(e) => {
+                let _ = src.rename(&aside, source);
+                self.fail(source, cannot(&e))
+            }
+        }
     }
 
     fn copy_dir_across(
@@ -237,6 +278,11 @@ impl Engine<'_> {
         // one host) would never end.
         if target.components().count() > MAX_DEPTH {
             return self.fail(source, "folders nested too deep (copied into itself?)");
+        }
+        // A move deletes what it goes into: a listing's "folder" must be one
+        // (a server may describe a symlink as its target).
+        if delete_source && !src.lstat(source).is_ok_and(|m| m.kind == Kind::Dir) {
+            return self.fail(source, "not a folder any more (a symlink?): left alone");
         }
         // A move from a local folder stops at mount points, as the local
         // engine's does: their contents are not this folder's to delete.
@@ -337,14 +383,20 @@ impl Engine<'_> {
         meta: &Meta,
         target: &Path,
     ) -> Option<Step> {
-        if dst.lstat(target).is_ok_and(|m| m.kind == Kind::Dir) {
+        let there = dst.lstat(target).ok();
+        if there.is_some_and(|m| m.kind == Kind::Dir) {
             return Some(self.fail(target, "a directory with this name exists"));
         }
         let incoming = Incoming {
             size: meta.size,
             modified: meta.modified(),
         };
-        match self.choose(source, target, Some(incoming)) {
+        // The prompt can't look on a host: it is told.
+        let existing = there.filter(|_| dst.host().is_some()).map(|m| Incoming {
+            size: m.size,
+            modified: m.modified(),
+        });
+        match self.choose_between(source, target, Some(incoming), existing) {
             Choice::Overwrite => {
                 self.note(format_args!("replacing {}", target.display()));
                 None
@@ -561,12 +613,15 @@ impl Engine<'_> {
         }
     }
 
-    fn delete_one_across(&mut self, fs: &mut dyn Fs, path: &Path, meta: &Meta) -> Step {
+    pub(super) fn delete_one_across(&mut self, fs: &mut dyn Fs, path: &Path, meta: &Meta) -> Step {
         if self.observer.is_cancelled() {
             return Step::Cancelled;
         }
         self.set_current(path);
-        if meta.kind == Kind::Dir {
+        // A server may describe a symlink as what it points to in a
+        // listing: only a real folder is gone into, never a link's target.
+        let is_dir = meta.kind == Kind::Dir && fs.lstat(path).is_ok_and(|m| m.kind == Kind::Dir);
+        if is_dir {
             let children = match fs.read_dir(path) {
                 Ok(children) => children,
                 Err(e) => return self.fail(path, e),

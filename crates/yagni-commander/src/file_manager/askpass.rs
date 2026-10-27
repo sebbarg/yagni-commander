@@ -9,8 +9,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    App, AppContext, Context, Focusable, InteractiveElement, ParentElement, SharedString, Window,
-    div,
+    App, AppContext, Context, Focusable, InteractiveElement, ParentElement, SharedString,
+    WeakEntity, Window, div,
 };
 use yagni_commander_core::askpass::{Kind, Question};
 
@@ -19,11 +19,20 @@ use super::commands::{OPENER_POLL, dialog_password_field, focus_when_open, theme
 use crate::button_row::{ButtonRow, OnPress};
 
 /// The question, until it is answered.
-type Pending = Rc<RefCell<Option<Question>>>;
+/// The question, until it is answered, and who counts open questions.
+struct Asked {
+    question: RefCell<Option<Question>>,
+    manager: WeakEntity<FileManager>,
+}
 
-fn answer(pending: &Pending, text: Option<String>) {
-    if let Some(question) = pending.borrow_mut().take() {
+type Pending = Rc<Asked>;
+
+fn answer(pending: &Pending, text: Option<String>, cx: &mut App) {
+    if let Some(question) = pending.question.borrow_mut().take() {
         question.answer(text);
+        let _ = pending
+            .manager
+            .update(cx, |fm, _| fm.asking = fm.asking.saturating_sub(1));
     }
 }
 
@@ -59,7 +68,12 @@ impl FileManager {
     fn ask(&mut self, question: Question, window: &mut Window, cx: &mut Context<Self>) {
         let text = SharedString::from(question.prompt.trim().to_owned());
         let kind = question.kind;
-        let pending: Pending = Rc::new(RefCell::new(Some(question)));
+        let pending: Pending = Rc::new(Asked {
+            question: RefCell::new(Some(question)),
+            manager: cx.entity().downgrade(),
+        });
+        // Jobs hold their dialogs back meanwhile (see `poll_job`).
+        self.asking += 1;
         let focus = self.focus.clone();
         // After the dialog closes, focus goes back to the panels.
         let refocus = move |window: &mut Window, cx: &mut App| {
@@ -69,7 +83,7 @@ impl FileManager {
         let press = |reply: Option<&'static str>| -> OnPress {
             let (pending, refocus) = (pending.clone(), refocus.clone());
             Rc::new(move |window, cx| {
-                answer(&pending, reply.map(str::to_owned));
+                answer(&pending, reply.map(str::to_owned), cx);
                 window.close_dialog(cx);
                 refocus(window, cx);
             })
@@ -93,7 +107,7 @@ impl FileManager {
                     )
                     .footer(buttons.clone())
                     .on_cancel(move |_, window, cx| {
-                        answer(&pending, None);
+                        answer(&pending, None, cx);
                         refocus(window, cx);
                         true
                     })
@@ -105,7 +119,7 @@ impl FileManager {
             let (pending, input, refocus) = (pending.clone(), input.clone(), refocus.clone());
             move |window, cx| {
                 let typed = input.read(cx).value().to_string();
-                answer(&pending, Some(typed));
+                answer(&pending, Some(typed), cx);
                 refocus(window, cx);
             }
         });
@@ -141,7 +155,7 @@ impl FileManager {
                     true
                 })
                 .on_cancel(move |_, window, cx| {
-                    answer(&pending, None);
+                    answer(&pending, None, cx);
                     refocus(window, cx);
                     true
                 })

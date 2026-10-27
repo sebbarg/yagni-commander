@@ -327,7 +327,15 @@ impl AppState {
         let home = commander.home();
         let side = |side: Side| {
             let tabs = commander.tabs(side);
-            let dirs: Vec<PathBuf> = tabs.iter().map(|p| p.real_dir().to_path_buf()).collect();
+            // A tab still connecting counts as where it is going (a host),
+            // not as the local folder it shows meanwhile.
+            let dirs: Vec<PathBuf> = tabs
+                .iter()
+                .map(|p| match p.loading() {
+                    Some(loading) if commander.is_connecting(p.id()) => loading.path.clone(),
+                    _ => p.real_dir().to_path_buf(),
+                })
+                .collect();
             local_tabs(dirs, tabs.index(), home)
         };
         let (left_tabs, left_tab) = side(Side::Left);

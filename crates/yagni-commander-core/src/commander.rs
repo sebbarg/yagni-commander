@@ -137,9 +137,9 @@ pub struct Commander {
     hidden_columns: Vec<SortKey>,
     /// Panels show an icon before each name (`Config::icons`).
     icons: bool,
-    /// A tab opened by [`Commander::connect`] whose first read is pending:
-    /// it closes again if that read fails or is cancelled.
-    connecting: Option<PanelId>,
+    /// Tabs opened by [`Commander::connect`] whose first read is pending:
+    /// each closes again if that read fails or is cancelled.
+    connecting: Vec<PanelId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,7 +233,7 @@ impl Commander {
             requests: Vec::new(),
             hidden_columns: Vec::new(),
             icons: true,
-            connecting: None,
+            connecting: Vec::new(),
         }
     }
 
@@ -492,10 +492,8 @@ impl Commander {
         let panel = self.panel_at_mut(at);
         let loading = panel.take_loading().expect("loading_tab found it");
         let id = panel.id();
-        let connecting = self.connecting == Some(id);
-        if connecting {
-            self.connecting = None;
-        }
+        let connecting = self.connecting.contains(&id);
+        self.connecting.retain(|c| *c != id);
         let panel = self.panel_at_mut(at);
         match result {
             Ok(listing) => panel.apply(listing, loading.select.as_deref()),
@@ -546,8 +544,9 @@ impl Commander {
     /// starting another.
     pub fn cancel_load(&mut self, side: Side) -> bool {
         // A Connect tab given up on goes away again.
-        if self.connecting == Some(self.panel(side).id()) && self.panel(side).loading().is_some() {
-            self.connecting = None;
+        let id = self.panel(side).id();
+        if self.connecting.contains(&id) && self.panel(side).loading().is_some() {
+            self.connecting.retain(|c| *c != id);
             self.panel_mut(side).take_loading();
             self.close_tab_at(self.visible(side));
             return true;
@@ -594,10 +593,12 @@ impl Commander {
         }
         let host = location.host.to_owned();
         let names_folder = !location.path.is_empty();
+        // A tab still connecting shows its old folder: its read counts.
+        let on_host = |path: &Path| crate::remote::parse(path).is_some_and(|l| l.host == host);
         let existing = self
             .tabs(side)
             .iter()
-            .position(|p| crate::remote::parse(p.path()).is_some_and(|l| l.host == host));
+            .position(|p| on_host(p.path()) || p.loading().is_some_and(|l| on_host(&l.path)));
         self.error = None;
         self.search.clear();
         if let Some(ix) = existing {
@@ -610,7 +611,7 @@ impl Commander {
             return;
         }
         let copy = self.panel(side).duplicate();
-        self.connecting = Some(copy.id());
+        self.connecting.push(copy.id());
         self.tabs[side as usize].open(copy);
         let nav = Navigation {
             target: dir,
@@ -620,6 +621,12 @@ impl Commander {
             up_if_missing: false,
         };
         self.request(side, nav, LoadKind::Navigate);
+    }
+
+    /// A tab still connecting ([`Commander::connect`]): it shows the folder
+    /// it was copied from, which must not be saved as a tab of its own.
+    pub fn is_connecting(&self, id: PanelId) -> bool {
+        self.connecting.contains(&id)
     }
 
     /// Closes tab `at`; the side's tab in front then shows.
@@ -3594,6 +3601,25 @@ mod remote_tests {
         c.go_to(remote("fails", &tmp.path().join("gone")));
         c.run_loads_now();
         assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top]);
+    }
+
+    #[test]
+    fn two_tabs_connecting_at_once_both_close_on_failure() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        c.connect(remote("one", &tmp.path().join("gone")));
+        let first = c.panel(c.active()).id();
+        assert!(c.is_connecting(first));
+        c.execute(Command::PrevTab);
+        c.connect(remote("two", &tmp.path().join("gone")));
+        // Still connecting: Connect to the same host finds that tab.
+        c.execute(Command::PrevTab);
+        c.connect(remote("one", tmp.path()));
+        assert_eq!(c.tabs(c.active()).count(), 3);
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf()]);
+        assert!(!c.is_connecting(first));
     }
 
     #[test]
