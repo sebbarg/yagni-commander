@@ -120,12 +120,13 @@ impl State {
     pub fn startup_tabs(&self, args: &[String], home: &Path) -> (StartTabs, StartTabs) {
         let side =
             |tabs: &[PathBuf], old: &Option<PathBuf>, active: usize, arg: Option<&String>| {
-                let mut dirs = if tabs.is_empty() {
+                let saved = if tabs.is_empty() {
                     vec![old.clone().unwrap_or_else(|| home.to_path_buf())]
                 } else {
                     tabs.to_vec()
                 };
-                let active = active.min(dirs.len() - 1);
+                // A state file from before remote tabs were left out.
+                let (mut dirs, active) = local_tabs(saved, active, home);
                 if let Some(arg) = arg {
                     dirs[active] = PathBuf::from(arg);
                 }
@@ -136,6 +137,20 @@ impl State {
             side(&self.right_tabs, &self.right, self.right_tab, args.get(1)),
         )
     }
+}
+
+/// The tabs worth restoring: the local ones. A remote tab would connect at
+/// startup, which the owner doesn't want (2026-10-27). The front one stays
+/// in front, or the nearest local tab before it (else after it) takes its
+/// place; no local tab at all leaves `home`.
+fn local_tabs(dirs: Vec<PathBuf>, front: usize, home: &Path) -> (Vec<PathBuf>, usize) {
+    let is_local = |dir: &PathBuf| !yagni_commander_core::remote::is_remote(dir);
+    let before = dirs.iter().take(front + 1).filter(|d| is_local(d)).count();
+    let local: Vec<PathBuf> = dirs.into_iter().filter(is_local).collect();
+    if local.is_empty() {
+        return (vec![home.to_path_buf()], 0);
+    }
+    (local, before.saturating_sub(1))
 }
 
 /// The latest state, kept current while the app runs and written to the
@@ -309,10 +324,11 @@ impl AppState {
 
     pub fn remember_panels(commander: &Entity<Commander>, cx: &mut App) {
         let commander = commander.read(cx);
+        let home = commander.home();
         let side = |side: Side| {
             let tabs = commander.tabs(side);
             let dirs: Vec<PathBuf> = tabs.iter().map(|p| p.real_dir().to_path_buf()).collect();
-            (dirs, tabs.index())
+            local_tabs(dirs, tabs.index(), home)
         };
         let (left_tabs, left_tab) = side(Side::Left);
         let (right_tabs, right_tab) = side(Side::Right);
@@ -575,6 +591,41 @@ mod tests {
         let state: State = toml::from_str("").unwrap();
         assert_eq!(state, State::default());
         assert!(!state.show_hidden, "hidden files are hidden by default");
+    }
+
+    #[test]
+    fn remote_tabs_are_neither_saved_nor_restored() {
+        let home = Path::new("/home/u");
+        let p = |s: &str| PathBuf::from(s);
+        let tabs = vec![p("/a"), p("sftp://box/x"), p("/b"), p("sftp://box/y")];
+        assert_eq!(
+            local_tabs(tabs.clone(), 0, home),
+            (vec![p("/a"), p("/b")], 0)
+        );
+        assert_eq!(local_tabs(tabs.clone(), 1, home).1, 0, "the tab before it");
+        assert_eq!(local_tabs(tabs.clone(), 2, home).1, 1);
+        assert_eq!(local_tabs(tabs.clone(), 3, home).1, 1);
+        let only_remote = vec![p("sftp://box/x")];
+        assert_eq!(local_tabs(only_remote, 0, home), (vec![p("/home/u")], 0));
+        let remote_first = vec![p("sftp://box/x"), p("/a")];
+        assert_eq!(
+            local_tabs(remote_first, 0, home),
+            (vec![p("/a")], 0),
+            "else after it"
+        );
+        // Restoring a state file that still has them.
+        let state = State {
+            left_tabs: vec![p("/a"), p("sftp://box/x")],
+            left_tab: 1,
+            right_tabs: vec![p("sftp://box/y")],
+            ..State::default()
+        };
+        let (left, right) = state.startup_tabs(&[], home);
+        assert_eq!((left.dirs, left.active), (vec![p("/a")], 0));
+        assert_eq!(right.dirs, [p("/home/u")]);
+        // A folder typed on the command line still opens, remote or not.
+        let (left, _) = state.startup_tabs(&args(&["sftp://box/z"]), home);
+        assert_eq!(left.dirs, [p("sftp://box/z")]);
     }
 
     fn args(list: &[&str]) -> Vec<String> {

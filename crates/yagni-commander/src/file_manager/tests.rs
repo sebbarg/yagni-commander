@@ -7693,15 +7693,28 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
-    fn a_remote_folder_is_not_watched_but_saved(cx: &mut TestAppContext) {
-        let (tmp, _commander, cx) = on_remote(cx);
+    fn a_remote_folder_is_neither_watched_nor_saved(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
         let watched = file_manager(cx).read_with(cx, |this, _| this.watched.clone());
         assert!(
             watched.iter().flatten().all(|w| !remote::is_remote(w)),
             "{watched:?}"
         );
+        // A restart must not connect: the side's only tab is saved as home.
         let saved = cx.update(|_, cx| cx.global::<AppState>().state.left_tabs.clone());
-        assert_eq!(saved, [remote_path(tmp.path())]);
+        let home = commander.read_with(cx, |c, _| c.home().to_path_buf());
+        assert_eq!(saved, [home]);
+        // With a local tab beside it, that one is kept and comes to the front.
+        cx.simulate_keystrokes("ctrl-t");
+        cx.run_until_parked();
+        commander.update(cx, |c, cx| {
+            c.go_to(tmp.path().to_path_buf());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let state = cx.update(|_, cx| cx.global::<AppState>().state.clone());
+        assert_eq!(state.left_tabs, [tmp.path().to_path_buf()]);
+        assert_eq!(state.left_tab, 0);
     }
 
     #[gpui_kit::test]
