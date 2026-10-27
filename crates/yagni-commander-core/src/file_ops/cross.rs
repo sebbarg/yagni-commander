@@ -189,7 +189,14 @@ impl Engine<'_> {
         delete_source: bool,
     ) -> Step {
         self.set_current(source);
-        let step = match meta.kind {
+        // A move deletes what it goes into: a listing's folder is checked
+        // (a server may describe a symlink as its target), and a link is
+        // moved as a link.
+        let kind = match meta.kind {
+            Kind::Dir if delete_source => src.lstat(source).map_or(Kind::Dir, |m| m.kind),
+            kind => kind,
+        };
+        let step = match kind {
             Kind::Dir => {
                 return self.copy_dir_across(src, dst, source, meta, target, delete_source);
             }
@@ -209,30 +216,32 @@ impl Engine<'_> {
                 target.display()
             ));
             if delete_source {
-                return self.remove_moved(src, dst, source, target);
+                return self.remove_moved(src, dst, source, target, false);
             }
         }
         step
     }
 
-    /// After a move's copy: deletes the original, unless it is the target
-    /// itself under another name (two names for one host, or a host that
-    /// is this machine), which only the file systems can tell. It is moved
-    /// aside first: if the target went with it, it is put back.
+    /// After a move's copy: deletes the original (a file, a symlink or an
+    /// emptied folder), unless it is the target itself under another name
+    /// (two names for one host, or a host that is this machine), which only
+    /// the file systems can tell. It is moved aside first, under a short
+    /// name (a long one could exceed the name limit): if the target went
+    /// with it, it is put back.
     fn remove_moved(
         &mut self,
         src: &mut dyn Fs,
         dst: &mut dyn Fs,
         source: &Path,
         target: &Path,
+        folder: bool,
     ) -> Step {
         let cannot =
             |e: &dyn std::fmt::Display| format!("copied, but cannot delete the original: {e}");
-        let name = vfs::file_name(source).unwrap_or_default();
-        let folder = vfs::parent(source).unwrap_or_default();
+        let parent = vfs::parent(source).unwrap_or_default();
         let mut aside = None;
         for n in 0..100 {
-            let candidate = folder.join(format!(".{}.yagni-moving-{n}", name.to_string_lossy()));
+            let candidate = parent.join(format!(".yagni-moving-{n}"));
             match src.rename(source, &candidate) {
                 Ok(()) => {
                     aside = Some(candidate);
@@ -245,22 +254,32 @@ impl Engine<'_> {
         let Some(aside) = aside else {
             return self.fail(source, cannot(&"no free temporary name"));
         };
+        // Put back where it was; if even that fails, say where it is.
+        let restore = |src: &mut dyn Fs, why: String| match src.rename(&aside, source) {
+            Ok(()) => why,
+            Err(e) => format!("{why}; it is left as {} ({e})", aside.display()),
+        };
         // Not found, or not even readable now: keep the original, to be safe.
         if dst.lstat(target).is_err() {
-            let _ = src.rename(&aside, source);
-            return self.fail(
-                source,
-                "the source and the target are the same file under two names",
+            let why = restore(
+                src,
+                "the source and the target are the same file under two names".to_owned(),
             );
+            return self.fail(source, why);
         }
-        match src.remove_file(&aside) {
+        let removed = if folder {
+            src.remove_dir(&aside)
+        } else {
+            src.remove_file(&aside)
+        };
+        match removed {
             Ok(()) => {
                 self.note(format_args!("removed {}", source.display()));
                 Step::Done
             }
             Err(e) => {
-                let _ = src.rename(&aside, source);
-                self.fail(source, cannot(&e))
+                let why = restore(src, cannot(&e));
+                self.fail(source, why)
             }
         }
     }
@@ -332,13 +351,7 @@ impl Engine<'_> {
             let _ = dst.set_mode(target, mode & 0o777);
         }
         if delete_source && result == Step::Done {
-            if let Err(e) = src.remove_dir(source) {
-                return self.fail(
-                    source,
-                    format!("copied, but cannot delete the original: {e}"),
-                );
-            }
-            self.note(format_args!("removed {}", source.display()));
+            return self.remove_moved(src, dst, source, target, true);
         }
         result
     }
@@ -620,7 +633,14 @@ impl Engine<'_> {
         self.set_current(path);
         // A server may describe a symlink as what it points to in a
         // listing: only a real folder is gone into, never a link's target.
-        let is_dir = meta.kind == Kind::Dir && fs.lstat(path).is_ok_and(|m| m.kind == Kind::Dir);
+        let is_dir = if meta.kind == Kind::Dir {
+            match fs.lstat(path) {
+                Ok(real) => real.kind == Kind::Dir,
+                Err(e) => return self.fail(path, e),
+            }
+        } else {
+            false
+        };
         if is_dir {
             let children = match fs.read_dir(path) {
                 Ok(children) => children,

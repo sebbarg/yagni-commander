@@ -639,7 +639,7 @@ impl FileManager {
     fn poll_job(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // An ssh question is on top: nothing of the job's may open over it
         // or close it. A job waiting for that answer has nothing to say yet.
-        if self.asking > 0 {
+        if self.asking.get() > 0 {
             return self.job.is_some();
         }
         let Some(running) = &mut self.job else {

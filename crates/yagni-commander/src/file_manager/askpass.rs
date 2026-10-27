@@ -2,15 +2,15 @@
 //! masked field, or Yes/No for an unknown host key. Each is answered
 //! exactly once; closing the dialog any other way cancels it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::InputState;
 use gpui_kit::{
-    App, AppContext, Context, Focusable, InteractiveElement, ParentElement, SharedString,
-    WeakEntity, Window, div,
+    App, AppContext, Context, Focusable, InteractiveElement, ParentElement, SharedString, Window,
+    div,
 };
 use yagni_commander_core::askpass::{Kind, Question};
 
@@ -18,21 +18,39 @@ use super::FileManager;
 use super::commands::{OPENER_POLL, dialog_password_field, focus_when_open, themed_dialog};
 use crate::button_row::{ButtonRow, OnPress};
 
-/// The question, until it is answered.
-/// The question, until it is answered, and who counts open questions.
+/// The question, until it is answered, and the count of open questions
+/// (`FileManager::asking`), which it leaves once answered, or dropped
+/// unanswered however its dialog went away: a count stuck above zero would
+/// hold every job forever.
 struct Asked {
     question: RefCell<Option<Question>>,
-    manager: WeakEntity<FileManager>,
+    open: Rc<Cell<usize>>,
+}
+
+impl Asked {
+    fn new(question: Question, open: Rc<Cell<usize>>) -> Self {
+        open.set(open.get() + 1);
+        Self {
+            question: RefCell::new(Some(question)),
+            open,
+        }
+    }
+}
+
+impl Drop for Asked {
+    fn drop(&mut self) {
+        if self.question.get_mut().take().is_some() {
+            self.open.set(self.open.get().saturating_sub(1));
+        }
+    }
 }
 
 type Pending = Rc<Asked>;
 
-fn answer(pending: &Pending, text: Option<String>, cx: &mut App) {
+fn answer(pending: &Pending, text: Option<String>) {
     if let Some(question) = pending.question.borrow_mut().take() {
         question.answer(text);
-        let _ = pending
-            .manager
-            .update(cx, |fm, _| fm.asking = fm.asking.saturating_sub(1));
+        pending.open.set(pending.open.get().saturating_sub(1));
     }
 }
 
@@ -68,12 +86,8 @@ impl FileManager {
     fn ask(&mut self, question: Question, window: &mut Window, cx: &mut Context<Self>) {
         let text = SharedString::from(question.prompt.trim().to_owned());
         let kind = question.kind;
-        let pending: Pending = Rc::new(Asked {
-            question: RefCell::new(Some(question)),
-            manager: cx.entity().downgrade(),
-        });
         // Jobs hold their dialogs back meanwhile (see `poll_job`).
-        self.asking += 1;
+        let pending: Pending = Rc::new(Asked::new(question, self.asking.clone()));
         let focus = self.focus.clone();
         // After the dialog closes, focus goes back to the panels.
         let refocus = move |window: &mut Window, cx: &mut App| {
@@ -83,7 +97,7 @@ impl FileManager {
         let press = |reply: Option<&'static str>| -> OnPress {
             let (pending, refocus) = (pending.clone(), refocus.clone());
             Rc::new(move |window, cx| {
-                answer(&pending, reply.map(str::to_owned), cx);
+                answer(&pending, reply.map(str::to_owned));
                 window.close_dialog(cx);
                 refocus(window, cx);
             })
@@ -107,7 +121,7 @@ impl FileManager {
                     )
                     .footer(buttons.clone())
                     .on_cancel(move |_, window, cx| {
-                        answer(&pending, None, cx);
+                        answer(&pending, None);
                         refocus(window, cx);
                         true
                     })
@@ -119,7 +133,7 @@ impl FileManager {
             let (pending, input, refocus) = (pending.clone(), input.clone(), refocus.clone());
             move |window, cx| {
                 let typed = input.read(cx).value().to_string();
-                answer(&pending, Some(typed), cx);
+                answer(&pending, Some(typed));
                 refocus(window, cx);
             }
         });
@@ -155,7 +169,7 @@ impl FileManager {
                     true
                 })
                 .on_cancel(move |_, window, cx| {
-                    answer(&pending, None, cx);
+                    answer(&pending, None);
                     refocus(window, cx);
                     true
                 })

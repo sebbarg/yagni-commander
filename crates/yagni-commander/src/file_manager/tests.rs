@@ -8201,6 +8201,27 @@ mod ssh_questions {
     }
 
     #[gpui_kit::test]
+    fn a_question_closed_any_way_stops_counting(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let (question, answer) = Question::new("password: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        let open = |cx: &mut VisualTestContext| {
+            file_manager(cx).read_with(cx, |this, _| this.asking.get())
+        };
+        assert_eq!(open(cx), 1);
+        // Closed by something other than its own buttons.
+        cx.update(|window, cx| {
+            use gpui_kit::component::WindowExt;
+            window.close_dialog(cx)
+        });
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(open(cx), 0, "no job held forever");
+        assert_eq!(answer.try_recv().ok(), None, "never answered, dropped");
+    }
+
+    #[gpui_kit::test]
     fn focus_returns_to_the_panels(cx: &mut TestAppContext) {
         let (_tmp, send, cx) = asking(cx);
         let (question, _answer) = Question::new("password: ", Kind::Secret);

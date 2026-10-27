@@ -140,6 +140,9 @@ pub struct Commander {
     /// Tabs opened by [`Commander::connect`] whose first read is pending:
     /// each closes again if that read fails or is cancelled.
     connecting: Vec<PanelId>,
+    /// A folder to go to once a connecting tab is connected (Connect to it
+    /// meanwhile).
+    then_go_to: Option<(PanelId, PathBuf)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +237,7 @@ impl Commander {
             hidden_columns: Vec::new(),
             icons: true,
             connecting: Vec::new(),
+            then_go_to: None,
         }
     }
 
@@ -494,9 +498,21 @@ impl Commander {
         let id = panel.id();
         let connecting = self.connecting.contains(&id);
         self.connecting.retain(|c| *c != id);
+        let then = self
+            .then_go_to
+            .take_if(|(waiting, _)| *waiting == id)
+            .map(|(_, dir)| dir);
         let panel = self.panel_at_mut(at);
         match result {
-            Ok(listing) => panel.apply(listing, loading.select.as_deref()),
+            Ok(listing) => {
+                panel.apply(listing, loading.select.as_deref());
+                if let Some(dir) = then
+                    && in_front
+                {
+                    self.go_to_on(at.0, dir);
+                    return true;
+                }
+            }
             Err(e) => {
                 let error = format!("{}: {e}", loading.path.display());
                 if connecting {
@@ -605,8 +621,14 @@ impl Commander {
             if self.tabs[side as usize].select(ix) {
                 self.bring_to_front(side);
             }
-            if names_folder && self.panel(side).path() != dir {
-                self.go_to_on(side, dir);
+            let panel = self.panel(side);
+            if names_folder && panel.path() != dir {
+                if panel.loading().is_some() {
+                    // Still connecting: go there once it is.
+                    self.then_go_to = Some((panel.id(), dir));
+                } else {
+                    self.go_to_on(side, dir);
+                }
             }
             return;
         }
@@ -3620,6 +3642,20 @@ mod remote_tests {
         c.run_loads_now();
         assert_eq!(tab_paths(&c), [tmp.path().to_path_buf()]);
         assert!(!c.is_connecting(first));
+    }
+
+    #[test]
+    fn a_folder_asked_for_while_connecting_is_gone_to_once_connected() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        let top = remote("then", tmp.path());
+        c.connect(top.clone());
+        c.execute(Command::PrevTab);
+        c.connect(top.join("sub"));
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top.join("sub")]);
     }
 
     #[test]

@@ -315,9 +315,9 @@ pub fn connect(host: &str) -> io::Result<Session> {
     connect_with(host, connector(host, true))
 }
 
-/// [`connect`] without ssh's shared connection: when the shared one may be
-/// dead (a kept session died, or one in use is stuck), a session through
-/// it would hang just the same. A password host asks again.
+/// [`connect`] without ssh's shared connection: after a kept session died,
+/// the shared connection likely died with it, and a session through it
+/// would hang just the same. A password host asks again.
 pub fn connect_unshared(host: &str) -> io::Result<Session> {
     if !valid_host(host) {
         return Err(io::Error::new(
@@ -445,7 +445,9 @@ pub fn with_session<T>(
             Err(std::sync::TryLockError::WouldBlock)
                 if started.elapsed() >= BUSY_WAIT && !slot.connecting.load(Ordering::Relaxed) =>
             {
-                let mut own = connect_unshared(host)?;
+                // Usually a big listing, not a dead link: through the shared
+                // connection, so a password host doesn't ask again.
+                let mut own = connect(host)?;
                 return f(&mut own.client).map_err(|e| own.explain(e));
             }
             Err(std::sync::TryLockError::WouldBlock) => {

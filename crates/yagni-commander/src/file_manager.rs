@@ -166,7 +166,7 @@ pub struct FileManager {
     edit_watch: bool,
     /// ssh questions open. Their dialogs are on top: a job's own dialogs
     /// (progress, conflicts, its end) wait, since dialogs close from the top.
-    pub(crate) asking: usize,
+    pub(crate) asking: std::rc::Rc<std::cell::Cell<usize>>,
     /// The home folder whose `.ssh/config` the Connect dialog reads; `None`
     /// is the commander's home. App tests point it at a temporary folder.
     pub(crate) ssh_home: Option<PathBuf>,
@@ -308,7 +308,7 @@ impl FileManager {
             connect_dialog: None,
             edited: Vec::new(),
             edit_watch: false,
-            asking: 0,
+            asking: Default::default(),
             ssh_home: None,
             menu_state: None,
             alt_armed: false,

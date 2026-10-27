@@ -3762,6 +3762,43 @@ mod across {
     }
 
     #[test]
+    fn a_move_of_empty_folders_onto_themselves_keeps_them() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("d/empty/inner")).unwrap();
+        let report = run_across(
+            Operation::Move {
+                sources: vec![tmp.path().join("d")],
+                to: Destination::Into(remote("alias-dirs", tmp.path())),
+            },
+            &mut Script::default(),
+        );
+        assert!(!report.failures.is_empty());
+        assert!(tmp.path().join("d/empty/inner").is_dir(), "nothing deleted");
+        let names: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, ["d"], "nothing left beside it");
+    }
+
+    #[test]
+    fn a_long_name_still_moves() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let name = "n".repeat(250);
+        fs::write(from.path().join(&name), "x").unwrap();
+        let report = run_across(
+            Operation::Move {
+                sources: vec![from.path().join(&name)],
+                to: Destination::Into(remote("long", to.path())),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(to.path().join(&name).exists());
+        assert!(!from.path().join(&name).exists());
+    }
+
+    #[test]
     fn the_conflict_describes_an_existing_file_on_a_host() {
         let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         fs::write(from.path().join("a"), "new!").unwrap();
