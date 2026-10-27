@@ -7311,8 +7311,18 @@ mod remote_folders {
 
     /// Every host is this machine, through OpenSSH's `sftp-server` over
     /// pipes (no ssh).
+    /// The host `nowhere` fails as ssh does for an unknown name. (One
+    /// connector for every test: they run at once, so none may swap it.)
     pub(super) fn use_local_server() {
-        fn local(_: &str) -> std::process::Command {
+        fn local(host: &str) -> std::process::Command {
+            if host == "nowhere" {
+                let mut command = std::process::Command::new("sh");
+                command.args([
+                    "-c",
+                    "echo 'ssh: Could not resolve hostname nowhere' >&2; exit 255",
+                ]);
+                return command;
+            }
             let program = ["/usr/lib/openssh/sftp-server", "/usr/libexec/sftp-server"]
                 .into_iter()
                 .find(|p| std::path::Path::new(p).exists())
@@ -7369,18 +7379,9 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
-    fn writing_keys_are_refused(cx: &mut TestAppContext) {
+    fn what_needs_local_files_is_refused(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = on_remote(cx);
         for key in [
-            "f2",
-            "f4",
-            "f6",
-            "f7",
-            "f8",
-            "delete",
-            "shift-f8",
-            "shift-delete",
-            "shift-f4",
             "alt-f5",
             "alt-f6",
             "alt-f9",
@@ -7419,49 +7420,199 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
-    fn f5_to_a_remote_folder_is_refused(cx: &mut TestAppContext) {
-        let (tmp, _commander, cx) = on_remote(cx);
+    fn f5_uploads_to_a_remote_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
         // The local side copies; the remote one is the destination.
         std::fs::write(tmp.path().join("a/g"), "g").unwrap();
         cx.simulate_keystrokes("tab ctrl-r end f5");
         cx.run_until_parked();
         cx.simulate_keystrokes("enter");
-        cx.run_until_parked();
-        assert_eq!(
-            box_text(cx),
-            "Cannot copy\nNothing can be written to a remote folder yet"
-        );
-        assert!(!job_running(cx));
-        let names: Vec<_> = std::fs::read_dir(tmp.path().join("a")).unwrap().collect();
-        assert_eq!(names.len(), 1, "nothing written locally");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        assert_eq!(std::fs::read(tmp.path().join("g")).unwrap(), b"g");
+        assert!(labels(&commander, Side::Left, cx).contains(&"g".to_owned()));
         assert!(!tmp.path().join("a/sftp:").exists());
     }
 
     #[gpui_kit::test]
-    fn a_relative_destination_from_a_remote_panel_is_in_home(cx: &mut TestAppContext) {
-        use_local_server();
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("f"), b"new").unwrap();
-        setup(cx);
-        let mut commander = Commander::start(
-            remote_path(tmp.path()),
-            home.path().to_path_buf(),
-            false,
-            home.path().to_path_buf(),
-        );
-        commander.run_loads_now();
-        let commander = cx.new(|_| commander);
-        let cx = window_on(commander.clone(), cx);
-        file_manager(cx).update(cx, |this, _| this.load = None);
-        assert_eq!(labels(&commander, Side::Left, cx), ["..", "f"]);
-        cx.simulate_keystrokes("end f5");
+    fn f6_moves_from_a_remote_panel(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        cx.simulate_keystrokes("f6");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
-        cx.simulate_input("copied");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
-        assert_eq!(std::fs::read(home.path().join("copied")).unwrap(), b"new");
+        assert!(!dialog_open(cx), "no error");
+        assert!(!tmp.path().join("f").exists());
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+    }
+
+    #[gpui_kit::test]
+    fn a_relative_destination_is_inside_the_remote_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        cx.simulate_keystrokes("f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("b/copied");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("b/copied")).unwrap(), b"new");
+    }
+
+    #[gpui_kit::test]
+    fn f8_deletes_permanently_and_says_so(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        use_fake_trash(cx);
+        cx.simulate_keystrokes("f8");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert!(cx.debug_bounds("button-Delete").is_some(), "Shift-F8's box");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!tmp.path().join("f").exists());
+    }
+
+    fn cursor_label(commander: &Entity<Commander>, cx: &VisualTestContext) -> String {
+        commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn f2_and_f7_work_on_the_host_and_put_the_cursor_there(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        cx.simulate_keystrokes("f2");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("renamed");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("renamed").exists());
+        assert_eq!(cursor_label(&commander, cx), "renamed");
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        cx.simulate_input("x/y");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("x/y").is_dir());
+        assert_eq!(cursor_label(&commander, cx), "x");
+        // A taken name fails once the host says so.
+        cx.simulate_keystrokes("f2");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("b");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        let text = box_text(cx);
+        assert!(
+            text.starts_with("Rename failed\n") && text.ends_with(": “b” exists"),
+            "{text}"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_bad_name_is_refused_in_the_prompt(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = on_remote(cx);
+        cx.simulate_keystrokes("f2");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("a/b");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(box_text(cx), "Rename failed\n“a/b” contains “/”");
+        assert!(!job_running(cx));
+    }
+
+    /// `on_remote` with an editor that exits at once and a temp folder.
+    fn editing(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Entity<Commander>,
+        &mut VisualTestContext,
+    ) {
+        let (tmp, commander, cx) = on_remote(cx);
+        set_editor("true", cx);
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path().join("viewer-tmp");
+        file_manager(cx).update(cx, |this, _| this.temp_dir = Some(dir));
+        (tmp, temp, commander, cx)
+    }
+
+    fn edited_copy(cx: &mut VisualTestContext) -> std::path::PathBuf {
+        file_manager(cx).read_with(cx, |this, _| this.edited[0].local.clone())
+    }
+
+    /// Advances the edit watch until `done`.
+    fn watch_until(cx: &mut VisualTestContext, done: impl Fn(&mut VisualTestContext) -> bool) {
+        for _ in 0..200 {
+            cx.executor()
+                .advance_clock(crate::file_manager::remote_edit::EDIT_POLL);
+            cx.run_until_parked();
+            if done(cx) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("timed out");
+    }
+
+    /// Saves `text` into the edited copy, with a later time (so it differs
+    /// within the file system's precision).
+    fn save(cx: &mut VisualTestContext, text: &str) {
+        let local = edited_copy(cx);
+        std::fs::write(&local, text).unwrap();
+        let file = std::fs::File::options().write(true).open(&local).unwrap();
+        let later =
+            file.metadata().unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
+        file.set_modified(later).unwrap();
+    }
+
+    fn remote_text(tmp: &tempfile::TempDir, name: &str) -> String {
+        std::fs::read_to_string(tmp.path().join(name)).unwrap_or_default()
+    }
+
+    #[gpui_kit::test]
+    fn f4_edits_a_copy_and_each_save_is_uploaded(cx: &mut TestAppContext) {
+        let (tmp, _temp, _commander, cx) = editing(cx);
+        cx.simulate_keystrokes("f4");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        assert_eq!(std::fs::read(edited_copy(cx)).unwrap(), b"new");
+        save(cx, "first save");
+        watch_until(cx, |_| remote_text(&tmp, "f") == "first save");
+        save(cx, "second save");
+        watch_until(cx, |_| remote_text(&tmp, "f") == "second save");
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_file_changed_meanwhile_asks_before_uploading(cx: &mut TestAppContext) {
+        let (tmp, _temp, _commander, cx) = editing(cx);
+        cx.simulate_keystrokes("f4");
+        wait_until(cx, |cx| !job_running(cx));
+        std::fs::write(tmp.path().join("f"), "someone else").unwrap();
+        save(cx, "mine");
+        watch_until(cx, dialog_open);
+        assert!(cx.debug_bounds("remote-changed").is_some());
+        assert_eq!(remote_text(&tmp, "f"), "someone else");
+        cx.simulate_keystrokes("left enter"); // Upload
+        watch_until(cx, |_| remote_text(&tmp, "f") == "mine");
+    }
+
+    #[gpui_kit::test]
+    fn shift_f4_creates_the_remote_file_and_edits_it(cx: &mut TestAppContext) {
+        let (tmp, _temp, _commander, cx) = editing(cx);
+        cx.simulate_keystrokes("shift-f4");
+        cx.run_until_parked();
+        cx.simulate_input("notes/new.txt");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| {
+            !job_running(cx) && file_manager(cx).read_with(cx, |this, _| !this.edited.is_empty())
+        });
+        assert!(tmp.path().join("notes/new.txt").is_file());
+        save(cx, "hello");
+        watch_until(cx, |_| remote_text(&tmp, "notes/new.txt") == "hello");
     }
 
     #[gpui_kit::test]
@@ -7478,6 +7629,16 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
+    fn the_header_keeps_the_host_in_sight(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        let parts = commander.read_with(cx, |c, _| {
+            crate::panel_view::header_parts(c.panel(Side::Left))
+        });
+        let path = tmp.path().display().to_string();
+        assert_eq!(parts, (Some("test-host:".to_owned()), path));
+    }
+
+    #[gpui_kit::test]
     fn a_remote_folder_is_not_watched_but_saved(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = on_remote(cx);
         let watched = file_manager(cx).read_with(cx, |this, _| this.watched.clone());
@@ -7491,22 +7652,13 @@ mod remote_folders {
 
     #[gpui_kit::test]
     fn an_unreachable_host_shows_ssh_s_reason(cx: &mut TestAppContext) {
+        use_local_server();
         let (_tmp, commander, cx) = open(cx);
-        fn failing(_: &str) -> std::process::Command {
-            let mut command = std::process::Command::new("sh");
-            command.args([
-                "-c",
-                "echo 'ssh: Could not resolve hostname nowhere' >&2; exit 255",
-            ]);
-            command
-        }
-        remote::set_connector(failing);
         commander.update(cx, |c, cx| {
             c.go_to("sftp://nowhere/".into());
             cx.notify();
         });
         cx.run_until_parked();
-        use_local_server();
         let error = commander.read_with(cx, |c, _| c.error().map(str::to_owned));
         assert!(
             error

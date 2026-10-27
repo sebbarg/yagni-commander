@@ -721,9 +721,14 @@ fn name_color(entry: &Entry, colors: &Colors) -> Rgba {
 }
 
 /// The path header: for search results, a prefix ("Results: *.rs in ")
-/// that is never cut, then the path, which a narrow panel shortens from the
-/// left.
+/// that is never cut, for a remote folder its host ("box:"), then the path,
+/// which a narrow panel shortens from the left.
 pub(crate) fn header_parts(panel: &yagni_commander_core::Panel) -> (Option<String>, String) {
+    // A remote folder keeps its host in sight however long the path.
+    if let Some(location) = yagni_commander_core::remote::parse(panel.path()) {
+        let path = String::from_utf8_lossy(location.path).into_owned();
+        return (Some(format!("{}:", location.host)), path);
+    }
     let prefix = panel.results().map(|r| r.header_prefix());
     (prefix, panel.path().display().to_string())
 }

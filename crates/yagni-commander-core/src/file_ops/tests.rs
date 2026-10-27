@@ -3188,14 +3188,19 @@ fn a_picked_entry_stored_twice_arrives_once_as_the_last_copy() {
     assert_eq!(script.last.files_total, 1);
 }
 
-/// F5 from a remote panel, against a local `sftp-server`.
-mod download {
+/// Operations with a remote end, against a local `sftp-server`: a remote
+/// path names the same file as the local one (`remote(host, dir)`).
+mod across {
     use super::*;
     use crate::remote::tests::{remote, use_local_server};
 
-    fn download(sources: Vec<PathBuf>, to: Destination, script: &mut Script) -> Report {
+    fn run_across(operation: Operation, script: &mut Script) -> Report {
         use_local_server();
-        run_script(&Operation::Download { sources, to }, script)
+        run_script(&operation, script)
+    }
+
+    fn copy(sources: Vec<PathBuf>, to: Destination, script: &mut Script) -> Report {
+        run_across(Operation::Copy { sources, to }, script)
     }
 
     fn secs(path: &Path) -> u64 {
@@ -3208,91 +3213,127 @@ mod download {
             .as_secs()
     }
 
+    /// `d/a.txt` ("hello"), `d/e/b.sh` (0o755), `d/link` -> `a.txt`.
+    fn tree(dir: &Path) {
+        fs::create_dir_all(dir.join("d/e")).unwrap();
+        fs::write(dir.join("d/a.txt"), "hello").unwrap();
+        fs::write(dir.join("d/e/b.sh"), "#!/bin/sh").unwrap();
+        fs::set_permissions(dir.join("d/e/b.sh"), fs::Permissions::from_mode(0o755)).unwrap();
+        symlink("a.txt", dir.join("d/link")).unwrap();
+    }
+
+    fn check_tree(dir: &Path, from: &Path) {
+        assert_eq!(fs::read_to_string(dir.join("d/a.txt")).unwrap(), "hello");
+        let script = dir.join("d/e/b.sh");
+        assert_eq!(fs::read_to_string(&script).unwrap(), "#!/bin/sh");
+        let mode = fs::metadata(&script).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
+        assert_eq!(
+            fs::read_link(dir.join("d/link")).unwrap(),
+            Path::new("a.txt")
+        );
+        assert_eq!(secs(&dir.join("d/a.txt")), secs(&from.join("d/a.txt")));
+    }
+
     #[test]
-    fn copies_a_folder_tree_with_times_and_modes() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
-        fs::create_dir_all(from.path().join("d/e")).unwrap();
-        fs::write(from.path().join("d/a.txt"), "hello").unwrap();
-        fs::write(from.path().join("d/e/b.sh"), "#!/bin/sh").unwrap();
-        let script_file = from.path().join("d/e/b.sh");
-        fs::set_permissions(&script_file, fs::Permissions::from_mode(0o755)).unwrap();
+    fn downloads_a_tree_with_times_modes_and_links() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(from.path());
         let mut script = Script::default();
-        let report = download(
-            vec![remote("dl-tree", &from.path().join("d"))],
+        let report = copy(
+            vec![remote("dl", &from.path().join("d"))],
             Destination::Into(to.path().to_path_buf()),
             &mut script,
         );
         assert_eq!(report.failures, []);
-        assert_eq!(
-            fs::read_to_string(to.path().join("d/a.txt")).unwrap(),
-            "hello"
-        );
-        let copied = to.path().join("d/e/b.sh");
-        assert_eq!(fs::read_to_string(&copied).unwrap(), "#!/bin/sh");
-        let mode = fs::metadata(&copied).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o755);
-        assert_eq!(
-            secs(&to.path().join("d/a.txt")),
-            secs(&from.path().join("d/a.txt"))
-        );
+        check_tree(to.path(), from.path());
         let last = &script.last;
-        assert_eq!((last.files_done, last.files_total), (2, 2));
+        assert_eq!((last.files_done, last.files_total), (3, 3));
         assert_eq!((last.bytes_done, last.bytes_total), (14, 14));
         assert_eq!((last.items_done, last.items_total), (1, 1));
     }
 
     #[test]
-    fn one_file_under_a_new_name() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
-        fs::write(from.path().join("a"), "x").unwrap();
-        let target = to.path().join("new/b");
-        let report = download(
-            vec![remote("dl-as", &from.path().join("a"))],
-            Destination::As(target.clone()),
+    fn uploads_a_tree_into_a_new_folder() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(from.path());
+        let report = copy(
+            vec![from.path().join("d")],
+            Destination::Into(remote("up", &to.path().join("new/sub"))),
             &mut Script::default(),
         );
         assert_eq!(report.failures, []);
-        assert_eq!(fs::read_to_string(target).unwrap(), "x");
+        check_tree(&to.path().join("new/sub"), from.path());
     }
 
     #[test]
-    fn an_existing_file_asks_with_the_remote_size() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
+    fn copies_between_two_remote_folders() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(from.path());
+        let report = copy(
+            vec![remote("r2r", &from.path().join("d"))],
+            Destination::Into(remote("r2r", to.path())),
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        check_tree(to.path(), from.path());
+    }
+
+    #[test]
+    fn a_large_upload_arrives_whole() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let data: Vec<u8> = (0..(5 << 20) + 3).map(|i: u32| (i % 241) as u8).collect();
+        fs::write(from.path().join("big"), &data).unwrap();
+        let report = copy(
+            vec![from.path().join("big")],
+            Destination::As(remote("big", &to.path().join("copy"))),
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(fs::read(to.path().join("copy")).unwrap() == data);
+    }
+
+    #[test]
+    fn an_existing_file_asks_with_the_incoming_size_both_ways() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         fs::write(from.path().join("a"), "new!").unwrap();
         fs::write(to.path().join("a"), "old").unwrap();
-        let source = remote("dl-conflict", &from.path().join("a"));
-        let into = Destination::Into(to.path().to_path_buf());
-        let mut script = Script::answering(&[Answer::Skip]);
-        let report = download(vec![source.clone()], into.clone(), &mut script);
-        assert_eq!(report.skipped, 1);
-        assert_eq!(fs::read_to_string(to.path().join("a")).unwrap(), "old");
-        assert_eq!(script.conflicts[0].source, source);
-        assert_eq!(script.conflicts[0].incoming.unwrap().size, 4);
-        let mut script = Script::answering(&[Answer::Overwrite]);
-        let report = download(vec![source], into, &mut script);
-        assert_eq!(report.failures, []);
-        assert_eq!(fs::read_to_string(to.path().join("a")).unwrap(), "new!");
-        let names: Vec<_> = fs::read_dir(to.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name())
-            .collect();
-        assert_eq!(names, ["a"], "no temp file left");
+        for (source, into) in [
+            (
+                remote("cf", &from.path().join("a")),
+                to.path().to_path_buf(),
+            ),
+            (from.path().join("a"), remote("cf", to.path())),
+        ] {
+            fs::write(to.path().join("a"), "old").unwrap();
+            let into = Destination::Into(into);
+            let mut script = Script::answering(&[Answer::Skip]);
+            let report = copy(vec![source.clone()], into.clone(), &mut script);
+            assert_eq!(report.skipped, 1);
+            assert_eq!(fs::read_to_string(to.path().join("a")).unwrap(), "old");
+            assert_eq!(script.conflicts[0].source, source);
+            assert_eq!(script.conflicts[0].incoming.unwrap().size, 4);
+            let mut script = Script::answering(&[Answer::Overwrite]);
+            let report = copy(vec![source], into, &mut script);
+            assert_eq!(report.failures, []);
+            assert_eq!(fs::read_to_string(to.path().join("a")).unwrap(), "new!");
+            let names: Vec<_> = fs::read_dir(to.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name())
+                .collect();
+            assert_eq!(names, ["a"], "no temp file left");
+        }
     }
 
     #[test]
-    fn missing_sources_and_symlinks_fail_and_the_rest_goes_on() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
+    fn missing_sources_fail_and_the_rest_goes_on() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         fs::write(from.path().join("a"), "x").unwrap();
-        symlink("a", from.path().join("link")).unwrap();
-        let report = download(
+        let report = copy(
             vec![
-                remote("dl-fail", &from.path().join("gone")),
-                remote("dl-fail", &from.path().join("link")),
-                remote("dl-fail", &from.path().join("a")),
+                remote("miss", &from.path().join("gone")),
+                remote("miss", &from.path().join("a")),
+                from.path().join("local"),
             ],
             Destination::Into(to.path().to_path_buf()),
             &mut Script::default(),
@@ -3300,48 +3341,313 @@ mod download {
         let messages: Vec<_> = report.failures.iter().map(|f| f.message.as_str()).collect();
         assert_eq!(
             messages,
-            [
-                "No such file or folder",
-                "symlinks are not copied from a remote folder"
-            ]
+            ["No such file or folder", "all sources must be in one place"]
         );
         assert!(to.path().join("a").exists());
     }
 
     #[test]
-    fn a_cancelled_download_leaves_no_partial_file() {
-        let from = tempfile::tempdir().unwrap();
-        let to = tempfile::tempdir().unwrap();
+    fn a_cancelled_copy_leaves_no_partial_file() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
         fs::write(from.path().join("big"), vec![1; 8 << 20]).unwrap();
-        let mut script = Script {
-            cancel_at_bytes: Some(1),
-            ..Script::default()
-        };
-        let report = download(
-            vec![remote("dl-cancel", &from.path().join("big"))],
-            Destination::Into(to.path().to_path_buf()),
-            &mut script,
-        );
-        assert!(report.cancelled);
-        assert!(!to.path().join("big").exists());
+        for (source, into) in [
+            (
+                remote("cancel", &from.path().join("big")),
+                to.path().to_path_buf(),
+            ),
+            (from.path().join("big"), remote("cancel", to.path())),
+        ] {
+            let mut script = Script {
+                cancel_at_bytes: Some(1),
+                ..Script::default()
+            };
+            let report = copy(vec![source], Destination::Into(into), &mut script);
+            assert!(report.cancelled);
+            assert!(!to.path().join("big").exists());
+        }
     }
 
     #[test]
-    fn sources_not_on_the_first_ones_host_fail() {
-        let to = tempfile::tempdir().unwrap();
-        let into = Destination::Into(to.path().to_path_buf());
-        let bad = vec![PathBuf::from("sftp://-bad/a"), PathBuf::from("/local")];
-        let report = download(bad, into.clone(), &mut Script::default());
-        assert_eq!(report.failures.len(), 2);
-        let mixed = vec![PathBuf::from("sftp://good/a"), PathBuf::from("/local")];
-        let report = download(mixed, into, &mut Script::default());
-        let messages: Vec<_> = report.failures.iter().map(|f| f.message.as_str()).collect();
+    fn moves_down_and_up_delete_each_original_once_copied() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        tree(from.path());
+        let report = run_across(
+            Operation::Move {
+                sources: vec![remote("mv", &from.path().join("d"))],
+                to: Destination::Into(to.path().to_path_buf()),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(!from.path().join("d").exists());
+        assert!(to.path().join("d/e/b.sh").exists());
+        let report = run_across(
+            Operation::Move {
+                sources: vec![to.path().join("d")],
+                to: Destination::Into(remote("mv", from.path())),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(!to.path().join("d").exists());
         assert_eq!(
-            messages,
-            [
-                "No such file or folder",
-                "not a remote file or folder on the same host"
-            ]
+            fs::read_to_string(from.path().join("d/a.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn a_move_on_one_host_renames_and_merges_into_an_existing_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        tree(tmp.path());
+        fs::create_dir_all(tmp.path().join("x/d")).unwrap();
+        fs::write(tmp.path().join("x/d/keep"), "k").unwrap();
+        fs::write(tmp.path().join("f"), "f").unwrap();
+        let report = run_across(
+            Operation::Move {
+                sources: vec![remote("ren", &tmp.path().join("f"))],
+                to: Destination::As(remote("ren", &tmp.path().join("g"))),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert_eq!(fs::read_to_string(tmp.path().join("g")).unwrap(), "f");
+        let report = run_across(
+            Operation::Move {
+                sources: vec![remote("ren", &tmp.path().join("d"))],
+                to: Destination::Into(remote("ren", &tmp.path().join("x"))),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(!tmp.path().join("d").exists());
+        assert!(tmp.path().join("x/d/keep").exists());
+        assert!(tmp.path().join("x/d/e/b.sh").exists());
+    }
+
+    #[test]
+    fn a_move_onto_an_existing_file_on_one_host_asks() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a"), "a").unwrap();
+        fs::write(tmp.path().join("b"), "b").unwrap();
+        let mut script = Script::answering(&[Answer::Overwrite]);
+        let report = run_across(
+            Operation::Move {
+                sources: vec![remote("over", &tmp.path().join("a"))],
+                to: Destination::As(remote("over", &tmp.path().join("b"))),
+            },
+            &mut script,
+        );
+        assert_eq!(report.failures, []);
+        assert_eq!(script.conflicts.len(), 1);
+        assert_eq!(fs::read_to_string(tmp.path().join("b")).unwrap(), "a");
+        assert!(!tmp.path().join("a").exists());
+    }
+
+    #[test]
+    fn nothing_goes_into_itself_or_onto_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        tree(tmp.path());
+        let report = copy(
+            vec![remote("self", &tmp.path().join("d"))],
+            Destination::Into(remote("self", &tmp.path().join("d/e"))),
+            &mut Script::default(),
+        );
+        assert_eq!(
+            report.failures[0].message,
+            "a directory cannot be put inside itself"
+        );
+        let report = copy(
+            vec![remote("self", &tmp.path().join("d/a.txt"))],
+            Destination::Into(remote("self", &tmp.path().join("d"))),
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures[0].message, "source and target are the same");
+    }
+
+    #[test]
+    fn deletes_a_remote_tree_without_following_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("keep"), "k").unwrap();
+        tree(tmp.path());
+        symlink(outside.path(), tmp.path().join("d/out")).unwrap();
+        let mut script = Script::default();
+        let report = run_across(
+            Operation::Delete {
+                sources: vec![remote("del", &tmp.path().join("d"))],
+            },
+            &mut script,
+        );
+        assert_eq!(report.failures, []);
+        assert!(!tmp.path().join("d").exists());
+        assert!(outside.path().join("keep").exists());
+        assert_eq!(script.last.files_done, 4);
+        // Trash on a host deletes as well.
+        fs::write(tmp.path().join("t"), "").unwrap();
+        let report = run_across(
+            Operation::Trash {
+                sources: vec![remote("del", &tmp.path().join("t"))],
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(!tmp.path().join("t").exists());
+    }
+
+    #[test]
+    fn renames_and_makes_on_a_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("a"), "a").unwrap();
+        fs::write(tmp.path().join("b"), "b").unwrap();
+        let at = |name: &str| remote("mk", &tmp.path().join(name));
+        let rename = |from: &str, to: &str| {
+            run_across(
+                Operation::Rename {
+                    from: at(from),
+                    to: at(to),
+                },
+                &mut Script::default(),
+            )
+        };
+        assert_eq!(rename("a", "b").failures[0].message, "“b” exists");
+        assert_eq!(rename("a", "c").failures, []);
+        assert!(tmp.path().join("c").exists());
+        let make = |name: &str, folder: bool| {
+            run_across(
+                Operation::Make {
+                    path: at(name),
+                    folder,
+                },
+                &mut Script::default(),
+            )
+        };
+        assert_eq!(make("dir", true).failures, []);
+        assert!(tmp.path().join("dir").is_dir());
+        assert_eq!(make("dir", true).failures[0].message, "“dir” exists");
+        assert_eq!(make("new.txt", false).failures, []);
+        let mode = fs::metadata(tmp.path().join("new.txt"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o644);
+        assert_eq!(make("b", false).failures, [], "an existing file is kept");
+        assert_eq!(fs::read_to_string(tmp.path().join("b")).unwrap(), "b");
+    }
+
+    #[test]
+    fn a_target_that_is_an_existing_remote_folder_means_into_it() {
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(from.path().join("a"), "a").unwrap();
+        fs::create_dir(to.path().join("dir")).unwrap();
+        let report = copy(
+            vec![from.path().join("a")],
+            Destination::As(remote("as-dir", &to.path().join("dir"))),
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(to.path().join("dir/a").is_file());
+    }
+
+    #[test]
+    fn makes_nested_folders_and_files_on_a_host() {
+        let tmp = tempfile::tempdir().unwrap();
+        let at = |name: &str| remote("nest", &tmp.path().join(name));
+        let report = run_across(
+            Operation::Make {
+                path: at("a/b/c"),
+                folder: true,
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(tmp.path().join("a/b/c").is_dir());
+        let report = run_across(
+            Operation::Make {
+                path: at("x/y/new.txt"),
+                folder: false,
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures, []);
+        assert!(tmp.path().join("x/y/new.txt").is_file());
+        let report = run_across(
+            Operation::Make {
+                path: at("a"),
+                folder: false,
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(
+            report.failures[0].message, "“a” exists",
+            "a folder for a file"
+        );
+    }
+
+    #[test]
+    fn an_edited_file_is_uploaded_only_while_unchanged() {
+        use crate::file_ops::{Uploaded, remote_stamp, upload_edit};
+        use_local_server();
+        let (here, there) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let target = there.path().join("conf");
+        fs::write(&target, "v1").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        let remote_file = remote("edit", &target);
+        let stamp = remote_stamp(&remote_file).unwrap();
+        assert_eq!(stamp.size, 2);
+        let local = here.path().join("conf");
+        fs::write(&local, "version 2").unwrap();
+        let Uploaded::Done(after) = upload_edit(&local, &remote_file, Some(stamp)).unwrap() else {
+            panic!("uploaded");
+        };
+        assert_eq!(fs::read_to_string(&target).unwrap(), "version 2");
+        assert_eq!(after.size, 9);
+        let mode = fs::metadata(&target).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o640, "the remote mode is kept");
+        assert_eq!(
+            fs::read_dir(there.path()).unwrap().count(),
+            1,
+            "no temp file left"
+        );
+        // Changed on the host since: left alone.
+        fs::write(&target, "someone else").unwrap();
+        fs::write(&local, "version 3").unwrap();
+        assert_eq!(
+            upload_edit(&local, &remote_file, Some(after)).unwrap(),
+            Uploaded::Changed
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "someone else");
+        // Overwrite anyway.
+        assert!(matches!(
+            upload_edit(&local, &remote_file, None).unwrap(),
+            Uploaded::Done(_)
+        ));
+        assert_eq!(fs::read_to_string(&target).unwrap(), "version 3");
+        fs::remove_file(&target).unwrap();
+        assert_eq!(
+            upload_edit(&local, &remote_file, Some(after)).unwrap(),
+            Uploaded::Changed,
+            "gone on the host"
+        );
+    }
+
+    #[test]
+    fn a_host_that_cannot_be_reached_fails_every_source() {
+        let to = tempfile::tempdir().unwrap();
+        let report = run_across(
+            Operation::Copy {
+                sources: vec![
+                    PathBuf::from("sftp://-bad/a"),
+                    PathBuf::from("sftp://-bad/b"),
+                ],
+                to: Destination::Into(to.path().to_path_buf()),
+            },
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures.len(), 2);
+        assert_eq!(
+            report.failures[0].message,
+            "not a remote folder: sftp://-bad/a"
         );
     }
 }

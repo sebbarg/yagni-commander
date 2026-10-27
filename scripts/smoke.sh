@@ -55,6 +55,19 @@ for kind in editor viewer; do
         "${kind^}" "$kind" >"$work/data/applications/smoke-$kind.desktop"
 done
 printf '[Default Applications]\ntext/plain=smoke-editor.desktop\n' >"$work/config/mimeapps.list"
+# A stand-in ssh for remote folders: OpenSSH's sftp-server over the pipes,
+# in the folder that becomes the login folder (no sshd, no network).
+remote=$work/remote
+mkdir -p "$remote"
+printf fetched >"$remote/fetch.txt"
+printf before >"$remote/edit-me.txt"
+sftp_server=
+for candidate in /usr/lib/openssh/sftp-server /usr/libexec/sftp-server; do
+    [[ -x $candidate ]] && { sftp_server=$candidate; break; }
+done
+[[ -n $sftp_server ]] || { echo "smoke: sftp-server is not installed (openssh-sftp-server)" >&2; exit 2; }
+printf '#!/bin/sh\ncd "%s" && exec "%s"\n' "$remote" "$sftp_server" >"$work/bin/ssh"
+chmod +x "$work/bin/ssh"
 # An old log file that startup must delete.
 logs=$work/state/yagni-commander/logs
 mkdir -p "$logs"
@@ -713,6 +726,37 @@ keys Escape
 check "zoomed viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
 xdotool windowfocus "$window"
 sleep 0.5
+
+echo "remote folder: Ctrl-F, F7, F5 down, F4 with an upload, F8 (in a throwaway tab)"
+keys ctrl+t ctrl+f
+shot 13a-connect
+typed smokehost
+keys Return
+check "connected to the login folder" title_is "sftp://smokehost$remote"
+shot 13b-remote
+keys F7
+typed made-remotely
+keys Return
+check "F7 made a folder on the host" test -d "$remote/made-remotely"
+typed fetch
+keys Escape F5 Return
+check "F5 fetched a remote file" bash -c "find '$work' -name fetch.txt -not -path '$remote/*' | grep -q ."
+typed edit-me
+keys Escape F4
+check "F4 opened the editor on a local copy" bash -c "tail -1 '$work/edited' | grep -q '/edit-me.txt\$'"
+copy=$(tail -1 "$work/edited")
+printf changed >"$copy"
+touch -d '+2 seconds' "$copy"
+check "the save went up to the host" has "$remote/edit-me.txt" changed
+typed made
+keys Escape F8
+shot 13c-remote-delete
+keys Return
+check "F8 deleted on the host" test ! -e "$remote/made-remotely"
+keys ctrl+w
+# The new tab was the last one: back to the tab that was in front.
+for _ in 1 2; do title_is "$left" && break; keys ctrl+Tab; done
+check "the first tab in front again" title_is "$left"
 
 echo "quit (with the right panel active)"
 keys Tab

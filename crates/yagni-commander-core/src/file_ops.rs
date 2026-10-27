@@ -25,12 +25,15 @@ use crate::oplog::OperationLog;
 
 mod archive_names;
 mod compare;
-mod download;
+mod cross;
+mod edit;
 pub(crate) mod extract;
 mod pack;
 mod safe_dir;
+mod vfs;
 pub use archive_names::{Format, is_archive};
 pub use compare::{Comparison, Difference};
+pub use edit::{RemoteStamp, Uploaded, remote_stamp, upload_edit};
 
 /// Bytes copied between progress reports and cancel checks.
 const CHUNK: u64 = 4 << 20;
@@ -79,12 +82,12 @@ pub enum Operation {
     /// Compares two files byte for byte, or two folders by names, types
     /// and contents. Reads only and logs nothing.
     Compare { first: PathBuf, second: PathBuf },
-    /// Copies remote entries (`sftp://host/...`, all on one host) to a
-    /// local `to` (F5 from a remote panel; F3 into a temp folder).
-    Download {
-        sources: Vec<PathBuf>,
-        to: Destination,
-    },
+    /// F2 on a remote folder: renames `from` to `to` on its host, never
+    /// over an existing entry. (A local rename is the commander's.)
+    Rename { from: PathBuf, to: PathBuf },
+    /// F7 (`folder`) or Shift-F4 on a remote folder: makes `path` (an
+    /// existing file is kept for Shift-F4).
+    Make { path: PathBuf, folder: bool },
 }
 
 /// Where copied or moved entries go. Missing folders on the way are created.
@@ -287,7 +290,14 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             ("extract", std::slice::from_ref(archive), Some(to.path()))
         }
         // Reads only: no engine, nothing logged.
-        Operation::Download { sources, to } => ("download", sources, Some(to.path())),
+        Operation::Rename { from, to } => {
+            ("rename", std::slice::from_ref(from), Some(to.as_path()))
+        }
+        Operation::Make { path, folder } => (
+            if *folder { "mkdir" } else { "create" },
+            std::slice::from_ref(path),
+            None,
+        ),
         Operation::Compare { first, second } => {
             let (comparison, cancelled) = compare::run(first, second, observer);
             return Report {
@@ -324,6 +334,16 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         engine.note(format_args!("source {}", source.display()));
     }
     match operation {
+        Operation::Copy { sources, to } if across(sources, Some(to)) => {
+            engine.transfer_across(sources, to, false)
+        }
+        Operation::Move { sources, to } if across(sources, Some(to)) => {
+            engine.transfer_across(sources, to, true)
+        }
+        // No trash on a host: the UI asks as for a permanent delete.
+        Operation::Trash { sources } | Operation::Delete { sources } if across(sources, None) => {
+            engine.delete_across(sources)
+        }
         Operation::Copy { sources, to } => engine.transfer(sources, to, false),
         Operation::Move { sources, to } => engine.transfer(sources, to, true),
         Operation::Trash { sources } => engine.trash(sources, settings.trash),
@@ -336,7 +356,8 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             names,
             to,
         } => engine.extract_entries(archive, inner, names, to),
-        Operation::Download { sources, to } => engine.download(sources, to),
+        Operation::Rename { from, to } => engine.rename_remote(from, to),
+        Operation::Make { path, folder } => engine.make_remote(path, *folder),
         Operation::Compare { .. } => unreachable!("returned above"),
     }
     let report = &engine.report;
@@ -351,6 +372,13 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         report.skipped
     ));
     engine.report
+}
+
+/// Whether an operation on `sources` (to `to`) has a remote end, so it
+/// runs on [`vfs`] file systems instead of the local engine.
+fn across(sources: &[PathBuf], to: Option<&Destination>) -> bool {
+    sources.iter().any(|s| crate::remote::is_remote(s))
+        || to.is_some_and(|to| crate::remote::is_remote(to.path()))
 }
 
 /// `path` with symlinks resolved as far as it exists; the missing rest is

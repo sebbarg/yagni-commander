@@ -813,6 +813,10 @@ impl Commander {
         if panel.in_results() {
             return Err(io::Error::other(crate::find::IN_RESULTS));
         }
+        // These write locally; a remote folder's run as file operations.
+        if panel.is_remote() {
+            return Err(io::Error::other(crate::remote::ON_REMOTE));
+        }
         Ok(())
     }
 
@@ -871,6 +875,12 @@ impl Commander {
         let new = result?;
         self.refresh_after_change(&new.first);
         Ok(new.path)
+    }
+
+    /// After a file operation that made `select` in the active panel
+    /// (F2, F7 on a remote folder): re-reads it with the cursor there.
+    pub fn reload_selecting(&mut self, select: &OsStr) {
+        self.refresh_after_change(select);
     }
 
     /// Re-reads the active panel with the cursor on `select`, and the other

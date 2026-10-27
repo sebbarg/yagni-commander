@@ -12,7 +12,10 @@ use gpui_kit::{
     App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
     SharedString, Styled, Window,
 };
-use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch, update};
+use yagni_commander_core::file_ops::{Operation, RemoteStamp};
+use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch, remote, update};
+
+use super::file_ops::Kind;
 
 use super::FileManager;
 use crate::button_row::{ButtonRow, OnPress};
@@ -90,6 +93,12 @@ impl FileManager {
         true
     }
 
+    /// Inside an archive, a writing command that also works on a remote
+    /// folder shows why it can't run. Returns true when refused.
+    pub(super) fn refuse_in_archive(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.active_panel(cx).in_archive() && self.refuse_read_only(window, cx)
+    }
+
     /// In search results, a command that makes a name shows why it can't
     /// run (a name there is a relative path). Returns true when refused.
     pub(super) fn refuse_in_results(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -111,7 +120,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_read_only(window, cx) {
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -134,7 +143,18 @@ impl FileManager {
                 selection: stem,
                 width: PROMPT_WIDTH,
             },
-            Rc::new(move |this, to, _, cx| {
+            Rc::new(move |this, to, window, cx| {
+                if remote::is_remote(&dir) {
+                    remote::check_name(to)?;
+                    if from == std::ffi::OsStr::new(to) {
+                        return Ok(());
+                    }
+                    let operation = Operation::Rename {
+                        from: dir.join(&from),
+                        to: dir.join(to),
+                    };
+                    return this.start_remote_job(Kind::Rename, operation, to.into(), window, cx);
+                }
                 this.commander.update(cx, |commander, cx| {
                     let result = commander
                         .check_dir(&dir)
@@ -153,7 +173,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_read_only(window, cx) {
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -169,7 +189,16 @@ impl FileManager {
                 selection: 0..0,
                 width: PROMPT_WIDTH,
             },
-            Rc::new(move |this, name, _, cx| {
+            Rc::new(move |this, name, window, cx| {
+                if remote::is_remote(&dir) {
+                    remote::check_relative(name)?;
+                    let operation = Operation::Make {
+                        path: dir.join(name),
+                        folder: true,
+                    };
+                    let first = name.split('/').next().unwrap_or(name);
+                    return this.start_remote_job(Kind::Make, operation, first.into(), window, cx);
+                }
                 this.commander.update(cx, |commander, cx| {
                     let result = commander
                         .check_dir(&dir)
@@ -223,10 +252,22 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_read_only(window, cx) {
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         self.end_search(cx);
+        let panel = self.active_panel(cx);
+        if panel.is_remote() {
+            let stamp = panel.cursor_entry().map(|e| RemoteStamp {
+                size: e.size.unwrap_or(0),
+                mtime: e
+                    .modified
+                    .and_then(crate::file_manager::remote_edit::seconds),
+            });
+            let path = panel.cursor_path();
+            self.edit_remote(path, stamp, window, cx);
+            return;
+        }
         let Some(editor) = configured_editor(None, window, cx) else {
             return;
         };
@@ -341,7 +382,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_read_only(window, cx) {
+        if self.refuse_in_archive(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -360,7 +401,21 @@ impl FileManager {
                 selection: 0..0,
                 width: PROMPT_WIDTH,
             },
-            Rc::new(move |this, name, _, cx| {
+            Rc::new(move |this, name, window, cx| {
+                if remote::is_remote(&dir) {
+                    remote::check_relative(name)?;
+                    let path = dir.join(name);
+                    let operation = Operation::Make {
+                        path: path.clone(),
+                        folder: false,
+                    };
+                    let first = name.split('/').next().unwrap_or(name);
+                    this.start_remote_job(Kind::Make, operation, first.into(), window, cx)?;
+                    if let Some(running) = &mut this.job {
+                        running.then_edit = Some(path);
+                    }
+                    return Ok(());
+                }
                 let path = this.commander.update(cx, |commander, cx| {
                     let result = commander
                         .check_dir(&dir)

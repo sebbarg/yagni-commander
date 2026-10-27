@@ -46,7 +46,7 @@ const POLLS_BEFORE_PROGRESS: u32 = 6;
 const MAX_LISTED_FAILURES: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     Copy,
     Move,
     Trash,
@@ -54,8 +54,15 @@ pub(super) enum Kind {
     Pack,
     Extract,
     Compare,
-    /// F3 inside an archive: a private copy for the viewer.
+    /// F3 inside an archive or on a remote folder: a private copy for the
+    /// viewer.
     View,
+    /// F2 on a remote folder.
+    Rename,
+    /// F7 or Shift-F4 on a remote folder.
+    Make,
+    /// F4 on a remote folder: a private copy for the editor.
+    Edit,
 }
 
 impl Kind {
@@ -69,6 +76,9 @@ impl Kind {
             Kind::Extract => "Extract",
             Kind::Compare => "Compare",
             Kind::View => "View",
+            Kind::Rename => "Rename",
+            Kind::Make => "Create",
+            Kind::Edit => "Edit",
         }
     }
 
@@ -81,7 +91,9 @@ impl Kind {
             Kind::Pack => "Packing",
             Kind::Extract => "Extracting",
             Kind::Compare => "Comparing",
-            Kind::View => "Extracting",
+            Kind::View | Kind::Edit => "Copying",
+            Kind::Rename => "Renaming",
+            Kind::Make => "Creating",
         }
     }
 }
@@ -94,9 +106,9 @@ struct FromArchive {
 }
 
 /// The job in progress and its dialog.
-pub(super) struct RunningJob {
+pub(crate) struct RunningJob {
     job: Job,
-    kind: Kind,
+    pub(super) kind: Kind,
     /// The tab the sources came from.
     source: PanelId,
     /// The folder the sources came from.
@@ -108,6 +120,12 @@ pub(super) struct RunningJob {
     compare: Option<ComparePair>,
     /// F3 inside an archive: where the copy goes.
     viewing: Option<Viewing>,
+    /// The entry to put the cursor on once the panel is re-read (F2, F7).
+    pub(super) select: Option<std::ffi::OsString>,
+    /// F4 on a remote folder: the file being fetched for the editor.
+    pub(super) editing: Option<super::remote_edit::Fetching>,
+    /// Shift-F4 on a remote folder: the file to edit once it exists.
+    pub(super) then_edit: Option<PathBuf>,
 }
 
 /// A private copy of an archive entry for the viewer. Dropping it (Cancel,
@@ -135,7 +153,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if kind == Kind::Move && self.refuse_read_only(window, cx) {
+        if kind == Kind::Move && self.refuse_in_archive(window, cx) {
             return;
         }
         // The destination is the other panel's folder: wait for it too.
@@ -144,7 +162,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (sources, dir, home, other_dir, one_is_dir, from_archive, from_remote) = {
+        let (sources, dir, home, other_dir, one_is_dir, from_archive) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
@@ -164,7 +182,6 @@ impl FileManager {
                 other.path().to_path_buf(),
                 one_is_dir,
                 from_archive,
-                panel.is_remote(),
             )
         };
         if sources.is_empty() || self.refuse_second_job(window, cx) {
@@ -203,7 +220,6 @@ impl FileManager {
                         names: from.names.clone(),
                         to,
                     },
-                    (None, Kind::Copy) if from_remote => Operation::Download { sources, to },
                     (None, Kind::Copy) => Operation::Copy { sources, to },
                     (None, _) => Operation::Move { sources, to },
                 };
@@ -438,7 +454,7 @@ impl FileManager {
             let entry = panel.cursor_entry().expect("view_file checked");
             (panel.cursor_path(), entry.name.clone())
         };
-        self.view_copy(&name, window, cx, |file| Operation::Download {
+        self.view_copy(&name, window, cx, |file| Operation::Copy {
             sources: vec![source],
             to: Destination::As(file),
         })
@@ -474,9 +490,15 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_read_only(window, cx) {
+        if self.refuse_in_archive(window, cx) {
             return;
         }
+        // No trash on a host: F8 there deletes, and asks as Shift-F8 does.
+        let kind = if self.active_panel(cx).is_remote() {
+            Kind::Delete
+        } else {
+            kind
+        };
         self.end_search(cx);
         let sources = {
             let commander = self.commander.read(cx);
@@ -546,7 +568,7 @@ impl FileManager {
         });
     }
 
-    fn refuse_second_job(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(super) fn refuse_second_job(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.job.is_none() {
             return false;
         }
@@ -560,7 +582,7 @@ impl FileManager {
         true
     }
 
-    fn start_job(
+    pub(super) fn start_job(
         &mut self,
         kind: Kind,
         operation: Operation,
@@ -590,6 +612,9 @@ impl FileManager {
             progress_open: false,
             compare: None,
             viewing: None,
+            select: None,
+            editing: None,
+            then_edit: None,
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -939,6 +964,10 @@ impl FileManager {
         if running.progress_open {
             window.close_dialog(cx);
         }
+        if running.kind == Kind::Edit {
+            self.fetched_for_edit(running, report, window, cx);
+            return;
+        }
         if running.kind == Kind::View {
             // Reads only: no reload, the selection stays.
             if !report.failures.is_empty() {
@@ -991,7 +1020,15 @@ impl FileManager {
                 commander.clear_selection(running.source, &running.source_dir)
             });
         }
-        self.execute(Command::Reload, cx);
+        match &running.select {
+            Some(name) if report.failures.is_empty() => {
+                self.commander.update(cx, |commander, cx| {
+                    commander.reload_selecting(name);
+                    cx.notify();
+                });
+            }
+            _ => self.execute(Command::Reload, cx),
+        }
         let left_out = left_out_summary(&report);
         if !report.failures.is_empty() {
             let title = match running.kind {
@@ -1001,7 +1038,9 @@ impl FileManager {
                 Kind::Delete => "Some entries were not deleted",
                 Kind::Pack => "Some entries were not packed",
                 Kind::Extract => "Some entries were not extracted",
-                Kind::Compare | Kind::View => unreachable!("reported above"),
+                Kind::Rename => "Rename failed",
+                Kind::Make => "Cannot create",
+                Kind::Compare | Kind::View | Kind::Edit => unreachable!("reported above"),
             };
             let mut text = failure_summary(&report);
             if let Some(left_out) = &left_out {
@@ -1013,6 +1052,9 @@ impl FileManager {
                 text.push_str(left_out);
             }
             show_error(title, text, None, window, cx);
+        } else if let Some(path) = running.then_edit {
+            // Shift-F4 on a remote folder: the file exists now.
+            self.edit_remote(path, None, window, cx);
         } else if let Some(text) = left_out {
             show_message("Links left out", text, "OK", None, window, cx);
         }
@@ -1221,6 +1263,9 @@ fn zip_path(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
         return Err(invalid("give a name for the archive".into()));
     }
     let mut path = typed_path(dir, home, typed)?;
+    if remote::is_remote(&path) {
+        return Err(invalid("Can't pack to a remote folder".into()));
+    }
     if inside_archive(&path) {
         return Err(invalid("Can't pack into an archive".into()));
     }
@@ -1346,21 +1391,22 @@ fn extract_title(archives: &[PathBuf]) -> String {
 }
 
 /// A path typed into the F5/F6/Alt-F5/Alt-F6 prompts: `~` and `~/...` in
-/// `home`, like a shell (never a folder named `~`), else relative to `dir`
-/// (`home` when `dir` is remote). Always local: a remote destination is
-/// refused, since nothing writes to a remote folder yet.
+/// `home`, like a shell (never a folder named `~`), a remote path as typed
+/// (never joined to `dir`, where it would look local), else relative to
+/// `dir` (a remote panel's folder too).
 fn typed_path(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
-    // Before any join: joined to a local folder it would look local.
     if remote::is_remote(Path::new(typed)) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Nothing can be written to a remote folder yet",
-        ));
+        return match remote::parse(Path::new(typed)) {
+            Some(location) if !location.path.is_empty() => Ok(PathBuf::from(typed)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "A remote destination is sftp://host/path",
+            )),
+        };
     }
     Ok(match typed.strip_prefix('~') {
         Some("") => home.to_path_buf(),
         Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
-        _ if remote::is_remote(dir) => home.join(typed),
         _ => dir.join(typed),
     })
 }
@@ -1373,6 +1419,9 @@ fn extract_folder(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
         return Err(invalid("give a folder".into()));
     }
     let into = typed_path(dir, home, typed)?;
+    if remote::is_remote(&into) {
+        return Err(invalid("Can't extract to a remote folder".into()));
+    }
     if is_or_inside_archive(&into) {
         return Err(invalid("Can't extract into an archive".into()));
     }

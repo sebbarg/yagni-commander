@@ -11,7 +11,7 @@ fn invalid(message: impl Into<String>) -> io::Error {
 }
 
 /// Checks a single path component typed by the user.
-fn validate_name(name: &str) -> io::Result<()> {
+pub(crate) fn validate_name(name: &str) -> io::Result<()> {
     if name.is_empty() {
         return Err(invalid("the name is empty"));
     }
@@ -81,7 +81,7 @@ pub(crate) fn rename(dir: &Path, from: &OsStr, to: &str) -> io::Result<()> {
 
 /// Checks a `/`-separated path typed by the user (F7, Shift-F4): relative,
 /// and every part a valid name, so nothing lands outside the directory.
-fn validate_relative(relative: &str) -> io::Result<()> {
+pub(crate) fn validate_relative(relative: &str) -> io::Result<()> {
     if relative.is_empty() {
         return Err(invalid("the name is empty"));
     }

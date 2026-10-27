@@ -31,8 +31,7 @@ use crate::sftp::{Attrs, Client, Name};
 pub const SCHEME: &str = "sftp://";
 
 /// Why a command that writes refuses on a remote panel.
-pub const ON_REMOTE: &str =
-    "A remote folder can only be viewed (F3) and copied from (F5) in this version.";
+pub const ON_REMOTE: &str = "Not available on a remote folder.";
 
 /// The last bytes of ssh's error output kept for a failure message.
 const STDERR_KEPT: usize = 4096;
@@ -109,6 +108,17 @@ fn trim_end_slashes(mut path: &[u8]) -> &[u8] {
 /// A name a server may give for an entry: one plain component.
 pub(crate) fn valid_name(name: &[u8]) -> bool {
     !name.is_empty() && name != b"." && name != b".." && !name.contains(&b'/') && !name.contains(&0)
+}
+
+/// F2 on a remote folder: `name` must be one plain name, as locally.
+pub fn check_name(name: &str) -> io::Result<()> {
+    crate::fs_ops::validate_name(name)
+}
+
+/// F7 and Shift-F4 on a remote folder: a relative path of plain names
+/// (`a/b`), as locally.
+pub fn check_relative(path: &str) -> io::Result<()> {
+    crate::fs_ops::validate_relative(path)
 }
 
 /// `name` inside remote folder `dir`.
@@ -316,8 +326,14 @@ fn keep_stderr(
 type Sessions = Mutex<HashMap<String, Arc<Mutex<Option<Session>>>>>;
 static SESSIONS: std::sync::LazyLock<Sessions> = std::sync::LazyLock::new(Sessions::default);
 
+/// How long a read waits for the shared session before it takes one of its
+/// own: the one in use may be stuck on a dead connection (ssh gives up on
+/// it after about 45 s).
+const BUSY_WAIT: Duration = Duration::from_secs(2);
+
 /// Runs `f` on the shared session with `host`, connecting first if there is
-/// none. Uses of one host wait for each other; other hosts don't.
+/// none. Uses of one host wait for each other, up to [`BUSY_WAIT`]; other
+/// hosts don't.
 pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>) -> io::Result<T> {
     let slot = SESSIONS
         .lock()
@@ -325,7 +341,20 @@ pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>)
         .entry(host.to_owned())
         .or_default()
         .clone();
-    let mut slot = slot.lock().unwrap_or_else(PoisonError::into_inner);
+    let started = std::time::Instant::now();
+    let mut slot = loop {
+        match slot.try_lock() {
+            Ok(slot) => break slot,
+            Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) if started.elapsed() >= BUSY_WAIT => {
+                let mut own = connect(host)?;
+                return f(&mut own.client).map_err(|e| own.explain(e));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
     if slot.is_none() {
         *slot = Some(connect(host)?);
     }
@@ -373,16 +402,18 @@ pub(crate) fn read_listing(
                 names.push(name);
             }
         })?;
-        // A symlink shows as what it points to, like a local one.
-        let mut targets = HashMap::new();
-        for name in names.iter().filter(|n| n.attrs.is_symlink()) {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(io::ErrorKind::Interrupted.into());
-            }
-            if let Ok(target) = client.stat(&join(&dir, &name.name)) {
-                targets.insert(name.name.clone(), target);
-            }
+        if cancel.load(Ordering::Relaxed) {
+            return Err(io::ErrorKind::Interrupted.into());
         }
+        // A symlink shows as what it points to, like a local one: all of
+        // them asked at once, not one round trip each.
+        let links: Vec<&Name> = names.iter().filter(|n| n.attrs.is_symlink()).collect();
+        let paths: Vec<Vec<u8>> = links.iter().map(|n| join(&dir, &n.name)).collect();
+        let targets: HashMap<Vec<u8>, Attrs> = links
+            .iter()
+            .zip(client.stat_many(&paths)?)
+            .filter_map(|(name, target)| Some((name.name.clone(), target.ok()?)))
+            .collect();
         Ok((dir, names, targets))
     })?;
     let mut owners = HashMap::new();
@@ -657,6 +688,32 @@ pub(crate) mod tests {
         let err = connect_with("box", command).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
         assert!(err.to_string().contains("login shell on box"), "{err}");
+    }
+
+    #[test]
+    fn a_busy_session_is_not_waited_for_long() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = remote("busy", tmp.path());
+        let none = AtomicBool::new(false);
+        read_listing(&path, &AtomicUsize::new(0), &none).unwrap();
+        // Hold the shared session as a stuck read would.
+        let (held, release) = std::sync::mpsc::channel::<()>();
+        let (started, running) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            with_session("busy", |_| {
+                started.send(()).unwrap();
+                let _ = release.recv();
+                Ok(())
+            })
+        });
+        running.recv().unwrap();
+        let begun = std::time::Instant::now();
+        let listing = read_listing(&path, &AtomicUsize::new(0), &none).unwrap();
+        assert_eq!(listing.path, path);
+        assert!(begun.elapsed() < BUSY_WAIT * 3);
+        held.send(()).unwrap();
+        holder.join().unwrap().unwrap();
     }
 
     #[test]

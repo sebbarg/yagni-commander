@@ -21,6 +21,7 @@ mod find;
 mod loads;
 mod open_with;
 mod properties;
+pub(crate) mod remote_edit;
 mod watch;
 
 use crate::actions::{
@@ -159,6 +160,10 @@ pub struct FileManager {
     /// The open hotlist Configure dialog's view.
     pub(crate) hotlist_dialog: Option<Entity<crate::hotlist_dialog::HotlistDialog>>,
     pub(crate) connect_dialog: Option<Entity<crate::connect_dialog::ConnectDialog>>,
+    /// Remote files open in the editor, uploaded on each save.
+    pub(crate) edited: Vec<remote_edit::Edited>,
+    /// The watch over `edited` is running.
+    edit_watch: bool,
     /// The home folder whose `.ssh/config` the Connect dialog reads; `None`
     /// is the commander's home. App tests point it at a temporary folder.
     pub(crate) ssh_home: Option<PathBuf>,
@@ -298,6 +303,8 @@ impl FileManager {
             next_lookup: 0,
             hotlist_dialog: None,
             connect_dialog: None,
+            edited: Vec::new(),
+            edit_watch: false,
             ssh_home: None,
             menu_state: None,
             alt_armed: false,

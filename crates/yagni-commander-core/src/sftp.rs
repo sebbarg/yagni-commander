@@ -1,26 +1,34 @@
 //! A blocking SFTP client (protocol version 3, the one OpenSSH speaks) over
 //! any byte stream: in the app the standard input and output of
 //! `ssh -s host sftp` (see [`crate::remote`]), in tests a local
-//! `sftp-server`. One request at a time, except [`Client::download`], which
-//! keeps several reads in flight.
+//! `sftp-server`. One request at a time, except [`Client::download`] and
+//! [`Upload`], which keep several reads or writes in flight.
 //!
 //! Paths are bytes, as on the wire: a remote name need not be UTF-8.
 
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::FileExt;
 
 const FXP_INIT: u8 = 1;
 const FXP_VERSION: u8 = 2;
 const FXP_OPEN: u8 = 3;
 const FXP_CLOSE: u8 = 4;
 const FXP_READ: u8 = 5;
+const FXP_WRITE: u8 = 6;
 const FXP_LSTAT: u8 = 7;
+const FXP_FSETSTAT: u8 = 10;
+const FXP_SETSTAT: u8 = 9;
 const FXP_OPENDIR: u8 = 11;
 const FXP_READDIR: u8 = 12;
+const FXP_REMOVE: u8 = 13;
+const FXP_MKDIR: u8 = 14;
+const FXP_RMDIR: u8 = 15;
 const FXP_REALPATH: u8 = 16;
 const FXP_STAT: u8 = 17;
+const FXP_RENAME: u8 = 18;
+const FXP_READLINK: u8 = 19;
+const FXP_SYMLINK: u8 = 20;
+const FXP_EXTENDED: u8 = 200;
 const FXP_STATUS: u8 = 101;
 const FXP_HANDLE: u8 = 102;
 const FXP_DATA: u8 = 103;
@@ -38,13 +46,21 @@ const ATTR_ACMODTIME: u32 = 0x8;
 const ATTR_EXTENDED: u32 = 0x8000_0000;
 
 const OPEN_READ: u32 = 0x1;
+const OPEN_WRITE: u32 = 0x2;
+const OPEN_CREATE: u32 = 0x8;
+const OPEN_TRUNCATE: u32 = 0x10;
+const OPEN_EXCLUSIVE: u32 = 0x20;
+
+/// OpenSSH's rename that replaces an existing target, atomically.
+const POSIX_RENAME: &str = "posix-rename@openssh.com";
 
 /// Larger packets are refused: OpenSSH sends at most 256 KiB, so anything
 /// much bigger is a broken or hostile server.
 const MAX_PACKET: u32 = 1 << 20;
-/// Bytes asked for by each read of a download. OpenSSH's own client uses
-/// 32 KiB; every server must accept it.
+/// Bytes asked for by each read of a download, and sent by each write of
+/// an upload. OpenSSH's own client uses 32 KiB; every server must accept it.
 const READ_SIZE: u32 = 32 * 1024;
+pub const WRITE_SIZE: usize = 32 * 1024;
 /// Reads of a download in flight at once (1 MiB), so a long round trip
 /// doesn't stall the transfer.
 const IN_FLIGHT: usize = 32;
@@ -98,6 +114,8 @@ pub struct Client {
     /// Set once the stream failed or went out of step: nothing more can be
     /// sent on it.
     broken: bool,
+    /// The server offers [`POSIX_RENAME`].
+    posix_rename: bool,
 }
 
 impl std::fmt::Debug for Client {
@@ -117,6 +135,7 @@ impl Client {
             writer,
             next_id: 0,
             broken: false,
+            posix_rename: false,
         };
         let mut init = Packet::new(FXP_INIT);
         init.u32(3);
@@ -132,6 +151,10 @@ impl Client {
             return Err(protocol(&format!(
                 "the server speaks SFTP version {version}, version 3 is needed"
             )));
+        }
+        // Extensions: name and version pairs to the end.
+        while let (Ok(name), Ok(_)) = (body.bytes(), body.bytes()) {
+            client.posix_rename |= name == POSIX_RENAME.as_bytes();
         }
         Ok(client)
     }
@@ -214,15 +237,15 @@ impl Client {
         self.request(FXP_CLOSE, |p| p.bytes(&handle.0))?.expect_ok()
     }
 
-    /// Copies the open file into `out` from its start, with several reads
-    /// in flight. `progress` gets the bytes of each piece written and
-    /// returns false to stop: then the result is `Ok(false)`, and `out`
-    /// holds part of the file.
+    /// Reads the open file from its start, with several reads in flight,
+    /// handing each piece to `sink` with its offset (pieces may arrive out
+    /// of order). `sink` returns false to stop: the result is then
+    /// `Ok(false)`. Every reply is read before this returns, so the session
+    /// stays in step after a failure or a stop.
     pub fn download(
         &mut self,
         handle: &Handle,
-        out: &File,
-        mut progress: impl FnMut(u64) -> bool,
+        mut sink: impl FnMut(u64, &[u8]) -> io::Result<bool>,
     ) -> io::Result<bool> {
         // Reads in flight, by request id: offset and length asked for.
         let mut pending: HashMap<u32, (u64, u32)> = HashMap::new();
@@ -244,8 +267,6 @@ impl Client {
             if pending.is_empty() {
                 break;
             }
-            // Every reply is read, even after a failure or a stop, so none
-            // is left on the stream for the next request.
             let (id, reply) = self.receive_reply()?;
             let Some((offset, asked)) = pending.remove(&id) else {
                 self.broken = true;
@@ -269,10 +290,6 @@ impl Client {
                 at_end = true;
                 continue;
             }
-            if let Err(e) = out.write_all_at(&data, offset) {
-                failure = Some(e);
-                continue;
-            }
             let got = data.len() as u32;
             if got < asked {
                 // A short read: ask again for the rest of the piece.
@@ -284,14 +301,181 @@ impl Client {
                 })?;
                 pending.insert(id, (rest, asked - got));
             }
-            if !progress(u64::from(got)) {
-                stopped = true;
+            match sink(offset, &data) {
+                Ok(true) => {}
+                Ok(false) => stopped = true,
+                Err(e) => failure = Some(e),
             }
         }
         match failure {
             Some(e) => Err(e),
             None => Ok(!stopped),
         }
+    }
+
+    /// Opens file `path` for writing with permissions `mode` if it is
+    /// created: a new file (`exclusive`; `AlreadyExists`-like failure if
+    /// it exists, see [`Client::exists_error`]) or one emptied first.
+    pub fn open_write(&mut self, path: &[u8], mode: u32, exclusive: bool) -> io::Result<Handle> {
+        let flags = OPEN_WRITE
+            | OPEN_CREATE
+            | if exclusive {
+                OPEN_EXCLUSIVE
+            } else {
+                OPEN_TRUNCATE
+            };
+        let mut body = self
+            .request(FXP_OPEN, |p| {
+                p.bytes(path);
+                p.u32(flags);
+                p.attrs(&Attrs {
+                    permissions: Some(mode),
+                    ..Attrs::default()
+                });
+            })?
+            .expect(FXP_HANDLE)?;
+        Ok(Handle(body.bytes()?))
+    }
+
+    /// Sets the modification (and access) time and the permissions of an
+    /// open file, those given.
+    pub fn fsetstat(
+        &mut self,
+        handle: &Handle,
+        mtime: Option<u32>,
+        mode: Option<u32>,
+    ) -> io::Result<()> {
+        let attrs = Attrs {
+            mtime,
+            permissions: mode,
+            ..Attrs::default()
+        };
+        self.request(FXP_FSETSTAT, |p| {
+            p.bytes(&handle.0);
+            p.attrs(&attrs);
+        })?
+        .expect_ok()
+    }
+
+    /// [`Client::fsetstat`] by path.
+    pub fn setstat(
+        &mut self,
+        path: &[u8],
+        mtime: Option<u32>,
+        mode: Option<u32>,
+    ) -> io::Result<()> {
+        let attrs = Attrs {
+            mtime,
+            permissions: mode,
+            ..Attrs::default()
+        };
+        self.request(FXP_SETSTAT, |p| {
+            p.bytes(path);
+            p.attrs(&attrs);
+        })?
+        .expect_ok()
+    }
+
+    pub fn mkdir(&mut self, path: &[u8], mode: u32) -> io::Result<()> {
+        let attrs = Attrs {
+            permissions: Some(mode),
+            ..Attrs::default()
+        };
+        self.request(FXP_MKDIR, |p| {
+            p.bytes(path);
+            p.attrs(&attrs);
+        })?
+        .expect_ok()
+    }
+
+    pub fn rmdir(&mut self, path: &[u8]) -> io::Result<()> {
+        self.request(FXP_RMDIR, |p| p.bytes(path))?.expect_ok()
+    }
+
+    /// Removes a file or a symlink (never its target).
+    pub fn remove(&mut self, path: &[u8]) -> io::Result<()> {
+        self.request(FXP_REMOVE, |p| p.bytes(path))?.expect_ok()
+    }
+
+    /// Renames `from` to `to`; fails if `to` exists (SFTP v3).
+    pub fn rename(&mut self, from: &[u8], to: &[u8]) -> io::Result<()> {
+        self.request(FXP_RENAME, |p| {
+            p.bytes(from);
+            p.bytes(to);
+        })?
+        .expect_ok()
+    }
+
+    /// Renames `from` over `to`, replacing it: atomically with OpenSSH's
+    /// extension, else by removing `to` first.
+    pub fn rename_over(&mut self, from: &[u8], to: &[u8]) -> io::Result<()> {
+        if self.posix_rename {
+            return self
+                .request(FXP_EXTENDED, |p| {
+                    p.bytes(POSIX_RENAME.as_bytes());
+                    p.bytes(from);
+                    p.bytes(to);
+                })?
+                .expect_ok();
+        }
+        match self.remove(to) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        self.rename(from, to)
+    }
+
+    pub fn readlink(&mut self, path: &[u8]) -> io::Result<Vec<u8>> {
+        let mut body = self
+            .request(FXP_READLINK, |p| p.bytes(path))?
+            .expect(FXP_NAME)?;
+        if body.u32()? == 0 {
+            return Err(protocol("the server gave no name"));
+        }
+        body.bytes()
+    }
+
+    /// Creates symlink `link` pointing at `target`. OpenSSH takes the two
+    /// in the opposite order to the draft (target first), and that is the
+    /// order sent: every server this talks to is OpenSSH's.
+    pub fn symlink(&mut self, target: &[u8], link: &[u8]) -> io::Result<()> {
+        self.request(FXP_SYMLINK, |p| {
+            p.bytes(target);
+            p.bytes(link);
+        })?
+        .expect_ok()
+    }
+
+    /// The attributes of each path, following symlinks, with all the
+    /// requests in flight at once.
+    pub fn stat_many(&mut self, paths: &[Vec<u8>]) -> io::Result<Vec<io::Result<Attrs>>> {
+        let mut results: Vec<Option<io::Result<Attrs>>> = paths.iter().map(|_| None).collect();
+        let mut pending = HashMap::new();
+        let mut next = 0;
+        while next < paths.len() || !pending.is_empty() {
+            while next < paths.len() && pending.len() < IN_FLIGHT {
+                let id = self.send_request(FXP_STAT, |p| p.bytes(&paths[next]))?;
+                pending.insert(id, next);
+                next += 1;
+            }
+            let (id, reply) = self.receive_reply()?;
+            let Some(ix) = pending.remove(&id) else {
+                self.broken = true;
+                return Err(protocol("the server answered a request it was never sent"));
+            };
+            results[ix] = Some(reply.expect(FXP_ATTRS).and_then(|mut body| body.attrs()));
+        }
+        Ok(results
+            .into_iter()
+            .map(|r| r.expect("every reply read"))
+            .collect())
+    }
+
+    /// Whether `e` (from [`Client::open_write`] with `exclusive`) means
+    /// the file exists: OpenSSH reports that as a plain failure.
+    pub fn exists_error(&mut self, e: &io::Error, path: &[u8]) -> bool {
+        e.kind() == io::ErrorKind::AlreadyExists
+            || (e.kind() == io::ErrorKind::Other && self.lstat(path).is_ok())
     }
 
     /// Sends a request and reads its reply.
@@ -362,6 +546,82 @@ impl Client {
             self.broken = true;
         }
         result
+    }
+}
+
+/// A file being written with several writes in flight: [`Upload::write`]
+/// each piece, then [`Upload::finish`] (or [`Upload::abandon`]). The first
+/// failure is kept and returned once every reply has been read.
+#[derive(Debug)]
+pub struct Upload {
+    handle: Handle,
+    pending: usize,
+    failure: Option<io::Error>,
+}
+
+impl Upload {
+    pub fn new(handle: Handle) -> Self {
+        Self {
+            handle,
+            pending: 0,
+            failure: None,
+        }
+    }
+
+    /// Sends `data` for `offset`; waits for one earlier write's reply when
+    /// [`IN_FLIGHT`] are pending. Fails with the first failure seen, after
+    /// reading every pending reply.
+    pub fn write(&mut self, client: &mut Client, offset: u64, data: &[u8]) -> io::Result<()> {
+        if self.failure.is_none() {
+            client.send_request(FXP_WRITE, |p| {
+                p.bytes(&self.handle.0);
+                p.u64(offset);
+                p.bytes(data);
+            })?;
+            self.pending += 1;
+        }
+        while self.pending >= IN_FLIGHT || (self.failure.is_some() && self.pending > 0) {
+            self.receive(client)?;
+        }
+        match self.failure.take() {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    fn receive(&mut self, client: &mut Client) -> io::Result<()> {
+        let (_, reply) = client.receive_reply()?;
+        self.pending -= 1;
+        if let Err(e) = reply.expect_ok() {
+            self.failure.get_or_insert(e);
+        }
+        Ok(())
+    }
+
+    /// Waits for every write, sets the time and mode given, and closes.
+    pub fn finish(
+        mut self,
+        client: &mut Client,
+        mtime: Option<u32>,
+        mode: Option<u32>,
+    ) -> io::Result<()> {
+        while self.pending > 0 {
+            self.receive(client)?;
+        }
+        let set = match self.failure.take() {
+            Some(e) => Err(e),
+            None if mtime.is_some() || mode.is_some() => client.fsetstat(&self.handle, mtime, mode),
+            None => Ok(()),
+        };
+        let closed = client.close(self.handle);
+        set.and(closed)
+    }
+
+    /// Reads the pending replies and closes, ignoring failures (the caller
+    /// removes the file).
+    pub fn abandon(mut self, client: &mut Client) {
+        while self.pending > 0 && self.receive(client).is_ok() {}
+        let _ = client.close(self.handle);
     }
 }
 
@@ -442,6 +702,31 @@ impl Packet {
     fn bytes(&mut self, value: &[u8]) {
         self.u32(value.len() as u32);
         self.0.extend_from_slice(value);
+    }
+
+    /// Attributes in a request: only those set.
+    fn attrs(&mut self, attrs: &Attrs) {
+        let mut flags = 0;
+        if attrs.size.is_some() {
+            flags |= ATTR_SIZE;
+        }
+        if attrs.permissions.is_some() {
+            flags |= ATTR_PERMISSIONS;
+        }
+        if attrs.mtime.is_some() {
+            flags |= ATTR_ACMODTIME;
+        }
+        self.u32(flags);
+        if let Some(size) = attrs.size {
+            self.u64(size);
+        }
+        if let Some(mode) = attrs.permissions {
+            self.u32(mode);
+        }
+        if let Some(mtime) = attrs.mtime {
+            self.u32(mtime); // access time: the same
+            self.u32(mtime);
+        }
     }
 
     fn finish(mut self) -> Vec<u8> {
@@ -618,6 +903,26 @@ pub(crate) mod tests {
         assert_eq!(client.realpath(bytes(&up)).unwrap(), bytes(&real));
     }
 
+    /// Downloads `path` into memory.
+    fn fetch(client: &mut Client, path: &Path) -> (bool, Vec<u8>, u64) {
+        let handle = client.open_read(bytes(path)).unwrap();
+        let mut data = Vec::new();
+        let mut total = 0;
+        let done = client
+            .download(&handle, |offset, piece| {
+                let end = offset as usize + piece.len();
+                if data.len() < end {
+                    data.resize(end, 0);
+                }
+                data[offset as usize..end].copy_from_slice(piece);
+                total += piece.len() as u64;
+                Ok(true)
+            })
+            .unwrap();
+        client.close(handle).unwrap();
+        (done, data, total)
+    }
+
     #[test]
     fn downloads_a_file_larger_than_the_reads_in_flight() {
         let tmp = tempfile::tempdir().unwrap();
@@ -628,31 +933,24 @@ pub(crate) mod tests {
             .collect();
         std::fs::write(&source, &data).unwrap();
         let mut client = local_client();
-        let handle = client.open_read(bytes(&source)).unwrap();
-        let out = File::create(tmp.path().join("copy")).unwrap();
-        let mut total = 0;
-        let done = client
-            .download(&handle, &out, |n| {
-                total += n;
-                true
-            })
-            .unwrap();
-        client.close(handle).unwrap();
+        let (done, copy, total) = fetch(&mut client, &source);
         assert!(done);
         assert_eq!(total, data.len() as u64);
-        assert_eq!(std::fs::read(tmp.path().join("copy")).unwrap(), data);
+        assert!(copy == data);
     }
 
     #[test]
-    fn a_stopped_download_leaves_the_session_in_step() {
+    fn a_stopped_or_failed_download_leaves_the_session_in_step() {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("big");
         std::fs::write(&source, vec![7; 4 << 20]).unwrap();
         let mut client = local_client();
         let handle = client.open_read(bytes(&source)).unwrap();
-        let out = File::create(tmp.path().join("copy")).unwrap();
-        let done = client.download(&handle, &out, |_| false).unwrap();
-        assert!(!done);
+        assert!(!client.download(&handle, |_, _| Ok(false)).unwrap());
+        let err = client
+            .download(&handle, |_, _| Err(io::Error::other("disk full")))
+            .unwrap_err();
+        assert_eq!(err.to_string(), "disk full");
         client.close(handle).unwrap();
         assert!(client.stat(bytes(&source)).unwrap().is_file());
     }
@@ -663,10 +961,129 @@ pub(crate) mod tests {
         let source = tmp.path().join("empty");
         std::fs::write(&source, "").unwrap();
         let mut client = local_client();
-        let handle = client.open_read(bytes(&source)).unwrap();
-        let out = File::create(tmp.path().join("copy")).unwrap();
-        assert!(client.download(&handle, &out, |_| true).unwrap());
-        assert_eq!(std::fs::metadata(tmp.path().join("copy")).unwrap().len(), 0);
+        let (done, copy, _) = fetch(&mut client, &source);
+        assert!(done && copy.is_empty());
+    }
+
+    #[test]
+    fn uploads_a_file_with_its_time_and_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("up");
+        let data: Vec<u8> = (0..(2 << 20) + 7).map(|i: u32| (i % 13) as u8).collect();
+        let mut client = local_client();
+        let handle = client.open_write(bytes(&target), 0o600, true).unwrap();
+        let mut upload = Upload::new(handle);
+        for (ix, piece) in data.chunks(WRITE_SIZE).enumerate() {
+            upload
+                .write(&mut client, (ix * WRITE_SIZE) as u64, piece)
+                .unwrap();
+        }
+        upload
+            .finish(&mut client, Some(1_000_000_000), Some(0o640))
+            .unwrap();
+        assert!(std::fs::read(&target).unwrap() == data);
+        let meta = std::fs::metadata(&target).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o640);
+        let mtime = meta.modified().unwrap();
+        assert_eq!(
+            mtime
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+            1_000_000_000
+        );
+    }
+
+    #[test]
+    fn an_exclusive_create_of_an_existing_file_says_so() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("there");
+        std::fs::write(&target, "old").unwrap();
+        let mut client = local_client();
+        let err = client.open_write(bytes(&target), 0o644, true).unwrap_err();
+        assert!(client.exists_error(&err, bytes(&target)));
+        let handle = client.open_write(bytes(&target), 0o644, false).unwrap();
+        Upload::new(handle).finish(&mut client, None, None).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"", "truncated");
+    }
+
+    #[test]
+    fn a_failed_write_is_reported_and_the_session_stays_in_step() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut client = local_client();
+        let target = tmp.path().join("f");
+        let handle = client.open_write(bytes(&target), 0o644, true).unwrap();
+        // Closed behind the upload's back: every write fails.
+        client.close(Handle(handle.0.clone())).unwrap();
+        let mut upload = Upload::new(handle);
+        let mut failed = false;
+        for ix in 0..(IN_FLIGHT + 3) {
+            failed |= upload.write(&mut client, ix as u64, b"x").is_err();
+        }
+        assert!(failed);
+        upload.abandon(&mut client);
+        assert!(client.stat(bytes(tmp.path())).unwrap().is_dir());
+    }
+
+    #[test]
+    fn makes_renames_links_and_removes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = |name: &str| tmp.path().join(name);
+        let mut client = local_client();
+        client.mkdir(bytes(&p("d")), 0o750).unwrap();
+        assert!(p("d").is_dir());
+        std::fs::write(p("a"), "a").unwrap();
+        std::fs::write(p("b"), "b").unwrap();
+        assert!(
+            client.rename(bytes(&p("a")), bytes(&p("b"))).is_err(),
+            "no replace"
+        );
+        client.rename_over(bytes(&p("a")), bytes(&p("b"))).unwrap();
+        assert_eq!(std::fs::read_to_string(p("b")).unwrap(), "a");
+        assert!(!p("a").exists());
+        client.symlink(b"b", bytes(&p("link"))).unwrap();
+        assert_eq!(client.readlink(bytes(&p("link"))).unwrap(), b"b");
+        client
+            .setstat(bytes(&p("b")), Some(1_500_000_000), Some(0o600))
+            .unwrap();
+        let attrs = client.lstat(bytes(&p("b"))).unwrap();
+        assert_eq!(
+            (attrs.mtime, attrs.permissions.map(|m| m & 0o777)),
+            (Some(1_500_000_000), Some(0o600))
+        );
+        client.remove(bytes(&p("link"))).unwrap();
+        assert!(p("b").exists(), "the target stays");
+        client.remove(bytes(&p("b"))).unwrap();
+        client.rmdir(bytes(&p("d"))).unwrap();
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn stats_many_paths_at_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("d")).unwrap();
+        let mut client = local_client();
+        let mut paths: Vec<Vec<u8>> = (0..IN_FLIGHT * 2)
+            .map(|_| bytes(&tmp.path().join("d")).to_vec())
+            .collect();
+        paths.push(bytes(&tmp.path().join("gone")).to_vec());
+        let results = client.stat_many(&paths).unwrap();
+        assert_eq!(results.len(), paths.len());
+        assert!(
+            results[..IN_FLIGHT * 2]
+                .iter()
+                .all(|r| r.as_ref().unwrap().is_dir())
+        );
+        assert_eq!(
+            results.last().unwrap().as_ref().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+    }
+
+    #[test]
+    fn openssh_offers_posix_rename() {
+        assert!(local_client().posix_rename);
     }
 
     #[test]
