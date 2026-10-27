@@ -7779,7 +7779,11 @@ mod connect {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert!(!dialog_open(cx));
-        assert_eq!(path(&commander, Side::Left, cx), login_folder("web"));
+        assert_eq!(
+            path(&commander, Side::Left, cx),
+            login_folder("db"),
+            "by name"
+        );
     }
 
     #[gpui_kit::test]
@@ -7789,7 +7793,7 @@ mod connect {
         cx.run_until_parked();
         cx.simulate_input("lan");
         cx.run_until_parked();
-        assert_eq!(rows(cx), [Row::Host(1), Row::Typed("lan".into())]);
+        assert_eq!(rows(cx), [Row::Host(0), Row::Typed("lan".into())]);
         cx.simulate_keystrokes("down");
         assert_eq!(target(cx).as_deref(), Some("lan"));
         cx.simulate_keystrokes("down");
@@ -7844,7 +7848,7 @@ mod connect {
         let row = cx.debug_bounds("connect-row-1").unwrap().center();
         cx.simulate_click(row, gpui_kit::Modifiers::none());
         cx.run_until_parked();
-        assert_eq!(target(cx).as_deref(), Some("db"), "a click selects");
+        assert_eq!(target(cx).as_deref(), Some("web"), "a click selects");
         cx.simulate_event(gpui_kit::MouseDownEvent {
             position: row,
             button: gpui_kit::MouseButton::Left,
@@ -7860,7 +7864,7 @@ mod connect {
         });
         cx.run_until_parked();
         assert!(!dialog_open(cx));
-        assert_eq!(path(&commander, Side::Left, cx), login_folder("db"));
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("web"));
     }
 
     #[gpui_kit::test]

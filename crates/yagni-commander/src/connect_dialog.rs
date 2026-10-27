@@ -1,5 +1,5 @@
 //! The Connect dialog (Ctrl-F, Commands > Connect...): the hosts of
-//! `~/.ssh/config` under a field that filters them. Enter opens the
+//! `~/.ssh/config`, by name, under a field that filters them. Enter opens the
 //! highlighted host's login folder (`sftp://host`) in the active panel; when
 //! the typed text is not exactly an alias it is offered last as a host of
 //! its own (`user@host`). Up/Down move in the list while the field keeps
@@ -40,7 +40,13 @@ pub struct ConnectDialog {
 }
 
 impl ConnectDialog {
-    pub(crate) fn new(hosts: Vec<SshHost>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    /// `hosts` are listed by alias, ignoring case.
+    pub(crate) fn new(
+        mut hosts: Vec<SshHost>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        hosts.sort_by_cached_key(|h| (h.alias.to_lowercase(), h.alias.clone()));
         let field = cx.new(|cx| InputState::new(window, cx).placeholder("Filter, or user@host"));
         let subscription = cx.subscribe_in(&field, window, |this, _, event: &InputEvent, _, cx| {
             if let InputEvent::Change = event {
