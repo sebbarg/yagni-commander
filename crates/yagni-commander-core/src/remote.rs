@@ -286,7 +286,15 @@ fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
             let _ = child.wait();
             let _ = reading.join();
             let text = ssh_message(&stderr.lock().unwrap_or_else(PoisonError::into_inner));
-            Err(if !text.is_empty() {
+            Err(if no_sftp_server(&text) {
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!(
+                        "{host} has no SFTP server: install one there \
+                         (OpenSSH's sftp-server, e.g. the openssh-sftp-server package). ssh said: {text}"
+                    ),
+                )
+            } else if !text.is_empty() {
                 io::Error::new(io::ErrorKind::ConnectionRefused, text)
             } else if e.kind() == io::ErrorKind::InvalidData {
                 // The classic cause: a login script that prints text.
@@ -299,6 +307,14 @@ fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
             })
         }
     }
+}
+
+/// Whether ssh's words mean the host has no SFTP server: its configured
+/// `sftp-server` is missing, or no SFTP subsystem is set up at all.
+fn no_sftp_server(text: &str) -> bool {
+    let text = text.to_lowercase();
+    (text.contains("sftp-server") && (text.contains("not found") || text.contains("no such file")))
+        || text.contains("subsystem request failed")
 }
 
 /// Collects `stderr` into `kept` (its last [`STDERR_KEPT`] bytes) until it
@@ -700,6 +716,26 @@ pub(crate) mod tests {
         let args = args(&ssh_command_with("box", Some(&asking)));
         assert!(!args.iter().any(|a| a.starts_with("Control")));
         assert!(!args.iter().any(|a| a == "BatchMode=yes"), "still asks");
+    }
+
+    #[test]
+    fn a_host_without_an_sftp_server_says_so() {
+        for said in [
+            "sh: /opt/libexec/sftp-server: not found",
+            "bash: /usr/lib/sftp-server: No such file or directory",
+            "subsystem request failed on channel 0",
+        ] {
+            let mut command = Command::new("sh");
+            command.args(["-c", &format!("echo '{said}' >&2; exit 1")]);
+            let err = connect_with("router", command).unwrap_err();
+            let text = err.to_string();
+            assert!(
+                text.starts_with("router has no SFTP server: install one"),
+                "{text}"
+            );
+            assert!(text.ends_with(&format!("ssh said: {said}")), "{text}");
+        }
+        assert!(!no_sftp_server("Permission denied (publickey)."));
     }
 
     #[test]
