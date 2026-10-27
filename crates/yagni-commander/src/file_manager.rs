@@ -17,6 +17,7 @@ pub(crate) mod commands;
 mod file_ops;
 mod find;
 mod loads;
+mod open_with;
 mod properties;
 mod watch;
 
@@ -25,8 +26,8 @@ use crate::actions::{
     CopyParentPath, CopyPath, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
     DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig,
     GoToLog, GoUp, MakeDirectory, MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab,
-    OpenMenu, OpenSettings, OpenTerminal, Pack, PageDown, PageUp, PrevTab, Reload, Rename,
-    SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
+    OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack, PageDown, PageUp, PrevTab, Reload,
+    Rename, SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
     ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
     SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
     View, ZoomIn, ZoomOut, ZoomReset,
@@ -147,6 +148,12 @@ pub struct FileManager {
     pub(crate) mounts: Option<OpenMounts>,
     /// The mounts dropdown's entries in place of the system's (app tests).
     pub(crate) places: Option<Vec<yagni_commander_core::mounts::Place>>,
+    /// The open Open with popup (Shift-Enter).
+    pub(crate) open_with: Option<open_with::OpenApps>,
+    /// Finds the applications in place of the system's lookup (app tests).
+    pub(crate) apps_lookup: Option<open_with::Lookup>,
+    /// Id of the last Open with lookup; an older one's result is dropped.
+    next_lookup: u64,
     /// The open hotlist Configure dialog's view.
     pub(crate) hotlist_dialog: Option<Entity<crate::hotlist_dialog::HotlistDialog>>,
     /// What the menus' check marks show; `None` before the first update.
@@ -196,6 +203,7 @@ impl FileManager {
                     // Like the menu, the hotlist popup closes.
                     this.close_hotlist(window, cx);
                     this.close_mounts(window, cx);
+                    this.close_open_with(window, cx);
                     if let Some(bar) = this.menu_bar.clone() {
                         bar.update(cx, |bar, cx| bar.close(window, cx));
                     }
@@ -215,7 +223,7 @@ impl FileManager {
                     }
                     if window.window_handle() == handle
                         && let Some(this) = this.upgrade()
-                        && (this.read(cx).hotlist.is_some() || this.read(cx).mounts.is_some())
+                        && this.read(cx).popup_open()
                         && !hotlist_popup::passes(&event.keystroke)
                     {
                         cx.stop_propagation();
@@ -279,6 +287,9 @@ impl FileManager {
             hotlist: None,
             mounts: None,
             places: None,
+            open_with: None,
+            apps_lookup: None,
+            next_lookup: 0,
             hotlist_dialog: None,
             menu_state: None,
             alt_armed: false,
@@ -715,6 +726,18 @@ impl FileManager {
 
     /// Whether the active panel is reading a folder; its dialogs and file
     /// operations wait until it is done.
+    /// One of our popups (hotlist, mounts, Open with) is open.
+    fn popup_open(&self) -> bool {
+        self.hotlist.is_some() || self.mounts.is_some() || self.open_with.is_some()
+    }
+
+    /// The in-window menu bar has a menu open.
+    fn menu_open(&self, cx: &App) -> bool {
+        self.menu_bar
+            .as_ref()
+            .is_some_and(|bar| bar.read(cx).is_open())
+    }
+
     fn active_loading(&self, cx: &App) -> bool {
         self.active_panel(cx).loading().is_some()
     }
@@ -901,6 +924,7 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &CopyName, _, cx| this.copy_name(cx)))
             .on_action(cx.listener(|this, _: &CopyParentPath, _, cx| this.copy_parent_path(cx)))
             .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))
+            .on_action(cx.listener(|this, _: &OpenWith, window, cx| this.open_with(window, cx)))
             .on_action(cx.listener(|this, _: &Pack, window, cx| this.pack(window, cx)))
             .on_action(cx.listener(|this, _: &Extract, window, cx| this.extract(window, cx)))
             .on_action(
@@ -1009,7 +1033,8 @@ impl Render for FileManager {
                             .h_full()
                             .child(self.left.clone())
                             .children(self.hotlist_overlay(Side::Left))
-                            .children(self.mounts_overlay(Side::Left)),
+                            .children(self.mounts_overlay(Side::Left))
+                            .children(self.open_with_overlay(Side::Left, cx)),
                     )
                     .child(divider)
                     .child(
@@ -1020,7 +1045,8 @@ impl Render for FileManager {
                             .h_full()
                             .child(self.right.clone())
                             .children(self.hotlist_overlay(Side::Right))
-                            .children(self.mounts_overlay(Side::Right)),
+                            .children(self.mounts_overlay(Side::Right))
+                            .children(self.open_with_overlay(Side::Right, cx)),
                     ),
             )
             .child(

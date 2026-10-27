@@ -12,6 +12,7 @@ mod info_dialog;
 mod menu_bar;
 mod menus;
 mod mounts_popup;
+mod open_with_popup;
 mod option_box;
 mod panel_view;
 mod rem_scope;

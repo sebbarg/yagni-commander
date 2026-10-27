@@ -2371,6 +2371,7 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
             "ctrl-d",
         ),
         (&crate::actions::MountsLeft, "alt-f1"),
+        (&crate::actions::OpenWith, "shift-enter"),
         (&crate::actions::MountsRight, "alt-f2"),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
         (&crate::actions::CloseTab, close_tab),
@@ -7062,5 +7063,230 @@ mod themes {
         change_setting(Setting::Theme("classic".into()), cx);
         cx.run_until_parked();
         assert_eq!(cx.update(|_, cx| f32::from(cx.theme().font_size)), 18.0);
+    }
+}
+
+mod open_with {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+    use yagni_commander_core::apps::{App, Found};
+
+    /// Apps named `names` (the first the default) that write their name to
+    /// `started` in `dir` when started. Returns the files looked up.
+    fn use_apps(
+        dir: &std::path::Path,
+        names: &[&str],
+        cx: &mut VisualTestContext,
+    ) -> Arc<Mutex<Vec<std::path::PathBuf>>> {
+        let out = dir.join("started");
+        let apps = names
+            .iter()
+            .enumerate()
+            .map(|(ix, name)| App {
+                name: (*name).into(),
+                default: ix == 0,
+                program: "sh".into(),
+                args: vec![
+                    "-c".into(),
+                    format!(
+                        "echo {name} > '{0}.part' && mv '{0}.part' '{0}'",
+                        out.display()
+                    )
+                    .into(),
+                ],
+                dir: dir.to_path_buf(),
+            })
+            .collect();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let lookup = crate::file_manager::open_with::lookup_from(apps, seen.clone());
+        file_manager(cx).update(cx, |this, _| this.apps_lookup = Some(lookup));
+        seen
+    }
+
+    fn is_open(cx: &mut VisualTestContext) -> bool {
+        file_manager(cx).read_with(cx, |this, _| this.open_with.is_some())
+    }
+
+    fn highlight(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.open_with.as_ref().unwrap().popup.read(cx).highlight()
+        })
+    }
+
+    /// Shift-Enter on the cursor entry and waits for the popup.
+    fn open_popup(cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("shift-enter");
+        wait_until(cx, is_open);
+    }
+
+    fn started(dir: &std::path::Path, cx: &mut VisualTestContext) -> String {
+        let out = dir.join("started");
+        wait_until(cx, |_| out.exists());
+        std::fs::read_to_string(out).unwrap().trim().to_owned()
+    }
+
+    #[gpui_kit::test]
+    fn shift_enter_lists_the_apps_and_enter_starts_the_highlighted_one(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let seen = use_apps(tmp.path(), &["Kate", "Gedit", "Vim"], cx);
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        assert_eq!(*seen.lock().unwrap(), [tmp.path().join("f")]);
+        let title = bounds(cx, "open-with-title".into()).unwrap();
+        let first = bounds(cx, "open-with-row-0".into()).unwrap();
+        assert!(
+            title.bottom() <= first.origin.y,
+            "the title is above the list"
+        );
+        assert!(bounds(cx, "open-with-row-2".into()).is_some());
+        assert_eq!(highlight(cx), 0, "on the default");
+        cx.simulate_keystrokes("up down down");
+        assert_eq!(highlight(cx), 1, "wraps");
+        cx.simulate_keystrokes("enter");
+        assert!(!is_open(cx));
+        assert_eq!(started(tmp.path(), cx), "Gedit");
+    }
+
+    #[gpui_kit::test]
+    fn a_letter_moves_or_starts_at_once_when_unique(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_apps(tmp.path(), &["Kate", "Kwrite", "Vim"], cx);
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        cx.simulate_keystrokes("k");
+        assert_eq!(highlight(cx), 1, "the next one starting with k");
+        cx.simulate_keystrokes("K");
+        assert_eq!(highlight(cx), 0, "wraps, ignoring case");
+        assert!(is_open(cx));
+        cx.simulate_keystrokes("v");
+        assert!(!is_open(cx));
+        assert_eq!(started(tmp.path(), cx), "Vim");
+    }
+
+    #[gpui_kit::test]
+    fn a_click_starts_an_app_and_escape_closes(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_apps(tmp.path(), &["Kate", "Vim"], cx);
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        cx.simulate_keystrokes("escape");
+        assert!(!is_open(cx));
+        cx.simulate_keystrokes("up");
+        assert_eq!(
+            cursor(&commander, Side::Left, cx),
+            2,
+            "keys reach the panel"
+        );
+        cx.simulate_keystrokes("down");
+        open_popup(cx);
+        click(cx, "open-with-row-1", 1);
+        assert!(!is_open(cx));
+        assert_eq!(started(tmp.path(), cx), "Vim");
+    }
+
+    #[gpui_kit::test]
+    fn other_keys_are_ignored_while_it_is_open(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        use_apps(tmp.path(), &["Kate"], cx);
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        cx.simulate_keystrokes("tab f7 ctrl-t");
+        assert!(is_open(cx));
+        assert!(!dialog_open(cx));
+        commander.read_with(cx, |c, _| {
+            assert_eq!(c.active(), Side::Left);
+            assert_eq!(c.tabs(Side::Left).count(), 1);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn it_opens_under_the_cursor_row(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_apps(tmp.path(), &["Kate"], cx);
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        let row = bounds(cx, "row-left-3".into()).unwrap();
+        let popup = bounds(cx, "open-with-popup".into()).unwrap();
+        assert!(
+            (popup.origin.y - row.bottom()).abs() <= px(1.0),
+            "{popup:?} under {row:?}"
+        );
+        assert!(popup.origin.x > row.origin.x);
+    }
+
+    #[gpui_kit::test]
+    fn folders_and_the_parent_entry_do_nothing(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let seen = use_apps(tmp.path(), &["Kate"], cx);
+        cx.simulate_keystrokes("shift-enter down shift-enter");
+        wait_until(cx, |_| true);
+        assert!(seen.lock().unwrap().is_empty());
+        assert!(!is_open(cx) && !dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn no_app_shows_a_message_naming_the_type(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_apps(tmp.path(), &[], cx);
+        cx.simulate_keystrokes("end shift-enter");
+        wait_until(cx, dialog_open);
+        assert!(!is_open(cx));
+        assert_eq!(
+            box_text(cx),
+            "Open with\nNo application is registered for “f” (text/plain)."
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_lookup_shows_why(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        file_manager(cx).update(cx, |this, _| {
+            this.apps_lookup = Some(Arc::new(|_: &std::path::Path| {
+                Err(std::io::Error::other("not a regular file"))
+            }))
+        });
+        cx.simulate_keystrokes("end shift-enter");
+        wait_until(cx, dialog_open);
+        assert_eq!(box_text(cx), "Cannot open with\nnot a regular file");
+    }
+
+    #[gpui_kit::test]
+    fn a_late_result_is_dropped_once_the_cursor_moved(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        let held = Mutex::new(held);
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        file_manager(cx).update(cx, |this, _| {
+            let done = done.clone();
+            this.apps_lookup = Some(Arc::new(move |_: &std::path::Path| {
+                let _ = held.lock().unwrap().recv();
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(Found {
+                    apps: Vec::new(),
+                    kind: None,
+                })
+            }))
+        });
+        cx.simulate_keystrokes("end shift-enter up");
+        release.send(()).unwrap();
+        wait_until(cx, |_| done.load(std::sync::atomic::Ordering::SeqCst));
+        // One more poll for the result to arrive.
+        wait_until(cx, |_| true);
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        cx.run_until_parked();
+        assert!(!is_open(cx) && !dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_popup_closes_when_the_window_is_deactivated(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        use_apps(tmp.path(), &["Kate"], cx);
+        cx.update(|window, _| window.activate_window());
+        cx.simulate_keystrokes("end");
+        open_popup(cx);
+        cx.deactivate_window();
+        cx.run_until_parked();
+        assert!(!is_open(cx));
     }
 }

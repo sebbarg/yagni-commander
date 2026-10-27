@@ -15,7 +15,7 @@ use yagni_commander_core::mounts::{self, Place};
 
 use crate::actions::{MOUNTS_CONTEXT, mounts as act};
 use crate::hotlist_popup::passes;
-use crate::theme::Theme;
+use crate::theme::{Theme, popup_frame};
 use crate::zoom::rems_from_px;
 
 pub enum MountsEvent {
@@ -88,7 +88,8 @@ impl MountsPopup {
 
 impl Render for MountsPopup {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = Theme::get(cx).colors.clone();
+        let theme = Theme::get(cx).clone();
+        let colors = theme.colors.clone();
         let underline = HighlightStyle {
             underline: Some(UnderlineStyle {
                 thickness: px(1.0),
@@ -146,10 +147,7 @@ impl Render for MountsPopup {
             .py(rems_from_px(4.0))
             .flex()
             .flex_col()
-            .bg(colors.header_bg)
-            .border_1()
-            .border_color(colors.border)
-            .rounded(rems_from_px(4.0))
+            .map(|d| popup_frame(d, &theme))
             .text_sm()
             .text_color(colors.text)
             .children(rows)

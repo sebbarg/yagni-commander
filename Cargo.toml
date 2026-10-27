@@ -52,6 +52,14 @@ zstd = "0.14"
 hmac = "0.13"
 pbkdf2 = "0.13"
 sha1 = "0.11"
+# Open with (Shift-Enter), Linux: shared-mime-info's globs and magic. Its
+# parent lookup is broken in 0.4 (`get_parents` is None unless the type is an
+# alias), so `apps::mime` reads `subclasses` and `aliases` itself.
+xdg-mime = "0.4"
+# Open with, macOS: NSWorkspace's application list. Already in the tree via
+# gpui: same versions, no new crate.
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSFileManager", "NSString", "NSURL"] }
 # Help > Check for updates: one HTTPS request to GitHub. rustls (with ring and
 # the bundled Mozilla roots, webpki-roots), no gzip.
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }

@@ -59,6 +59,8 @@ actions!(
         CompareContents,
         /// Alt-Enter: the Properties box.
         ShowProperties,
+        /// Shift-Enter: pick the application for the file under the cursor.
+        OpenWith,
         /// Alt-F7: the find dialog.
         FindFiles,
         /// Ctrl-Shift-T: a terminal in the active panel's folder.
@@ -130,6 +132,14 @@ pub mod viewer {
             Edit
         ]
     );
+}
+
+/// Key context of the Open with popup (Shift-Enter).
+pub const OPEN_WITH_CONTEXT: &str = "OpenWith";
+
+/// Open with popup actions.
+pub mod open_with {
+    gpui_kit::actions!(open_with, [Up, Down, Pick, Close]);
 }
 
 /// Key context of the directory hotlist popup (Ctrl-D).
@@ -254,6 +264,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
         KeyBinding::new("alt-enter", ShowProperties, context),
+        KeyBinding::new("shift-enter", OpenWith, context),
         KeyBinding::new("alt-f7", FindFiles, context),
         KeyBinding::new("ctrl-shift-t", OpenTerminal, context),
         // Ctrl-= and Ctrl-- are the primary keys (shown in the menu), so each
@@ -390,6 +401,13 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("down", mounts::Down, popup),
         KeyBinding::new("enter", mounts::Pick, popup),
         KeyBinding::new("escape", mounts::Close, popup),
+    ]);
+    let popup = Some(OPEN_WITH_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("up", open_with::Up, popup),
+        KeyBinding::new("down", open_with::Down, popup),
+        KeyBinding::new("enter", open_with::Pick, popup),
+        KeyBinding::new("escape", open_with::Close, popup),
     ]);
     let list = Some(HOTLIST_LIST_CONTEXT);
     cx.bind_keys([

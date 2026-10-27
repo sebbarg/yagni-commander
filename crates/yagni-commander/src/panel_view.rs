@@ -113,6 +113,19 @@ impl PanelView {
             && self.focus.is_focused(window)
     }
 
+    /// Distance from the panel's top to the bottom of the cursor row, in px
+    /// at the UI level, where the Open with popup opens. From the last
+    /// frame's scroll offset; the cursor doesn't move while it is open.
+    pub fn below_cursor(&self, cx: &App) -> f32 {
+        let level = Zoom::get(cx).ui;
+        let cursor = self.commander.read(cx).panel(self.side).cursor();
+        // Zero or less: how far the list is scrolled down.
+        let scrolled = f32::from(self.scroll.0.borrow().base_handle.offset().y);
+        let rows = (cursor + 1) as f32 * row_height(cx) + scrolled;
+        // Past the body's 1 px top border.
+        scaled(BELOW_HEADER + COLUMN_HEADER_HEIGHT, level) + 1.0 + rows.max(0.0)
+    }
+
     /// Number of fully visible rows, once the list has been laid out.
     pub fn visible_rows(&self, cx: &App) -> Option<usize> {
         let height = f32::from(self.scroll.0.borrow().base_handle.bounds().size.height);

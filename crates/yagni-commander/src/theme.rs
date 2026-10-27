@@ -6,7 +6,7 @@
 //! (enforced by `clippy.toml`).
 
 use gpui_kit::component::{Theme as ComponentTheme, ThemeConfig, ThemeConfigColors, ThemeMode};
-use gpui_kit::{App, Global, Rgba, SharedString};
+use gpui_kit::{App, BoxShadow, Global, Rgba, SharedString, Styled, point, px};
 use serde::Deserialize;
 
 const TOKYO_NIGHT: &str = include_str!("../assets/themes/tokyo-night.toml");
@@ -69,6 +69,12 @@ pub struct Colors {
     pub header_bg: Rgba,
     /// Path header of the active panel.
     pub header_active_bg: Rgba,
+    /// Popups (hotlist, mounts, Open with) and the menus: a clear step
+    /// apart from the panels they open over.
+    pub popup_bg: Rgba,
+    /// The edge of our popups: brighter than `border` in dark themes, where
+    /// a quiet edge disappears.
+    pub popup_border: Rgba,
     pub border: Rgba,
     /// Default text, e.g. file names.
     pub text: Rgba,
@@ -187,7 +193,7 @@ impl Theme {
         colors.secondary_active = pressed(c.cursor_inactive_bg);
         colors.muted = hex(c.header_bg);
         colors.muted_foreground = hex(c.text_dim);
-        colors.popover = hex(c.header_bg);
+        colors.popover = hex(c.popup_bg);
         colors.popover_foreground = hex(c.text);
         colors.input = hex(c.border);
         colors.list = hex(c.panel_bg);
@@ -226,10 +232,46 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
     }
 }
 
-/// The cursor bar in gpui-component's menus (drawn on `header_bg`): a
+/// The frame of our popups (hotlist, mounts, Open with): `popup_bg`, the
+/// `popup_border`, round corners and a shadow, so they stand out from the
+/// panels behind them.
+pub fn popup_frame<E: Styled>(element: E, theme: &Theme) -> E {
+    element
+        .bg(theme.colors.popup_bg)
+        .border_1()
+        .border_color(theme.colors.popup_border)
+        .rounded(crate::zoom::rems_from_px(4.0))
+        .shadow(theme.popup_shadow())
+}
+
+impl Theme {
+    /// Under a popup: black, stronger on dark themes, where a faint shadow
+    /// vanishes. Not a role: no theme needs another hue.
+    pub fn popup_shadow(&self) -> Vec<BoxShadow> {
+        let alpha = match self.mode {
+            Mode::Dark => 0.6,
+            Mode::Light => 0.25,
+        };
+        vec![BoxShadow {
+            color: Rgba {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: alpha,
+            }
+            .into(),
+            offset: point(px(0.0), px(4.0)),
+            blur_radius: px(14.0),
+            spread_radius: px(0.0),
+            inset: false,
+        }]
+    }
+}
+
+/// The cursor bar in gpui-component's menus (drawn on `popup_bg`): a
 /// touch of the accent, so `text` stays readable on it.
 fn menu_cursor(c: &Colors) -> Rgba {
-    mix(c.header_bg, c.accent, 0.15)
+    mix(c.popup_bg, c.accent, 0.15)
 }
 
 fn with_alpha(color: Rgba, a: f32) -> Rgba {
@@ -318,6 +360,7 @@ mod tests {
                         c.dialog_bg,
                         c.header_bg,
                         c.header_active_bg,
+                        c.popup_bg,
                         c.cursor_inactive_bg,
                     ],
                 ),
@@ -329,6 +372,7 @@ mod tests {
                         c.panel_bg,
                         c.dialog_bg,
                         c.header_bg,
+                        c.popup_bg,
                         c.cursor_inactive_bg,
                     ],
                 ),
@@ -440,6 +484,23 @@ mod tests {
         assert_ne!(config.colors.primary_hover, config.colors.primary);
     }
 
+    /// Popups were once drawn in the path header's color, close to the
+    /// panels': the owner found them hard to see (2026-10-27).
+    #[test]
+    fn popups_stand_out_from_the_panels() {
+        for (id, _) in BUILTIN {
+            let c = Theme::builtin(id).unwrap().colors;
+            assert!(
+                contrast(c.popup_bg, c.panel_bg) >= 1.1,
+                "{id}: popup_bg too close to panel_bg"
+            );
+            assert!(
+                contrast(c.popup_border, c.popup_bg) >= 1.5,
+                "{id}: popup_border too faint"
+            );
+        }
+    }
+
     /// Everforest Dark once drew the menu cursor in the menu's own color.
     #[test]
     fn menu_cursor_stands_out_and_keeps_text_readable() {
@@ -447,7 +508,7 @@ mod tests {
             let c = Theme::builtin(id).unwrap().colors;
             let cursor = menu_cursor(&c);
             assert!(
-                contrast(cursor, c.header_bg) >= 1.25,
+                contrast(cursor, c.popup_bg) >= 1.25,
                 "{id}: cursor too faint"
             );
             assert!(contrast(c.text, cursor) >= 4.5, "{id}: text unreadable");

@@ -27,7 +27,7 @@ type Submit =
 
 /// Shows the first failure a launch thread sends, in an error box. Polled:
 /// a wake-up from another thread panics gpui's test scheduler.
-fn report_failure(
+pub(super) fn report_failure(
     failure: std::sync::mpsc::Receiver<String>,
     title: &'static str,
     refocus: Option<FocusHandle>,

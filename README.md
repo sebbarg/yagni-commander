@@ -27,6 +27,7 @@ A personal project. Bug reports are welcome; feature requests will mostly get a 
 - Copy, move and delete run in the background with progress, Cancel and a prompt per conflict.
 - Type to jump: a quick search box finds names starting with what you type.
 - A mounts dropdown per panel (Alt-F1, Alt-F2, or the folder button before the path): Root, USB drives and network mounts (and Home, if it is a filesystem of its own), without the system's own mounts.
+- Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - A viewer (F3) that opens multi-GB files instantly.
 - Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
 - Panels follow changes made by other programs.

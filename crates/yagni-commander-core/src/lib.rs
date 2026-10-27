@@ -3,6 +3,7 @@
 //! The UI translates input into [`Command`]s, calls [`Commander::execute`],
 //! and renders the resulting state. Nothing in here knows about pixels or keys.
 
+pub mod apps;
 pub mod archive;
 mod commander;
 pub mod config;

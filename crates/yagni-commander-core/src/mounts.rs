@@ -284,21 +284,22 @@ pub fn containing(places: &[Place], dir: &Path) -> usize {
 /// starts with it (ignoring case, wrapping), and whether it is the only one,
 /// so the dropdown can go there at once, like a menu mnemonic.
 pub fn next_with_letter(places: &[Place], from: usize, letter: char) -> Option<(usize, bool)> {
+    let labels: Vec<&str> = places.iter().map(|place| place.label.as_str()).collect();
+    next_label(&labels, from, letter)
+}
+
+/// [`next_with_letter`] over plain labels (also the Open with popup's).
+pub fn next_label(labels: &[&str], from: usize, letter: char) -> Option<(usize, bool)> {
     let letter: String = letter.to_lowercase().collect();
-    let starts = |place: &Place| {
-        let first: String = place
-            .label
-            .chars()
-            .take(1)
-            .flat_map(char::to_lowercase)
-            .collect();
+    let starts = |label: &str| {
+        let first: String = label.chars().take(1).flat_map(char::to_lowercase).collect();
         !first.is_empty() && first == letter
     };
-    let count = places.len();
+    let count = labels.len();
     let next = (1..=count)
         .map(|step| (from + step) % count)
-        .find(|&ix| starts(&places[ix]))?;
-    let unique = places.iter().filter(|place| starts(place)).count() == 1;
+        .find(|&ix| starts(labels[ix]))?;
+    let unique = labels.iter().filter(|label| starts(label)).count() == 1;
     Some((next, unique))
 }
 

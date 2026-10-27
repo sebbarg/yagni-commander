@@ -45,6 +45,16 @@ export TERMINAL=fake-terminal
 printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
 chmod +x "$work/bin/fake-editor"
 printf '# smoke config\neditor = "fake-editor"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
+# Two applications for text files (Shift-Enter), found through the
+# temporary XDG folders; the first is the default. Each records its file.
+mkdir -p "$work/data/applications"
+for kind in editor viewer; do
+    printf '#!/bin/sh\necho "$1" >"%s/opened-with-%s"\n' "$work" "$kind" >"$work/bin/smoke-$kind"
+    chmod +x "$work/bin/smoke-$kind"
+    printf '[Desktop Entry]\nType=Application\nName=Smoke %s\nExec=smoke-%s %%f\nMimeType=text/plain;\n' \
+        "${kind^}" "$kind" >"$work/data/applications/smoke-$kind.desktop"
+done
+printf '[Default Applications]\ntext/plain=smoke-editor.desktop\n' >"$work/config/mimeapps.list"
 # An old log file that startup must delete.
 logs=$work/state/yagni-commander/logs
 mkdir -p "$logs"
@@ -146,6 +156,15 @@ typed run
 keys Escape Return
 check "run.sh ran" has "$work/ran" ran
 check "run.sh not handed to xdg-open" has "$work/opened" "$left/notes.txt"
+
+echo "Shift-Enter opens a file with an application picked from a list"
+typed notes
+keys Escape shift+Return
+shot 02c-open-with
+keys Down Return
+check "Smoke Viewer got notes.txt" has "$work/opened-with-viewer" "$left/notes.txt"
+keys shift+Return Return
+check "the default, Smoke Editor, got notes.txt" has "$work/opened-with-editor" "$left/notes.txt"
 
 echo "F7 new directory"
 keys F7
@@ -303,8 +322,8 @@ printf o >"$left/cmp1/only"
 keys ctrl+r
 typed cmp1
 keys Escape space space
-# Compare by content is the 12th Files item.
-keys F10 Down Down Down Down Down Down Down Down Down Down Down Down
+# Compare by content is the 13th Files item.
+keys F10 Down Down Down Down Down Down Down Down Down Down Down Down Down
 shot 08d-menu-compare
 keys Return
 sleep 1

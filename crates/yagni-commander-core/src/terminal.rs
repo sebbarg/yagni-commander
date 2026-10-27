@@ -120,7 +120,7 @@ fn kde_terminal(kdeglobals: Option<&str>) -> String {
 
 /// `name` as an executable file: a path as given, else the first match in
 /// `path` (a `PATH`-style list).
-fn find_in_path(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
+pub(crate) fn find_in_path(name: &str, path: Option<&OsStr>) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
     let executable = |p: &Path| {
         std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)

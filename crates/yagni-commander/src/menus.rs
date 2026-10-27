@@ -11,9 +11,9 @@ use crate::actions::{
     About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyName, CopyParentPath, CopyPath,
     Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog,
     MakeDirectory, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal,
-    Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified, SortByName,
-    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
-    View, ZoomIn, ZoomOut, ZoomReset,
+    OpenWith, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
+    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
+    ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -122,6 +122,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
     let mut files = vec![
         item("View", View),
         item("Edit", Edit),
+        item("Open with...", OpenWith),
         item("New file", EditNewFile),
         item("Copy", Copy),
         item("Move", Move),
@@ -335,6 +336,7 @@ mod tests {
             [
                 "View",
                 "Edit",
+                "Open with...",
                 "New file",
                 "Copy",
                 "Move",
