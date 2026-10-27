@@ -161,7 +161,12 @@ impl Engine<'_> {
         if self.observer.is_cancelled() {
             return None;
         }
-        match meta.kind {
+        // As the copy will: a listing's folder that is a link is a link.
+        let kind = match meta.kind {
+            Kind::Dir => fs.lstat(path).map_or(Kind::Dir, |m| m.kind),
+            kind => kind,
+        };
+        match kind {
             Kind::Dir => {
                 for (name, child) in fs.read_dir(path).unwrap_or_default() {
                     self.scan_across(fs, &path.join(name), &child)?;
@@ -169,7 +174,7 @@ impl Engine<'_> {
             }
             Kind::File | Kind::Symlink => {
                 self.progress.files_total += 1;
-                if meta.kind == Kind::File {
+                if kind == Kind::File {
                     self.progress.bytes_total += meta.size;
                 }
                 self.report_progress();
@@ -189,11 +194,10 @@ impl Engine<'_> {
         delete_source: bool,
     ) -> Step {
         self.set_current(source);
-        // A move deletes what it goes into: a listing's folder is checked
-        // (a server may describe a symlink as its target), and a link is
-        // moved as a link.
+        // A listing's folder is checked (a server may describe a symlink as
+        // its target): a link is copied or moved as a link, never followed.
         let kind = match meta.kind {
-            Kind::Dir if delete_source => src.lstat(source).map_or(Kind::Dir, |m| m.kind),
+            Kind::Dir => src.lstat(source).map_or(Kind::Dir, |m| m.kind),
             kind => kind,
         };
         let step = match kind {

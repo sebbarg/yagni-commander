@@ -559,8 +559,16 @@ impl Commander {
     /// Also stops a quiet re-read (one hung on a dead mount), without
     /// starting another.
     pub fn cancel_load(&mut self, side: Side) -> bool {
-        // A Connect tab given up on goes away again.
+        // A Connect tab given up on goes away again, with where it was to
+        // go next.
         let id = self.panel(side).id();
+        if self
+            .then_go_to
+            .as_ref()
+            .is_some_and(|(waiting, _)| *waiting == id)
+        {
+            self.then_go_to = None;
+        }
         if self.connecting.contains(&id) && self.panel(side).loading().is_some() {
             self.connecting.retain(|c| *c != id);
             self.panel_mut(side).take_loading();
@@ -622,11 +630,14 @@ impl Commander {
                 self.bring_to_front(side);
             }
             let panel = self.panel(side);
-            if names_folder && panel.path() != dir {
-                if panel.loading().is_some() {
+            // Where it is, or is about to be.
+            let shown = panel.loading().map_or(panel.path(), |l| l.path.as_path());
+            if names_folder && shown != dir {
+                if self.connecting.contains(&panel.id()) {
                     // Still connecting: go there once it is.
                     self.then_go_to = Some((panel.id(), dir));
                 } else {
+                    // A plain go_to (ignored while the tab reads a folder).
                     self.go_to_on(side, dir);
                 }
             }
@@ -3656,6 +3667,49 @@ mod remote_tests {
         c.connect(top.join("sub"));
         c.run_loads_now();
         assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top.join("sub")]);
+    }
+
+    #[test]
+    fn a_folder_asked_for_is_forgotten_when_its_read_is_cancelled() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("a")).unwrap();
+        fs::create_dir(tmp.path().join("c")).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        let top = remote("forget", tmp.path());
+        c.connect(top.clone());
+        c.execute(Command::PrevTab);
+        c.connect(top.join("a"));
+        assert!(c.cancel_load(c.active()), "gives up connecting");
+        c.run_loads_now();
+        // Connected tab later, a plain navigation: no stale folder.
+        c.connect(top.clone());
+        c.run_loads_now();
+        c.go_to(top.join("c"));
+        c.run_loads_now();
+        assert_eq!(c.panel(c.active()).path(), top.join("c"));
+    }
+
+    #[test]
+    fn connect_to_a_connected_tab_that_is_reading_leaves_no_stale_folder() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in ["a", "b", "c"] {
+            fs::create_dir(tmp.path().join(dir)).unwrap();
+        }
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        let top = remote("reading", tmp.path());
+        c.connect(top.clone());
+        c.run_loads_now();
+        c.go_to(top.join("b")); // a read still pending
+        c.execute(Command::PrevTab);
+        c.connect(top.join("a"));
+        assert!(c.cancel_load(c.active()));
+        c.run_loads_now();
+        assert_eq!(c.panel(c.active()).path(), top, "the cancelled read: where it was");
+        c.go_to(top.join("c"));
+        c.run_loads_now();
+        assert_eq!(c.panel(c.active()).path(), top.join("c"), "not a stale /a");
     }
 
     #[test]

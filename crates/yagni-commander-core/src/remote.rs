@@ -418,8 +418,10 @@ type Sessions = Mutex<HashMap<String, Arc<Slot>>>;
 static SESSIONS: std::sync::LazyLock<Sessions> = std::sync::LazyLock::new(Sessions::default);
 
 /// How long a read waits for the shared session before it takes one of its
-/// own: the one in use may be stuck on a dead connection (ssh gives up on
-/// it after about 45 s). Not while the session is being made.
+/// own: the one in use is usually busy with a big listing. Its own goes
+/// through ssh's shared connection too (no second password prompt), so if
+/// that connection is dead it waits as well, until ssh gives up on it
+/// (about 45 s), on its own thread. Not while the session is being made.
 const BUSY_WAIT: Duration = Duration::from_secs(2);
 
 /// Runs `f` on the shared session with `host`, connecting first if there is
