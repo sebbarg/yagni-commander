@@ -848,10 +848,26 @@ impl Render for FileManager {
                 }),
             );
 
-        let status = match (self.commander.read(cx).error(), &self.notice) {
-            (Some(err), _) => div().text_color(colors.error).child(err.to_owned()),
-            (None, Some(notice)) => div().text_color(colors.error).child(notice.clone()),
-            (None, None) => div()
+        let problem: Option<SharedString> = match (self.commander.read(cx).error(), &self.notice) {
+            (Some(err), _) => Some(err.to_owned().into()),
+            (None, notice) => notice.clone(),
+        };
+        let status = match problem {
+            // A click copies the message (an ssh error is worth pasting).
+            Some(text) => div()
+                .id("status-error")
+                .debug_selector(|| "status-error".into())
+                .cursor_pointer()
+                .text_color(colors.error)
+                .on_click(cx.listener({
+                    let text = text.clone();
+                    move |_, _, _, cx| {
+                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_string()))
+                    }
+                }))
+                .child(text),
+            None => div()
+                .id("status-hint")
                 .text_color(colors.text_secondary)
                 .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
         };

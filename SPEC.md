@@ -89,7 +89,7 @@ Decided with the owner 2026-10-04, on the `zoom` branch, modeled on Zed.
 - Directories are read off the UI thread, so a huge directory or a slow or hung network mount never freezes the app (decided 2026-10-01; the owner uses network mounts).
 - While a panel loads, it keeps showing its previous listing. A load that finishes within about 150 ms switches without any indicator. After that the panel header shows "Loading <path>... N entries" (a live count) and the old listing dims.
 - While loading, that panel accepts only Escape (cancel: stay on the old listing; at startup: go to the home folder) and Tab/Shift-Tab. Dialogs and file operations on the loading panel are ignored. Quit always works, and the other panel works normally.
-- A failed load leaves the panel where it was, with the error in the status line. A load that fails in a background tab shows its error when that tab comes to the front (2026-10-04).
+- A failed load leaves the panel where it was, with the error in the status line. A click on an error or notice there copies its text to the clipboard (owner, 2026-10-27). A load that fails in a background tab shows its error when that tab comes to the front (2026-10-04).
 - Startup loads in the background too, including the fallback for a missing remembered folder (nearest readable parent, then home). Folders given on the command line are checked before the window opens; one that is not a directory ends the app with an error.
 - A newer navigation replaces a pending one. A reload requested while a navigation is pending is dropped (the navigation brings a fresh listing anyway).
 - A read the operating system never returns (a dead NFS server) cannot be interrupted: Escape abandons it, and its thread ends when the read returns or the app exits.

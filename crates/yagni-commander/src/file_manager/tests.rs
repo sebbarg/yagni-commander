@@ -7720,6 +7720,11 @@ mod remote_folders {
                 .is_some_and(|e| e.contains("Could not resolve hostname")),
             "{error:?}"
         );
+        let error = error.unwrap();
+        // A click on it copies it.
+        let at = cx.debug_bounds("status-error").expect("drawn").center();
+        cx.simulate_click(at, gpui_kit::Modifiers::none());
+        assert_eq!(clipboard_text(cx).as_deref(), Some(error.as_str()));
     }
 }
 
