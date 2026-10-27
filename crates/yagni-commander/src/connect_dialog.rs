@@ -18,7 +18,7 @@ use crate::theme::Theme;
 use crate::zoom::rems_from_px;
 
 /// Rows shown before the list scrolls.
-const VISIBLE_ROWS: f32 = 10.0;
+const VISIBLE_ROWS: f32 = 15.0;
 /// Rows Page Up/Page Down move: a screenful less one, so a row stays.
 const PAGE: isize = VISIBLE_ROWS as isize - 1;
 const ROW_HEIGHT: f32 = 24.0;

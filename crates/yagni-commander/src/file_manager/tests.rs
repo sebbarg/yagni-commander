@@ -7813,11 +7813,11 @@ mod connect {
         cx.simulate_keystrokes("ctrl-f");
         cx.run_until_parked();
         cx.simulate_keystrokes("pagedown");
-        assert_eq!(target(cx).as_deref(), Some("h09"));
-        cx.simulate_keystrokes("pagedown pagedown pagedown");
+        assert_eq!(target(cx).as_deref(), Some("h14"));
+        cx.simulate_keystrokes("pagedown pagedown");
         assert_eq!(target(cx).as_deref(), Some("h24"), "stops at the end");
         cx.simulate_keystrokes("pageup");
-        assert_eq!(target(cx).as_deref(), Some("h15"));
+        assert_eq!(target(cx).as_deref(), Some("h10"));
         cx.simulate_keystrokes("pageup pageup");
         assert_eq!(target(cx).as_deref(), Some("h00"));
         // Home moves the caret: "h" typed there goes before the "1".
