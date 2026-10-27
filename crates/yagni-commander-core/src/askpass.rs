@@ -131,12 +131,15 @@ pub fn secure_dir(dir: &Path) -> io::Result<()> {
 /// is 104 bytes, Linux's 108).
 const SOCKET_PATH_MAX: usize = 103;
 
-/// Whether ssh's shared-connection sockets fit in `dir`: `cm-` and the
-/// 40-character `%C` hash, plus the 17 characters ssh adds to a socket
-/// while it sets one up.
+/// Whether ssh's shared-connection sockets fit in `dir`: `cm-`, the
+/// process id and the 40-character `%C` hash, plus the 17 characters ssh
+/// adds to a socket while it sets one up.
 pub fn fits_control_path(dir: &Path) -> bool {
-    dir.as_os_str().len() + "/cm-".len() + 40 + 17 <= SOCKET_PATH_MAX
+    dir.as_os_str().len() + "/cm-".len() + PID_DIGITS + 1 + 40 + 17 <= SOCKET_PATH_MAX
 }
+
+/// The most digits a process id has (Linux allows up to 4194304).
+const PID_DIGITS: usize = 7;
 
 /// The app's end: owns the socket (removed when dropped). The questions
 /// arrive on the receiver [`Server::start`] returns.
@@ -149,7 +152,8 @@ impl Server {
     /// Listens on a socket of this process in `dir` (see [`secure_dir`]).
     pub fn start(dir: &Path) -> io::Result<(Self, Receiver<Question>)> {
         secure_dir(dir)?;
-        let socket = dir.join(format!("ask-{}", std::process::id()));
+        clear_stale(dir);
+        let socket = socket_of(dir, std::process::id());
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
         let token = random_token()?;
@@ -181,6 +185,40 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+/// This process's socket in `dir`.
+fn socket_of(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("ask-{pid}"))
+}
+
+/// Quit: removes this process's socket from `dir` (nothing else would: the
+/// app's globals are not dropped on exit).
+pub fn remove_socket(dir: &Path) {
+    let _ = std::fs::remove_file(socket_of(dir, std::process::id()));
+}
+
+/// Removes the sockets of earlier runs that are no longer running (a
+/// crash, or a quit before [`remove_socket`] existed).
+fn clear_stale(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(pid) = name
+            .to_str()
+            .and_then(|n| n.strip_prefix("ask-"))
+            .and_then(|n| n.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        let gone = nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None)
+            == Err(nix::errno::Errno::ESRCH);
+        if gone {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 
@@ -370,6 +408,32 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700);
         secure_dir(&tmp.path().join("a/b")).unwrap();
         assert!(tmp.path().join("a/b").is_dir());
+    }
+
+    #[test]
+    fn stale_sockets_go_and_live_ones_stay() {
+        let dir = tempfile::tempdir().unwrap();
+        // pid 1 runs; a pid past Linux's limit never does.
+        for name in ["ask-1", "ask-99999999", "cm-1-x", "ask-x"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let (_server, _questions) = Server::start(dir.path()).unwrap();
+        let mut left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        let own = format!("ask-{}", std::process::id());
+        let mut expected = vec![
+            "ask-1".to_owned(),
+            "ask-x".into(),
+            "cm-1-x".into(),
+            own.clone(),
+        ];
+        expected.sort();
+        assert_eq!(left, expected);
+        remove_socket(dir.path());
+        assert!(!dir.path().join(own).exists());
     }
 
     #[test]

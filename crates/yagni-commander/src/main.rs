@@ -109,7 +109,7 @@ fn main() {
         Ok((server, questions)) => {
             yagni_commander_core::remote::set_asking(yagni_commander_core::remote::Asking {
                 env: server.env(),
-                control_dir,
+                control_dir: control_dir.clone(),
             });
             Some((server, questions))
         }
@@ -135,8 +135,11 @@ fn main() {
             cx.on_action(|_: &Quit, cx| cx.quit());
 
             cx.set_global(app_state);
-            cx.on_app_quit(|cx| {
+            cx.on_app_quit(move |cx| {
                 cx.global::<AppState>().save();
+                // ssh would keep them for ControlPersist after we're gone.
+                yagni_commander_core::remote::close_shared(&control_dir);
+                askpass::remove_socket(&control_dir);
                 async {}
             })
             .detach();

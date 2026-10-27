@@ -185,7 +185,7 @@ fn ssh_command_with(host: &str, asking: Option<&Asking>) -> Command {
             // Too long a folder: no sharing (each connection asks again)
             // rather than no connection at all.
             if crate::askpass::fits_control_path(&asking.control_dir) {
-                let path = asking.control_dir.join("cm-%C");
+                let path = asking.control_dir.join(control_name(std::process::id()));
                 let mut control_path = OsString::from("ControlPath=");
                 control_path.push(path.as_os_str());
                 command
@@ -199,6 +199,54 @@ fn ssh_command_with(host: &str, asking: Option<&Asking>) -> Command {
     }
     command.args(["-s", "--", host, "sftp"]);
     command
+}
+
+/// The shared connections' socket name in the control folder: this app's
+/// process id, so a quit closes only its own (another instance shares the
+/// folder), then ssh's `%C` hash of the destination.
+fn control_name(pid: u32) -> String {
+    format!("cm-{pid}-%C")
+}
+
+/// Quit: ends this app's shared connections in `control_dir` (`ssh -O
+/// exit`), which would otherwise outlive it by `ControlPersist`. Waits at
+/// most two seconds in all.
+pub fn close_shared(control_dir: &Path) {
+    let mut running = Vec::new();
+    for socket in own_sockets(control_dir, std::process::id()) {
+        let mut command = crate::shell_path::command("ssh");
+        command
+            .arg("-S")
+            .arg(&socket)
+            .args(["-O", "exit", "shared"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if let Ok(child) = command.spawn() {
+            running.push(child);
+        }
+    }
+    let until = std::time::Instant::now() + Duration::from_secs(2);
+    for mut child in running {
+        while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// The shared-connection sockets of process `pid` in `dir`.
+fn own_sockets(dir: &Path, pid: u32) -> Vec<PathBuf> {
+    let prefix = format!("cm-{pid}-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().as_bytes().starts_with(prefix.as_bytes()))
+        .map(|e| e.path())
+        .collect()
 }
 
 /// One SFTP session: the ssh process and the client on its pipes. Dropping
@@ -633,7 +681,8 @@ pub(crate) mod tests {
         let args = args(&command);
         assert!(!args.iter().any(|a| a == "BatchMode=yes"));
         assert!(args.iter().any(|a| a == "ControlMaster=auto"));
-        assert!(args.iter().any(|a| a == "ControlPath=/run/yc/cm-%C"));
+        let own = format!("ControlPath=/run/yc/cm-{}-%C", std::process::id());
+        assert!(args.iter().any(|a| *a == own), "{args:?}");
         assert!(args.iter().any(|a| a == CONTROL_PERSIST));
         let env: Vec<_> = command.get_envs().collect();
         assert!(env.contains(&("SSH_ASKPASS".as_ref(), Some("/bin/helper".as_ref()))));
@@ -753,6 +802,25 @@ pub(crate) mod tests {
             assert!(text.ends_with(&format!("ssh said: {said}")), "{text}");
         }
         assert!(!no_sftp_server("Permission denied (publickey)."));
+    }
+
+    #[test]
+    fn a_quit_closes_only_this_apps_shared_connections() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["cm-42-abc", "cm-42-def", "cm-420-xyz", "cm-7-abc", "ask-42"] {
+            std::fs::write(dir.path().join(name), "").unwrap();
+        }
+        let mut own: Vec<_> = own_sockets(dir.path(), 42)
+            .into_iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        own.sort();
+        assert_eq!(own, ["cm-42-abc", "cm-42-def"]);
+        assert!(own_sockets(&dir.path().join("gone"), 42).is_empty());
+        // Not sockets: ssh fails on each, quickly, and nothing is left running.
+        let started = std::time::Instant::now();
+        close_shared(dir.path());
+        assert!(started.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
