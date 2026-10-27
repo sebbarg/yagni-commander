@@ -7806,6 +7806,27 @@ mod connect {
     }
 
     #[gpui_kit::test]
+    fn home_end_and_page_keys_move_in_the_list(cx: &mut TestAppContext) {
+        let (_tmp, home, _commander, cx) = with_hosts(cx);
+        let config: String = (0..25).map(|i| format!("Host h{i:02}\n")).collect();
+        std::fs::write(home.path().join(".ssh/config"), config).unwrap();
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("end");
+        assert_eq!(target(cx).as_deref(), Some("h24"));
+        cx.simulate_keystrokes("home");
+        assert_eq!(target(cx).as_deref(), Some("h00"));
+        cx.simulate_keystrokes("pagedown");
+        assert_eq!(target(cx).as_deref(), Some("h09"));
+        cx.simulate_keystrokes("pagedown pagedown pagedown");
+        assert_eq!(target(cx).as_deref(), Some("h24"), "stops at the end");
+        cx.simulate_keystrokes("pageup");
+        assert_eq!(target(cx).as_deref(), Some("h15"));
+        cx.simulate_keystrokes("pageup pageup");
+        assert_eq!(target(cx).as_deref(), Some("h00"));
+    }
+
+    #[gpui_kit::test]
     fn a_typed_host_not_in_the_config(cx: &mut TestAppContext) {
         let (_tmp, _home, commander, cx) = with_hosts(cx);
         cx.simulate_keystrokes("ctrl-f");

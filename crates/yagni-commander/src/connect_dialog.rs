@@ -2,8 +2,9 @@
 //! `~/.ssh/config`, by name, under a field that filters them. Enter opens the
 //! highlighted host's login folder (`sftp://host`) in the active panel; when
 //! the typed text is not exactly an alias it is offered last as a host of
-//! its own (`user@host`). Up/Down move in the list while the field keeps
-//! the focus.
+//! its own (`user@host`). Up/Down, Page Up/Page Down and Home/End move in
+//! the list while the field keeps the focus (so Home/End don't move the
+//! caret; Left/Right do).
 
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::{
@@ -19,6 +20,8 @@ use crate::zoom::rems_from_px;
 
 /// Rows shown before the list scrolls.
 const VISIBLE_ROWS: f32 = 10.0;
+/// Rows Page Up/Page Down move: a screenful less one, so a row stays.
+const PAGE: isize = VISIBLE_ROWS as isize - 1;
 const ROW_HEIGHT: f32 = 24.0;
 
 /// A row of the list.
@@ -167,6 +170,30 @@ impl Render for ConnectDialog {
             .capture_action(
                 cx.listener(|this, _: &gpui_kit::base::input::MoveDown, _, cx| {
                     this.step(1, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_kit::base::input::MovePageUp, _, cx| {
+                    this.step(-PAGE, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_kit::base::input::MovePageDown, _, cx| {
+                    this.step(PAGE, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_kit::base::input::MoveHome, _, cx| {
+                    this.step(-(this.rows.len() as isize), cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .capture_action(
+                cx.listener(|this, _: &gpui_kit::base::input::MoveEnd, _, cx| {
+                    this.step(this.rows.len() as isize, cx);
                     cx.stop_propagation();
                 }),
             )
