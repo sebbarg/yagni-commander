@@ -87,6 +87,9 @@ pub fn read_listing(request: &LoadRequest) -> io::Result<Listing> {
     if let Some(archive) = &request.archive {
         return read_archive(request, archive);
     }
+    if crate::remote::is_remote(&request.path) {
+        return read_remote(request);
+    }
     let read = |path: &Path| {
         request.progress.store(0, Ordering::Relaxed);
         // Before the entries: a change made during the read leaves a newer
@@ -147,6 +150,42 @@ fn read_nearest(path: &Path, read: impl Fn(&Path) -> io::Result<Listing>) -> io:
         }
     }
     Err(first_error.unwrap_or_else(|| io::ErrorKind::NotFound.into()))
+}
+
+/// A remote folder. At startup any failure falls back to the home folder,
+/// skipping the parents: on a host that can't be reached none can be read.
+/// With `up_if_missing`, a missing folder walks up the remote parents.
+fn read_remote(request: &LoadRequest) -> io::Result<Listing> {
+    let mut path = request.path.clone();
+    let result = loop {
+        let result = crate::remote::read_listing(&path, &request.progress, &request.cancel);
+        match (&result, crate::remote::parent(&path)) {
+            (Err(e), Some(parent))
+                if request.up_if_missing
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+            {
+                path = parent;
+            }
+            _ => break result,
+        }
+    };
+    match (&request.fallback, result) {
+        (Some(home), Err(_)) => {
+            request.progress.store(0, Ordering::Relaxed);
+            let entries = read_entries(home, &request.progress)?;
+            Ok(Listing {
+                path: home.clone(),
+                entries,
+                archive: None,
+                results: None,
+                modified: dir_modified(home),
+            })
+        }
+        (_, result) => result,
+    }
 }
 
 /// The archive's index (read again only if the file changed) and the

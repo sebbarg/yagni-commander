@@ -3,6 +3,7 @@ mod app_state;
 mod button_row;
 mod columns;
 mod config_state;
+mod connect_dialog;
 mod file_manager;
 mod find_dialog;
 mod fonts;
@@ -50,7 +51,12 @@ fn main() {
     // Folders given on the command line must exist; the user typed them.
     // (Saved folders are not checked: an offline mount would block here.)
     for arg in &args {
-        if !std::path::Path::new(arg).is_dir() {
+        let path = std::path::Path::new(arg);
+        // A remote folder is read in the background, like a saved one.
+        if yagni_commander_core::remote::parse(path).is_some() {
+            continue;
+        }
+        if !path.is_dir() {
             eprintln!("yagni-commander: not a directory: {arg}");
             std::process::exit(1);
         }

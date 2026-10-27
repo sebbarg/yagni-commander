@@ -25,6 +25,7 @@ use crate::oplog::OperationLog;
 
 mod archive_names;
 mod compare;
+mod download;
 pub(crate) mod extract;
 mod pack;
 mod safe_dir;
@@ -78,6 +79,12 @@ pub enum Operation {
     /// Compares two files byte for byte, or two folders by names, types
     /// and contents. Reads only and logs nothing.
     Compare { first: PathBuf, second: PathBuf },
+    /// Copies remote entries (`sftp://host/...`, all on one host) to a
+    /// local `to` (F5 from a remote panel; F3 into a temp folder).
+    Download {
+        sources: Vec<PathBuf>,
+        to: Destination,
+    },
 }
 
 /// Where copied or moved entries go. Missing folders on the way are created.
@@ -280,6 +287,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             ("extract", std::slice::from_ref(archive), Some(to.path()))
         }
         // Reads only: no engine, nothing logged.
+        Operation::Download { sources, to } => ("download", sources, Some(to.path())),
         Operation::Compare { first, second } => {
             let (comparison, cancelled) = compare::run(first, second, observer);
             return Report {
@@ -328,6 +336,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             names,
             to,
         } => engine.extract_entries(archive, inner, names, to),
+        Operation::Download { sources, to } => engine.download(sources, to),
         Operation::Compare { .. } => unreachable!("returned above"),
     }
     let report = &engine.report;

@@ -47,7 +47,7 @@ impl FileManager {
         {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         let side = self.commander.read(cx).active();

@@ -17,7 +17,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
 - Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap. Except in the native macOS menu, which can't show Enter or Tab: Open with, Properties, Next tab and Previous tab show no key there (gpui showed Shift-Enter as Shift-E, which also acted as a shortcut; owner, 2026-10-27).
   - **Files:** View (F3), Edit (F4), Open with... (Shift-Enter), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8), Pack (Alt-F5), Extract (Alt-F6), Compare by content (no key); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS), Copy name (Ctrl-Shift-C), Copy parent path (Ctrl-Alt-C); Quit (Linux only, Alt-F4).
-  - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D), Mounts left (Alt-F1), Mounts right (Alt-F2), Find files (Alt-F7), Open terminal here (Ctrl-Shift-T).
+  - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D), Connect (Ctrl-F), Mounts left (Alt-F1), Mounts right (Alt-F2), Find files (Alt-F7), Open terminal here (Ctrl-Shift-T).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. Then Zoom in (Ctrl-=), Zoom out (Ctrl--) and Actual size (Ctrl-0), see Zoom. The sort commands are actions, so the keymap can bind them; unbound by default.
   - **Help (Linux):** About, Check for updates..., then Go to config file and Go to operation log. On macOS, About, Check for updates... and Quit sit in the app menu (platform convention), and Help has only the two go-to items.
   - **Settings...** (Ctrl-,): Linux at the end of Files, above Quit; macOS in the app menu, above Quit.
@@ -137,6 +137,20 @@ Open the file under the cursor with an application picked from the ones register
   - Left out: `Hidden`, `NoDisplay` (unless it is the default), not `Type=Application`, `OnlyShowIn`/`NotShowIn` not matching `$XDG_CURRENT_DESKTOP`, a `TryExec` not found on `PATH`, no `Exec` (a D-Bus-only application), and `Terminal=true` unless `xdg-terminal-exec` is on `PATH` (it then starts through it).
   - The name is `Name` in the user's language (`LC_ALL`, `LC_MESSAGES`, `LANG`). `Exec` field codes: `%f`, `%F`, `%u` and `%U` are the file's path, `%i` the icon (`--icon <name>`), `%c` the name, `%k` the desktop file, `%%` a percent sign; the deprecated ones are dropped. Without a file code the path goes last.
 - macOS: Launch Services' list for the file (`NSWorkspace`), its default marked, the names as Finder shows them; started with `open -a`.
+
+### Remote folders (prototype)
+
+Browse a folder on another machine over SFTP and copy from it (owner, 2026-10-27; the `sftp-prototype` branch).
+
+- A remote folder is `sftp://host/path`; `sftp://host` alone is the login folder. `host` is what you would type after `ssh`: a `~/.ssh/config` alias or `user@host`. Reached from the Connect dialog (below), a hotlist entry (Ctrl-D, Configure or Add current folder) or the command line (`yagni-commander sftp://box/srv`). The path header and the window title show it as is.
+- The connection is the system's `ssh` (`ssh -s host sftp`), so `~/.ssh/config`, the agent, `known_hosts` and `ProxyJump` work as in a terminal. Keys only: `BatchMode` is on, so a password prompt or an unknown host key fails with ssh's own message (connect once in a terminal to accept a new host key). One shared connection per host for browsing; each copy or view opens its own, so a long copy doesn't hold up browsing. A connection that breaks is opened again on the next read.
+- Connect (Ctrl-F, Commands > Connect...; owner, 2026-10-27): a dialog with a field and the hosts of `~/.ssh/config` below it, each alias with `user@hostname:port` as far as the config gives them. Nothing is stored by the app: the config is the list. `Include` is followed (relative to `~/.ssh`, `*` and `?`); `Host` patterns with `*`, `?` or `!` and `Match` blocks are left out. Typing filters by alias or detail (ignoring case); text that is not exactly an alias is offered last as a host of its own ("not in ~/.ssh/config"), so `user@host` works too. Up/Down move in the list while typing; Enter or a double click opens the highlighted host's login folder in the active panel; Escape closes. A typed text ssh could read as an option is refused ("is not a host name").
+- Enter and Backspace browse; the root has no "..". Enter on a file does nothing. Symlinks show as what they point to.
+- F5 copies files and folders to a local folder, with the usual progress, conflict prompt and cancel; times and permissions are kept (permissions without setuid bits). Symlinks are not copied (a failure each). Relative destinations typed on a remote panel are in the home folder.
+- F3 downloads the file into a private temp folder (as inside an archive) and opens the viewer on it.
+- Everything else that writes or needs local files (F2, F4, F6, F7, F8, Shift-F4, Alt-F5, Alt-F6, Alt-F7, Alt-Enter, Shift-Enter, Ctrl-Shift-T, Compare) shows "A remote folder can only be viewed (F3) and copied from (F5) in this version." Copying to a remote folder says "Nothing can be written to a remote folder yet".
+- F8 on a remote panel (when writes come) is always a permanent delete: no remote trash. It asks with Shift-F8's wording (owner, 2026-10-27).
+- Not watched: Ctrl-R re-reads. A remote tab is restored at startup; if the host can't be reached the tab falls back to the home folder.
 
 ### Error messages
 

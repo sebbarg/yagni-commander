@@ -7303,3 +7303,367 @@ mod open_with {
         assert!(!is_open(cx));
     }
 }
+
+mod remote_folders {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+    use yagni_commander_core::remote::{self, ON_REMOTE};
+
+    /// Every host is this machine, through OpenSSH's `sftp-server` over
+    /// pipes (no ssh).
+    pub(super) fn use_local_server() {
+        fn local(_: &str) -> std::process::Command {
+            let program = ["/usr/lib/openssh/sftp-server", "/usr/libexec/sftp-server"]
+                .into_iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .expect("OpenSSH's sftp-server is needed (Ubuntu: openssh-sftp-server)");
+            std::process::Command::new(program)
+        }
+        remote::set_connector(local);
+    }
+
+    fn remote_path(dir: &std::path::Path) -> std::path::PathBuf {
+        remote::path_of("test-host", dir.as_os_str().as_bytes())
+    }
+
+    /// `open_with_target` (the right panel on `a`), with the left panel on
+    /// the same folder as a remote one, its cursor on `f`.
+    fn on_remote(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        use_local_server();
+        let (tmp, commander, cx) = open_with_target(cx);
+        let top = remote_path(tmp.path());
+        commander.update(cx, |c, cx| {
+            c.go_to(top.clone());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), top);
+        cx.simulate_keystrokes("end");
+        (tmp, commander, cx)
+    }
+
+    fn refusal(cx: &mut VisualTestContext) -> String {
+        assert!(dialog_open(cx), "an error box");
+        let text = box_text(cx);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        text
+    }
+
+    #[gpui_kit::test]
+    fn enter_and_backspace_browse_the_remote_folder(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        assert_eq!(labels(&commander, Side::Left, cx), ["..", "a", "b", "f"]);
+        cx.simulate_keystrokes("home down enter");
+        cx.run_until_parked();
+        assert_eq!(
+            path(&commander, Side::Left, cx),
+            remote_path(&tmp.path().join("a"))
+        );
+        cx.simulate_keystrokes("backspace");
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), remote_path(tmp.path()));
+    }
+
+    #[gpui_kit::test]
+    fn writing_keys_are_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        for key in [
+            "f2",
+            "f4",
+            "f6",
+            "f7",
+            "f8",
+            "delete",
+            "shift-f8",
+            "shift-delete",
+            "shift-f4",
+            "alt-f5",
+            "alt-f6",
+            "alt-f9",
+            "alt-f7",
+            "alt-enter",
+            "ctrl-shift-t",
+            "shift-enter",
+        ] {
+            cx.simulate_keystrokes("end");
+            cx.simulate_keystrokes(key);
+            cx.run_until_parked();
+            assert_eq!(
+                refusal(cx),
+                format!("On a remote folder\n{ON_REMOTE}"),
+                "{key}"
+            );
+        }
+        assert!(!job_running(cx));
+        assert!(tmp.path().join("f").exists());
+    }
+
+    #[gpui_kit::test]
+    fn f5_downloads_to_the_other_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        cx.simulate_keystrokes("f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "destination prompt");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+        assert!(
+            labels(&commander, Side::Right, cx).contains(&"f".to_owned()),
+            "reloaded"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn f5_to_a_remote_folder_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        // The local side copies; the remote one is the destination.
+        std::fs::write(tmp.path().join("a/g"), "g").unwrap();
+        cx.simulate_keystrokes("tab ctrl-r end f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot copy\nNothing can be written to a remote folder yet"
+        );
+        assert!(!job_running(cx));
+        let names: Vec<_> = std::fs::read_dir(tmp.path().join("a")).unwrap().collect();
+        assert_eq!(names.len(), 1, "nothing written locally");
+        assert!(!tmp.path().join("a/sftp:").exists());
+    }
+
+    #[gpui_kit::test]
+    fn a_relative_destination_from_a_remote_panel_is_in_home(cx: &mut TestAppContext) {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("f"), b"new").unwrap();
+        setup(cx);
+        let mut commander = Commander::start(
+            remote_path(tmp.path()),
+            home.path().to_path_buf(),
+            false,
+            home.path().to_path_buf(),
+        );
+        commander.run_loads_now();
+        let commander = cx.new(|_| commander);
+        let cx = window_on(commander.clone(), cx);
+        file_manager(cx).update(cx, |this, _| this.load = None);
+        assert_eq!(labels(&commander, Side::Left, cx), ["..", "f"]);
+        cx.simulate_keystrokes("end f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("copied");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(home.path().join("copied")).unwrap(), b"new");
+    }
+
+    #[gpui_kit::test]
+    fn f3_downloads_and_opens_a_viewer(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = on_remote(cx);
+        let temp = tempfile::tempdir().unwrap();
+        file_manager(cx).update(cx, |this, _| {
+            this.temp_dir = Some(temp.path().join("viewer-tmp"))
+        });
+        cx.simulate_keystrokes("f3");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no error");
+        assert_eq!(viewers(cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_folder_is_not_watched_but_saved(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        let watched = file_manager(cx).read_with(cx, |this, _| this.watched.clone());
+        assert!(
+            watched.iter().flatten().all(|w| !remote::is_remote(w)),
+            "{watched:?}"
+        );
+        let saved = cx.update(|_, cx| cx.global::<AppState>().state.left_tabs.clone());
+        assert_eq!(saved, [remote_path(tmp.path())]);
+    }
+
+    #[gpui_kit::test]
+    fn an_unreachable_host_shows_ssh_s_reason(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        fn failing(_: &str) -> std::process::Command {
+            let mut command = std::process::Command::new("sh");
+            command.args([
+                "-c",
+                "echo 'ssh: Could not resolve hostname nowhere' >&2; exit 255",
+            ]);
+            command
+        }
+        remote::set_connector(failing);
+        commander.update(cx, |c, cx| {
+            c.go_to("sftp://nowhere/".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        use_local_server();
+        let error = commander.read_with(cx, |c, _| c.error().map(str::to_owned));
+        assert!(
+            error
+                .as_deref()
+                .is_some_and(|e| e.contains("Could not resolve hostname")),
+            "{error:?}"
+        );
+    }
+}
+
+mod connect {
+    use super::*;
+    use crate::connect_dialog::Row;
+
+    /// `open`, with `~/.ssh/config` in a temporary home naming `web` and
+    /// `db`, and every host served by a local `sftp-server`.
+    fn with_hosts(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        tempfile::TempDir,
+        Entity<Commander>,
+        &mut VisualTestContext,
+    ) {
+        super::remote_folders::use_local_server();
+        let (tmp, commander, cx) = open(cx);
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir(home.path().join(".ssh")).unwrap();
+        std::fs::write(
+            home.path().join(".ssh/config"),
+            "Host web\n  HostName 10.0.0.5\n  User deploy\nHost db\n  HostName db.lan\n",
+        )
+        .unwrap();
+        let ssh_home = home.path().to_path_buf();
+        file_manager(cx).update(cx, |this, _| this.ssh_home = Some(ssh_home));
+        (tmp, home, commander, cx)
+    }
+
+    fn rows(cx: &mut VisualTestContext) -> Vec<Row> {
+        let view = file_manager(cx).read_with(cx, |this, _| this.connect_dialog.clone());
+        view.expect("the dialog is open")
+            .read_with(cx, |v, _| v.rows().to_vec())
+    }
+
+    fn target(cx: &mut VisualTestContext) -> Option<String> {
+        let view = file_manager(cx).read_with(cx, |this, _| this.connect_dialog.clone());
+        view.unwrap().read_with(cx, |v, _| v.target())
+    }
+
+    fn login_folder(host: &str) -> std::path::PathBuf {
+        use std::os::unix::ffi::OsStrExt;
+        let here = std::env::current_dir().unwrap();
+        yagni_commander_core::remote::path_of(host, here.as_os_str().as_bytes())
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_f_lists_the_hosts_and_enter_opens_the_first(cx: &mut TestAppContext) {
+        let (_tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert_eq!(rows(cx), [Row::Host(0), Row::Host(1)]);
+        assert!(cx.debug_bounds("connect-row-1").is_some(), "drawn");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("web"));
+    }
+
+    #[gpui_kit::test]
+    fn typing_filters_and_arrows_move_while_the_field_has_focus(cx: &mut TestAppContext) {
+        let (_tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("lan");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), [Row::Host(1), Row::Typed("lan".into())]);
+        cx.simulate_keystrokes("down");
+        assert_eq!(target(cx).as_deref(), Some("lan"));
+        cx.simulate_keystrokes("down");
+        assert_eq!(target(cx).as_deref(), Some("lan"), "stops at the end");
+        cx.simulate_keystrokes("up");
+        assert_eq!(target(cx).as_deref(), Some("db"));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("db"));
+    }
+
+    #[gpui_kit::test]
+    fn a_typed_host_not_in_the_config(cx: &mut TestAppContext) {
+        let (_tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("me@other");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("me@other"));
+    }
+
+    #[gpui_kit::test]
+    fn a_typed_text_that_is_no_host_name_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("-oProxyCommand=x");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot connect\n“-oProxyCommand=x” is not a host name."
+        );
+        cx.simulate_keystrokes("escape escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_and_a_double_click_connects(cx: &mut TestAppContext) {
+        let (tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        let row = cx.debug_bounds("connect-row-1").unwrap().center();
+        cx.simulate_click(row, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(target(cx).as_deref(), Some("db"), "a click selects");
+        cx.simulate_event(gpui_kit::MouseDownEvent {
+            position: row,
+            button: gpui_kit::MouseButton::Left,
+            modifiers: gpui_kit::Modifiers::none(),
+            click_count: 2,
+            first_mouse: false,
+        });
+        cx.simulate_event(gpui_kit::MouseUpEvent {
+            position: row,
+            button: gpui_kit::MouseButton::Left,
+            modifiers: gpui_kit::Modifiers::none(),
+            click_count: 2,
+        });
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("db"));
+    }
+
+    #[gpui_kit::test]
+    fn no_config_says_what_to_type(cx: &mut TestAppContext) {
+        let (_tmp, home, _commander, cx) = with_hosts(cx);
+        std::fs::remove_file(home.path().join(".ssh/config")).unwrap();
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        assert!(rows(cx).is_empty());
+        assert!(cx.debug_bounds("connect-empty").is_some());
+    }
+}

@@ -69,19 +69,24 @@ pub(super) const PROMPT_WIDTH: f32 = 420.0;
 type Confirm = dyn Fn(&mut Window, &mut App) -> bool;
 
 impl FileManager {
-    /// Inside an archive, a writing command shows why it can't run.
-    /// Returns true when refused.
-    pub(super) fn refuse_in_archive(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !self.active_panel(cx).in_archive() {
+    /// Inside an archive or on a remote folder, a writing command shows
+    /// why it can't run. Returns true when refused.
+    pub(super) fn refuse_read_only(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let panel = self.active_panel(cx);
+        let (title, text) = if panel.in_archive() {
+            (
+                "Inside an archive",
+                yagni_commander_core::archive::IN_ARCHIVE,
+            )
+        } else if panel.is_remote() {
+            (
+                "On a remote folder",
+                yagni_commander_core::remote::ON_REMOTE,
+            )
+        } else {
             return false;
-        }
-        show_error(
-            "Inside an archive",
-            yagni_commander_core::archive::IN_ARCHIVE,
-            Some(self.focus.clone()),
-            window,
-            cx,
-        );
+        };
+        show_error(title, text, Some(self.focus.clone()), window, cx);
         true
     }
 
@@ -106,7 +111,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -148,7 +153,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -181,7 +186,8 @@ impl FileManager {
     /// The hotlist's "Add current folder": asks for a name (the folder's
     /// name, preselected) and appends the entry.
     pub(super) fn add_current_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.refuse_in_archive(window, cx) {
+        // A remote folder can be added; a folder inside an archive can't.
+        if self.active_panel(cx).in_archive() && self.refuse_read_only(window, cx) {
             return;
         }
         if self.config_refused(window, cx) {
@@ -217,7 +223,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -313,6 +319,9 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
+        if self.active_panel(cx).is_remote() && self.refuse_read_only(window, cx) {
+            return;
+        }
         let dir = self.active_panel(cx).real_dir().to_path_buf();
         let command = self.terminal.clone();
         let (failed, failure) = std::sync::mpsc::channel::<String>();
@@ -332,7 +341,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         if self.refuse_in_results(window, cx) {
@@ -381,14 +390,17 @@ impl FileManager {
         {
             return;
         }
-        if panel.in_archive() {
+        if panel.in_archive() || panel.is_remote() {
             let refused = panel.cursor_entry().is_some_and(|e| e.is_symlink);
-            let result = if refused {
-                Err(std::io::Error::other(
+            let result = match (refused, panel.is_remote()) {
+                (true, false) => Err(std::io::Error::other(
                     "Only files can be viewed inside an archive.",
-                ))
-            } else {
-                self.view_in_archive(window, cx)
+                )),
+                (true, true) => Err(std::io::Error::other(
+                    "Symlinks can't be viewed on a remote folder yet.",
+                )),
+                (false, false) => self.view_in_archive(window, cx),
+                (false, true) => self.view_remote(window, cx),
             };
             if let Err(e) = result {
                 show_error(

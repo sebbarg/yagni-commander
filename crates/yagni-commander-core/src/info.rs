@@ -415,7 +415,7 @@ mod tests {
     fn non_utf8_names_and_archive_entries() {
         use std::ffi::OsString;
         use std::os::unix::ffi::OsStringExt;
-        let entry = Entry::archived(
+        let entry = Entry::listed(
             OsString::from_vec(b"bad\xff".to_vec()),
             EntryKind::File,
             false,
@@ -436,7 +436,7 @@ mod tests {
         assert!(get(&shown, "Owner").is_none(), "zips store none");
         assert_eq!(get(&shown, "Permissions"), Some("rw-r--r-- (644)"));
 
-        let link = Entry::archived(
+        let link = Entry::listed(
             "l".into(),
             EntryKind::File,
             true,
@@ -448,7 +448,7 @@ mod tests {
         let shown = lines("l", "/", &Ok(from_entry(&link)), &Count::NotAFolder);
         assert_eq!(get(&shown, "Type"), Some("Symbolic link"));
         assert_eq!(get(&shown, "Owner"), Some("me:staff"));
-        let dir = Entry::archived("d".into(), EntryKind::Dir, false, None, None, None, None);
+        let dir = Entry::listed("d".into(), EntryKind::Dir, false, None, None, None, None);
         assert!(matches!(from_entry(&dir).kind, Kind::Folder));
     }
 

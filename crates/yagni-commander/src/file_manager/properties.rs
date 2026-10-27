@@ -86,6 +86,9 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
+        if self.active_panel(cx).is_remote() && self.refuse_read_only(window, cx) {
+            return;
+        }
         let Some((name, folder, subject)) = subject(self.active_panel(cx)) else {
             return;
         };

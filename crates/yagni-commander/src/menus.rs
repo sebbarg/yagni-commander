@@ -8,8 +8,8 @@ use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, CheckForUpdates, CloseTab, CompareContents, Copy, CopyName, CopyParentPath, CopyPath,
-    Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog,
+    About, CheckForUpdates, CloseTab, CompareContents, Connect, Copy, CopyName, CopyParentPath,
+    CopyPath, Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog,
     MakeDirectory, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal,
     OpenWith, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
     SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
@@ -197,6 +197,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Swap panels", SwapPanels),
                 item("Reload", Reload),
                 item("Directory hotlist", DirectoryHotlist),
+                item("Connect...", Connect),
                 item("Mounts left", MountsLeft),
                 item("Mounts right", MountsRight),
                 item("Find files...", FindFiles),
@@ -366,6 +367,7 @@ mod tests {
                 "Swap panels",
                 "Reload",
                 "Directory hotlist",
+                "Connect...",
                 "Mounts left",
                 "Mounts right",
                 "Find files...",

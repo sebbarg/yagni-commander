@@ -65,6 +65,10 @@ impl FileManager {
             if !panel.is_loaded() {
                 continue;
             }
+            // Nothing to watch locally; Ctrl-R re-reads.
+            if panel.is_remote() {
+                continue;
+            }
             let dir = panel.real_dir();
             if !needed.iter().any(|d| d == dir) {
                 needed.push(dir.to_path_buf());

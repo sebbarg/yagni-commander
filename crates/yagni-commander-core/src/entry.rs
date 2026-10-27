@@ -49,9 +49,10 @@ impl Entry {
         }
     }
 
-    /// An entry inside an archive (`crate::archive`): never followed, so a
-    /// symlink is a file here.
-    pub(crate) fn archived(
+    /// An entry described rather than read from the local disk: inside an
+    /// archive (`crate::archive`, where a symlink is never followed, so it is
+    /// a file) or in a remote folder (`crate::remote`).
+    pub(crate) fn listed(
         name: OsString,
         kind: EntryKind,
         is_symlink: bool,
@@ -226,9 +227,8 @@ mod tests {
 
     #[test]
     fn a_search_result_is_hidden_by_its_file_name() {
-        let entry = |name: &str| {
-            Entry::archived(name.into(), EntryKind::File, false, None, None, None, None)
-        };
+        let entry =
+            |name: &str| Entry::listed(name.into(), EntryKind::File, false, None, None, None, None);
         assert!(entry("src/.env").is_hidden());
         assert!(!entry(".git/config").is_hidden());
     }

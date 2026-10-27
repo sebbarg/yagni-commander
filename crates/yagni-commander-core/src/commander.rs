@@ -186,7 +186,11 @@ impl Commander {
             let panels = dirs
                 .into_iter()
                 .map(|dir| {
-                    let path = std::path::absolute(&dir).unwrap_or_else(|_| home.clone());
+                    let path = if crate::remote::is_remote(&dir) {
+                        dir
+                    } else {
+                        std::path::absolute(&dir).unwrap_or_else(|_| home.clone())
+                    };
                     Panel::empty(path, show_hidden)
                 })
                 .collect();
@@ -3370,5 +3374,95 @@ mod toggle_to_tests {
         assert_eq!(selected(&c), ["f1"]);
         c.execute(UP); // at the top, on ".."
         assert_eq!(selected(&c), ["f1"]);
+    }
+}
+
+#[cfg(test)]
+mod remote_tests {
+    use super::*;
+    use crate::remote::tests::{remote, use_local_server};
+    use std::fs;
+
+    fn run(c: &mut Commander, command: Command) -> Outcome {
+        let outcome = c.execute(command);
+        c.run_loads_now();
+        outcome
+    }
+
+    fn put_cursor(c: &mut Commander, label: &str) {
+        let side = c.active();
+        let ix = c
+            .panel(side)
+            .entries()
+            .iter()
+            .position(|e| e.label == label)
+            .unwrap();
+        c.execute(Command::CursorTo(side, ix));
+    }
+
+    fn labels(c: &Commander) -> Vec<String> {
+        c.panel(c.active())
+            .entries()
+            .iter()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    #[test]
+    fn browses_into_and_out_of_a_remote_folder() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("a/b")).unwrap();
+        fs::write(tmp.path().join("a/f"), "x").unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        let top = remote("browse", tmp.path());
+        c.go_to(top.clone());
+        c.run_loads_now();
+        let panel = c.panel(c.active());
+        assert_eq!(panel.path(), top);
+        assert!(panel.is_remote());
+        assert_eq!(labels(&c), ["..", "a"]);
+
+        put_cursor(&mut c, "a");
+        run(&mut c, Command::Activate);
+        assert_eq!(c.panel(c.active()).path(), top.join("a"));
+        assert_eq!(labels(&c), ["..", "b", "f"]);
+
+        put_cursor(&mut c, "f");
+        assert_eq!(
+            run(&mut c, Command::Activate),
+            Outcome::Done,
+            "a file: nothing"
+        );
+        assert_eq!(c.panel(c.active()).path(), top.join("a"));
+
+        run(&mut c, Command::GoUp);
+        assert_eq!(c.panel(c.active()).path(), top);
+        let cursor = c.panel(c.active()).cursor_entry().unwrap();
+        assert_eq!(cursor.label, "a", "the cursor on the folder we came from");
+    }
+
+    #[test]
+    fn the_remote_root_has_no_way_up() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        c.go_to(PathBuf::from("sftp://root-test/"));
+        c.run_loads_now();
+        assert!(labels(&c).iter().all(|l| l != ".."));
+        run(&mut c, Command::GoUp);
+        assert_eq!(c.panel(c.active()).path().as_os_str(), "sftp://root-test/");
+    }
+
+    #[test]
+    fn a_remote_start_folder_is_kept_and_falls_back_to_home() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let top = remote("start", tmp.path());
+        let gone = remote("start", &tmp.path().join("gone"));
+        let mut c = Commander::start(top.clone(), gone, true, tmp.path().to_path_buf());
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), top);
+        assert_eq!(c.panel(Side::Right).path(), tmp.path(), "home");
     }
 }

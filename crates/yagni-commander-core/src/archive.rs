@@ -122,7 +122,7 @@ impl ArchiveIndex {
             let size = (kind == EntryKind::File).then_some(item.size);
             let default_mode = if kind == EntryKind::Dir { 0o755 } else { 0o644 };
             let mode = Some(type_bits | item.mode.unwrap_or(default_mode));
-            let entry = Entry::archived(
+            let entry = Entry::listed(
                 name.clone(),
                 kind,
                 is_symlink,
@@ -209,7 +209,7 @@ fn add_folders(folders: &mut Building, parent: &[OsString]) {
         }
         folders.insert(parent[..depth].to_vec(), HashMap::new());
         let name = parent[depth - 1].clone();
-        let implied = Entry::archived(
+        let implied = Entry::listed(
             name.clone(),
             EntryKind::Dir,
             false,

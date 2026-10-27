@@ -300,8 +300,9 @@ impl Panel {
                 results: None,
                 up_if_missing: false,
             }),
-            // No archives in archives, nothing runs from one.
-            EntryKind::File if self.in_archive() => Enter::None,
+            // No archives in archives, nothing runs from one or a remote
+            // folder.
+            EntryKind::File if self.in_archive() || self.is_remote() => Enter::None,
             EntryKind::File if Format::from_name(&entry.name).is_some() => {
                 let file = self.path.join(&entry.name);
                 Enter::Dir(Navigation {
@@ -336,6 +337,15 @@ impl Panel {
             return Some(Navigation {
                 target: index.file().parent()?.to_path_buf(),
                 select: index.file().file_name().map(|n| n.to_os_string()),
+                archive: None,
+                results: None,
+                up_if_missing: false,
+            });
+        }
+        if self.is_remote() {
+            return Some(Navigation {
+                target: crate::remote::parent(&self.path)?,
+                select: crate::remote::file_name(&self.path),
                 archive: None,
                 results: None,
                 up_if_missing: false,
@@ -381,8 +391,14 @@ impl Panel {
         self.archive.is_some()
     }
 
+    /// On a remote folder (`sftp://host/...`, see [`crate::remote`]).
+    pub fn is_remote(&self) -> bool {
+        crate::remote::is_remote(&self.path)
+    }
+
     /// The real folder: the archive's folder inside an archive, else the
-    /// panel's own (watcher, state file).
+    /// panel's own (watcher, state file). On a remote folder that is the
+    /// remote path, which names nothing locally: check [`Panel::is_remote`].
     pub fn real_dir(&self) -> &Path {
         match &self.archive {
             Some(index) => index.file().parent().unwrap_or(index.file()),

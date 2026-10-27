@@ -84,6 +84,9 @@ pub fn find_letter(entries: &[HotlistEntry], ch: char) -> Option<usize> {
 /// The folder an entry's path names: `~` and `~/...` under `home`, an
 /// absolute path as is, anything else relative to `home`.
 pub fn expand(path: &str, home: &Path) -> PathBuf {
+    if crate::remote::is_remote(Path::new(path)) {
+        return PathBuf::from(path);
+    }
     if path == "~" {
         return home.to_path_buf();
     }
@@ -110,15 +113,28 @@ pub fn contract(path: &Path, home: &Path) -> String {
 
 /// The Configure dialog's check of a typed path.
 pub fn validate(path: &str) -> Result<(), &'static str> {
+    if crate::remote::is_remote(Path::new(path)) {
+        return match crate::remote::parse(Path::new(path)) {
+            Some(_) => Ok(()),
+            None => Err("A remote folder is sftp://host or sftp://host/path"),
+        };
+    }
     if path == "~" || path.starts_with("~/") || Path::new(path).is_absolute() {
         Ok(())
     } else {
-        Err("A folder must be an absolute path or start with ~/")
+        Err("A folder must be an absolute path, start with ~/ or sftp://")
     }
 }
 
 /// The last component of `path` (`/` for the root, `~` for home).
 pub fn default_name(path: &str) -> String {
+    let remote = Path::new(path);
+    if let Some(location) = crate::remote::parse(remote) {
+        return crate::remote::file_name(remote).map_or_else(
+            || location.host.to_owned(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+    }
     match Path::new(path).components().next_back() {
         Some(Component::Normal(name)) => name.to_string_lossy().into_owned(),
         Some(Component::RootDir) | None if path.starts_with('/') => "/".to_owned(),
@@ -246,10 +262,10 @@ mod tests {
 
     #[test]
     fn validate_takes_absolute_and_home_paths_only() {
-        for ok in ["/", "/etc", "~", "~/src"] {
+        for ok in ["/", "/etc", "~", "~/src", "sftp://box", "sftp://me@box/srv"] {
             assert_eq!(validate(ok), Ok(()), "{ok}");
         }
-        for bad in ["", "  ", "src", "./src", "~other"] {
+        for bad in ["", "  ", "src", "./src", "~other", "sftp://", "sftp://-o/x"] {
             assert!(validate(bad).is_err(), "{bad:?}");
         }
     }
@@ -260,5 +276,21 @@ mod tests {
         assert_eq!(default_name("~/src/"), "src");
         assert_eq!(default_name("/"), "/");
         assert_eq!(default_name("~"), "~");
+        assert_eq!(default_name("sftp://box/srv/www"), "www");
+        assert_eq!(default_name("sftp://box"), "box");
+        assert_eq!(default_name("sftp://box/"), "box");
+    }
+
+    #[test]
+    fn a_remote_folder_is_kept_as_typed() {
+        let home = Path::new("/home/me");
+        assert_eq!(
+            expand("sftp://box/srv", home),
+            PathBuf::from("sftp://box/srv")
+        );
+        assert_eq!(
+            contract(Path::new("sftp://box/home/me"), home),
+            "sftp://box/home/me"
+        );
     }
 }

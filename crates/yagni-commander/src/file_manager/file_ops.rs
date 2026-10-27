@@ -25,6 +25,7 @@ use yagni_commander_core::file_ops::{
     LinkChoice, LinkPlace, LinkQuestion, Operation, PasswordAnswer, PasswordQuestion, Progress,
     Report, Settings, is_archive,
 };
+use yagni_commander_core::remote;
 use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, Panel, PanelId, Side, format_modified, format_size,
 };
@@ -134,7 +135,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if kind == Kind::Move && self.refuse_in_archive(window, cx) {
+        if kind == Kind::Move && self.refuse_read_only(window, cx) {
             return;
         }
         // The destination is the other panel's folder: wait for it too.
@@ -143,7 +144,7 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (sources, dir, home, other_dir, one_is_dir, from_archive) = {
+        let (sources, dir, home, other_dir, one_is_dir, from_archive, from_remote) = {
             let commander = self.commander.read(cx);
             let panel = commander.panel(commander.active());
             let other = commander.panel(commander.active().other());
@@ -163,6 +164,7 @@ impl FileManager {
                 other.path().to_path_buf(),
                 one_is_dir,
                 from_archive,
+                panel.is_remote(),
             )
         };
         if sources.is_empty() || self.refuse_second_job(window, cx) {
@@ -201,6 +203,7 @@ impl FileManager {
                         names: from.names.clone(),
                         to,
                     },
+                    (None, Kind::Copy) if from_remote => Operation::Download { sources, to },
                     (None, Kind::Copy) => Operation::Copy { sources, to },
                     (None, _) => Operation::Move { sources, to },
                 };
@@ -218,7 +221,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         let other = self.commander.read(cx).active().other();
@@ -278,7 +281,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         let other = self.commander.read(cx).active().other();
@@ -364,6 +367,16 @@ impl FileManager {
                 return;
             }
         };
+        if remote::is_remote(&pair.first) || remote::is_remote(&pair.second) {
+            show_error(
+                "On a remote folder",
+                remote::ON_REMOTE,
+                Some(self.focus.clone()),
+                window,
+                cx,
+            );
+            return;
+        }
         if inside_archive(&pair.first) || inside_archive(&pair.second) {
             show_error(
                 "Inside an archive",
@@ -395,15 +408,6 @@ impl FileManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> io::Result<()> {
-        if self.refuse_second_job(window, cx) {
-            return Ok(());
-        }
-        let root = self
-            .temp_dir
-            .clone()
-            .ok_or_else(|| io::Error::other("no folder for temporary files"))?;
-        yagni_commander_core::storage::private_dir(&root)?;
-        let dir = tempfile::Builder::new().prefix("view-").tempdir_in(&root)?;
         let (archive, inner, name) = {
             let panel = self.active_panel(cx);
             let index = panel.archive().expect("view_file checked");
@@ -414,14 +418,52 @@ impl FileManager {
                 entry.name.clone(),
             )
         };
-        let file = dir.path().join(&name);
-        let operation = Operation::ExtractEntries {
+        self.view_copy(&name, window, cx, |file| Operation::ExtractEntries {
             archive,
             inner,
-            names: vec![name],
-            to: Destination::As(file.clone()),
+            names: vec![name.clone()],
+            to: Destination::As(file),
+        })
+    }
+
+    /// F3 on a remote folder: downloads the file under the cursor into a
+    /// fresh private folder; `finish_job` opens the viewer on it.
+    pub(super) fn view_remote(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> io::Result<()> {
+        let (source, name) = {
+            let panel = self.active_panel(cx);
+            let entry = panel.cursor_entry().expect("view_file checked");
+            (panel.cursor_path(), entry.name.clone())
         };
-        self.start_job(Kind::View, operation, window, cx)?;
+        self.view_copy(&name, window, cx, |file| Operation::Download {
+            sources: vec![source],
+            to: Destination::As(file),
+        })
+    }
+
+    /// Runs `operation`, which copies a file to the path it is given (named
+    /// `name`, in a fresh private folder), as a View job.
+    fn view_copy(
+        &mut self,
+        name: &std::ffi::OsStr,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        operation: impl FnOnce(PathBuf) -> Operation,
+    ) -> io::Result<()> {
+        if self.refuse_second_job(window, cx) {
+            return Ok(());
+        }
+        let root = self
+            .temp_dir
+            .clone()
+            .ok_or_else(|| io::Error::other("no folder for temporary files"))?;
+        yagni_commander_core::storage::private_dir(&root)?;
+        let dir = tempfile::Builder::new().prefix("view-").tempdir_in(&root)?;
+        let file = dir.path().join(name);
+        self.start_job(Kind::View, operation(file.clone()), window, cx)?;
         if let Some(running) = &mut self.job {
             running.viewing = Some(Viewing { dir, file });
         }
@@ -432,7 +474,7 @@ impl FileManager {
         if self.active_loading(cx) {
             return;
         }
-        if self.refuse_in_archive(window, cx) {
+        if self.refuse_read_only(window, cx) {
             return;
         }
         self.end_search(cx);
@@ -1178,7 +1220,7 @@ fn zip_path(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
     if typed.is_empty() {
         return Err(invalid("give a name for the archive".into()));
     }
-    let mut path = typed_path(dir, home, typed);
+    let mut path = typed_path(dir, home, typed)?;
     if inside_archive(&path) {
         return Err(invalid("Can't pack into an archive".into()));
     }
@@ -1304,13 +1346,23 @@ fn extract_title(archives: &[PathBuf]) -> String {
 }
 
 /// A path typed into the F5/F6/Alt-F5/Alt-F6 prompts: `~` and `~/...` in
-/// `home`, like a shell (never a folder named `~`), else relative to `dir`.
-fn typed_path(dir: &Path, home: &Path, typed: &str) -> PathBuf {
-    match typed.strip_prefix('~') {
+/// `home`, like a shell (never a folder named `~`), else relative to `dir`
+/// (`home` when `dir` is remote). Always local: a remote destination is
+/// refused, since nothing writes to a remote folder yet.
+fn typed_path(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
+    // Before any join: joined to a local folder it would look local.
+    if remote::is_remote(Path::new(typed)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Nothing can be written to a remote folder yet",
+        ));
+    }
+    Ok(match typed.strip_prefix('~') {
         Some("") => home.to_path_buf(),
         Some(rest) if rest.starts_with('/') => home.join(rest.trim_start_matches('/')),
+        _ if remote::is_remote(dir) => home.join(typed),
         _ => dir.join(typed),
-    }
+    })
 }
 
 /// The folder the Alt-F6 prompt names, relative to `dir`; created by the job.
@@ -1320,7 +1372,7 @@ fn extract_folder(dir: &Path, home: &Path, typed: &str) -> io::Result<PathBuf> {
     if typed.is_empty() {
         return Err(invalid("give a folder".into()));
     }
-    let into = typed_path(dir, home, typed);
+    let into = typed_path(dir, home, typed)?;
     if is_or_inside_archive(&into) {
         return Err(invalid("Can't extract into an archive".into()));
     }
@@ -1348,7 +1400,7 @@ fn destination(
     if typed.is_empty() {
         return Err(invalid("give a destination".into()));
     }
-    let to = typed_path(dir, home, typed);
+    let to = typed_path(dir, home, typed)?;
     if inside_archive(&to) {
         return Err(invalid("Can't copy into an archive".into()));
     }

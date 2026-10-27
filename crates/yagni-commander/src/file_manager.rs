@@ -14,6 +14,7 @@ use yagni_commander_core::{
 };
 
 pub(crate) mod commands;
+mod connect;
 mod file_ops;
 mod find;
 mod loads;
@@ -22,8 +23,8 @@ mod properties;
 mod watch;
 
 use crate::actions::{
-    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Copy, CopyName,
-    CopyParentPath, CopyPath, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
+    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Connect, Copy,
+    CopyName, CopyParentPath, CopyPath, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
     DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig,
     GoToLog, GoUp, MakeDirectory, MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab,
     OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack, PageDown, PageUp, PrevTab, Reload,
@@ -156,6 +157,10 @@ pub struct FileManager {
     next_lookup: u64,
     /// The open hotlist Configure dialog's view.
     pub(crate) hotlist_dialog: Option<Entity<crate::hotlist_dialog::HotlistDialog>>,
+    pub(crate) connect_dialog: Option<Entity<crate::connect_dialog::ConnectDialog>>,
+    /// The home folder whose `.ssh/config` the Connect dialog reads; `None`
+    /// is the commander's home. App tests point it at a temporary folder.
+    pub(crate) ssh_home: Option<PathBuf>,
     /// What the menus' check marks show; `None` before the first update.
     menu_state: Option<MenuState>,
     /// Alt went down alone and no mouse click or window switch followed (see
@@ -291,6 +296,8 @@ impl FileManager {
             apps_lookup: None,
             next_lookup: 0,
             hotlist_dialog: None,
+            connect_dialog: None,
+            ssh_home: None,
             menu_state: None,
             alt_armed: false,
             activated_at: None,
@@ -979,6 +986,9 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &DirectoryHotlist, window, cx| {
                 this.directory_hotlist(window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &Connect, window, cx| this.open_connect_dialog(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &MountsLeft, window, cx| {
                 this.toggle_mounts(Side::Left, window, cx)
             }))

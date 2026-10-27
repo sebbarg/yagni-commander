@@ -20,6 +20,9 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
+        if self.active_panel(cx).is_remote() && self.refuse_read_only(window, cx) {
+            return;
+        }
         let view = match &self.find {
             Some(view) => view.clone(),
             None => {
