@@ -7806,16 +7806,12 @@ mod connect {
     }
 
     #[gpui_kit::test]
-    fn home_end_and_page_keys_move_in_the_list(cx: &mut TestAppContext) {
+    fn page_keys_move_in_the_list_and_home_end_stay_in_the_field(cx: &mut TestAppContext) {
         let (_tmp, home, _commander, cx) = with_hosts(cx);
         let config: String = (0..25).map(|i| format!("Host h{i:02}\n")).collect();
         std::fs::write(home.path().join(".ssh/config"), config).unwrap();
         cx.simulate_keystrokes("ctrl-f");
         cx.run_until_parked();
-        cx.simulate_keystrokes("end");
-        assert_eq!(target(cx).as_deref(), Some("h24"));
-        cx.simulate_keystrokes("home");
-        assert_eq!(target(cx).as_deref(), Some("h00"));
         cx.simulate_keystrokes("pagedown");
         assert_eq!(target(cx).as_deref(), Some("h09"));
         cx.simulate_keystrokes("pagedown pagedown pagedown");
@@ -7824,6 +7820,14 @@ mod connect {
         assert_eq!(target(cx).as_deref(), Some("h15"));
         cx.simulate_keystrokes("pageup pageup");
         assert_eq!(target(cx).as_deref(), Some("h00"));
+        // Home moves the caret: "h" typed there goes before the "1".
+        cx.simulate_input("1");
+        cx.simulate_keystrokes("home");
+        cx.simulate_input("h");
+        cx.run_until_parked();
+        // "h1" matches h10 to h19, then the typed text itself ("1h",
+        // had Home not moved the caret, would match nothing).
+        assert_eq!(rows(cx).len(), 11);
     }
 
     #[gpui_kit::test]
