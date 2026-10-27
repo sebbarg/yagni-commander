@@ -682,7 +682,7 @@ pub(crate) mod tests {
         assert!(!args.iter().any(|a| a == "BatchMode=yes"));
         assert!(args.iter().any(|a| a == "ControlMaster=auto"));
         let own = format!("ControlPath=/run/yc/cm-{}-%C", std::process::id());
-        assert!(args.iter().any(|a| *a == own), "{args:?}");
+        assert!(args.contains(&own), "{args:?}");
         assert!(args.iter().any(|a| a == CONTROL_PERSIST));
         let env: Vec<_> = command.get_envs().collect();
         assert!(env.contains(&("SSH_ASKPASS".as_ref(), Some("/bin/helper".as_ref()))));
