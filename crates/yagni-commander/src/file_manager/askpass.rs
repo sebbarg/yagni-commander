@@ -15,7 +15,9 @@ use gpui_kit::{
 use yagni_commander_core::askpass::{Kind, Question};
 
 use super::FileManager;
-use super::commands::{OPENER_POLL, dialog_password_field, focus_when_open, themed_dialog};
+use super::commands::{
+    OPENER_POLL, ask_for_attention, dialog_password_field, focus_when_open, themed_dialog,
+};
 use crate::button_row::{ButtonRow, OnPress};
 
 /// The question, until it is answered, and the count of open questions
@@ -84,6 +86,8 @@ impl FileManager {
     }
 
     fn ask(&mut self, question: Question, window: &mut Window, cx: &mut Context<Self>) {
+        // ssh waits for this, often for a copy or an upload in the background.
+        ask_for_attention(window);
         let text = SharedString::from(question.prompt.trim().to_owned());
         let kind = question.kind;
         // Jobs hold their dialogs back meanwhile (see `poll_job`).

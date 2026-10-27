@@ -630,6 +630,17 @@ pub(crate) fn configured_editor(
     editor
 }
 
+/// A prompt that comes up by itself (an ssh question, a remote file
+/// changed, a failed upload) while the user works in another window: ask
+/// the window system to bring this one forward. Wayland compositors decide;
+/// Hyprland marks the window urgent unless `misc:focus_on_activate` is on,
+/// KDE flashes its taskbar entry.
+pub(crate) fn ask_for_attention(window: &Window) {
+    if !window.is_window_active() {
+        window.activate_window();
+    }
+}
+
 /// Every dialog's builder starts here: gpui-component's `Dialog` paints its
 /// own background and then applies ours, so this one wins (`dialog_bg`).
 pub(crate) fn themed_dialog(dialog: Dialog, cx: &App) -> Dialog {

@@ -19,7 +19,9 @@ use yagni_commander_core::file_ops::{
 use yagni_commander_core::launch;
 
 use super::FileManager;
-use super::commands::{configured_editor, focus_when_open, show_error, themed_dialog};
+use super::commands::{
+    ask_for_attention, configured_editor, focus_when_open, show_error, themed_dialog,
+};
 use super::file_ops::{Kind, RunningJob};
 use crate::button_row::{ButtonRow, OnPress};
 
@@ -239,6 +241,8 @@ impl FileManager {
                     }
                     Err(e) => {
                         let text = format!("{}: {e}", edited.remote.display());
+                        // The save happened in the editor, another window.
+                        ask_for_attention(window);
                         show_error("Cannot upload", text, None, window, cx);
                     }
                 }
@@ -272,6 +276,8 @@ impl FileManager {
     /// The remote file changed since it was fetched: upload over it, or
     /// leave it (the next save asks again).
     fn ask_overwrite(&mut self, remote: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // The save happened in the editor, another window.
+        ask_for_attention(window);
         let name = yagni_commander_core::remote::file_name(&remote)
             .unwrap_or_default()
             .to_string_lossy()

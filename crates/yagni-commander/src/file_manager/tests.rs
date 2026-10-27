@@ -7588,8 +7588,11 @@ mod remote_folders {
         cx.simulate_keystrokes("f4");
         wait_until(cx, |cx| !job_running(cx));
         std::fs::write(tmp.path().join("f"), "someone else").unwrap();
+        // The save comes from the editor: this window is in the background.
+        cx.deactivate_window();
         save(cx, "mine");
         watch_until(cx, dialog_open);
+        assert!(cx.update(|window, _| window.is_window_active()), "brought forward");
         assert!(cx.debug_bounds("remote-changed").is_some());
         assert_eq!(remote_text(&tmp, "f"), "someone else");
         cx.simulate_keystrokes("left enter"); // Upload
@@ -8215,6 +8218,18 @@ mod ssh_questions {
         assert!(!dialog_open(cx));
         assert_eq!(open(cx), 0, "no job held forever");
         assert_eq!(answer.try_recv().ok(), None, "never answered, dropped");
+    }
+
+    #[gpui_kit::test]
+    fn a_question_brings_the_window_forward(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        cx.deactivate_window();
+        cx.run_until_parked();
+        assert!(!cx.update(|window, _| window.is_window_active()));
+        let (question, _answer) = Question::new("password: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        assert!(cx.update(|window, _| window.is_window_active()));
     }
 
     #[gpui_kit::test]
