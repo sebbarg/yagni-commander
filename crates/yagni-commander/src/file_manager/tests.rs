@@ -2371,15 +2371,28 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
             "ctrl-d",
         ),
         (&crate::actions::MountsLeft, "alt-f1"),
-        (&crate::actions::OpenWith, "shift-enter"),
         (&crate::actions::MountsRight, "alt-f2"),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
         (&crate::actions::CloseTab, close_tab),
+    ] {
+        assert_eq!(key(action, cx).as_deref(), Some(keys));
+        assert_eq!(first(action, cx).as_deref(), Some(keys));
+    }
+    // macOS's native menu shows no key for these: it can't show Enter or
+    // Tab (`actions::hide_native_menu_keys`).
+    for (action, keys) in [
+        (
+            &crate::actions::OpenWith as &dyn gpui_kit::Action,
+            "shift-enter",
+        ),
+        (&crate::actions::ShowProperties, "alt-enter"),
         (&crate::actions::NextTab, "ctrl-tab"),
         (&crate::actions::PrevTab, "ctrl-shift-tab"),
     ] {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
-        assert_eq!(first(action, cx).as_deref(), Some(keys));
+        if cfg!(not(target_os = "macos")) {
+            assert_eq!(first(action, cx).as_deref(), Some(keys));
+        }
     }
 }
 

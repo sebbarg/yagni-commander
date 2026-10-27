@@ -520,4 +520,95 @@ mod tests {
             ]
         );
     }
+
+    /// gpui's native macOS menu shows an action's first binding when it is
+    /// a single keystroke, and gets keys it can't express wrong (Shift-Enter
+    /// as Shift-E). With the bindings registered in macOS's order, every
+    /// item shows a key it can express, or none.
+    #[gpui_kit::test]
+    fn native_menu_shows_no_wrong_keys(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::actions::hide_native_menu_keys(cx);
+            crate::actions::bind_default_keys(cx);
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            for def in menus(STATE, true) {
+                for entry in def.entries {
+                    let MenuEntry::Item { label, action, .. } = entry else {
+                        continue;
+                    };
+                    let Some(first) = keymap.bindings_for_action(action.as_ref()).next() else {
+                        continue;
+                    };
+                    if let [keystroke] = first.keystrokes() {
+                        let key = &keystroke.inner().key;
+                        assert!(
+                            crate::actions::native_menu_key(key),
+                            "{label}: the native menu can't show {key}"
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn native_menu_keys_are_characters_and_the_keys_gpui_maps() {
+        use crate::actions::native_menu_key;
+        for key in [
+            "a", "=", ",", "f1", "f12", "f35", "delete", "space", "pageup",
+        ] {
+            assert!(native_menu_key(key), "{key}");
+        }
+        for key in ["enter", "tab", "f0", "f36", "fn", "kp_enter"] {
+            assert!(!native_menu_key(key), "{key}");
+        }
+    }
+
+    /// gpui's `key_to_native` (gpui-pre-macos `events.rs`) lacks Enter and
+    /// Tab, so `actions::hide_native_menu_keys` hides those items' keys in
+    /// the macOS menu. Fails once the gpui in `Cargo.lock` maps both: then
+    /// remove the workaround (and this test), and the menu shows the keys.
+    #[test]
+    fn gpui_still_cannot_show_enter_and_tab_in_the_native_menu() {
+        let lock = include_str!("../../../Cargo.lock");
+        let version = lock
+            .split("[[package]]")
+            .find(|p| p.contains("name = \"gpui-pre-macos\"\n"))
+            .and_then(|p| p.lines().find_map(|l| l.strip_prefix("version = ")))
+            .map(|v| v.trim_matches('"').to_owned())
+            .expect("gpui-pre-macos in Cargo.lock");
+        let cargo_home = std::env::var_os("CARGO_HOME")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| std::path::Path::new(&home).join(".cargo"))
+            })
+            .expect("a cargo home");
+        let source = std::fs::read_dir(cargo_home.join("registry/src"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|index| {
+                index
+                    .path()
+                    .join(format!("gpui-pre-macos-{version}/src/events.rs"))
+            })
+            .find_map(|path| std::fs::read_to_string(path).ok());
+        let Some(source) = source else {
+            // Not unpacked (an offline or vendored build): nothing to check.
+            eprintln!("gpui-pre-macos {version} source not found; not checked");
+            return;
+        };
+        let table = source
+            .split("fn key_to_native")
+            .nth(1)
+            .and_then(|rest| rest.split("_ =>").next())
+            .expect("key_to_native in gpui-pre-macos");
+        let maps = |key: &str| table.contains(&format!("\"{key}\" =>"));
+        assert!(
+            !(maps("enter") && maps("tab")),
+            "gpui-pre-macos {version} now shows Enter and Tab in the native menu: \
+             remove actions::hide_native_menu_keys, its tests and the SPEC note"
+        );
+    }
 }

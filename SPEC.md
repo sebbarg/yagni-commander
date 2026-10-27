@@ -15,7 +15,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 ### Menu
 
 - Main menu, following the platform's conventions: the native menu bar on macOS; on Linux an in-window menu bar, always visible, in a row above the panels. Decided 2026-10-01.
-- Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap.
+- Contents (TC-style command menus, so the menu doubles as a list of the shortcuts). Each item shows its key binding, taken from the keymap. Except in the native macOS menu, which can't show Enter or Tab: Open with, Properties, Next tab and Previous tab show no key there (gpui showed Shift-Enter as Shift-E, which also acted as a shortcut; owner, 2026-10-27).
   - **Files:** View (F3), Edit (F4), Open with... (Shift-Enter), New file (Shift-F4), Copy (F5), Move (F6), New folder (F7), Rename (F2), Move to trash (F8), Delete permanently (Shift-F8), Pack (Alt-F5), Extract (Alt-F6), Compare by content (no key); Select all (Ctrl-A), Copy path (Ctrl-C, Cmd-C on macOS), Copy name (Ctrl-Shift-C), Copy parent path (Ctrl-Alt-C); Quit (Linux only, Alt-F4).
   - **Commands:** Same folder in other panel (Alt-Z), Swap panels (Ctrl-U), Reload (Ctrl-R), Directory hotlist (Ctrl-D), Mounts left (Alt-F1), Mounts right (Alt-F2), Find files (Alt-F7), Open terminal here (Ctrl-Shift-T).
   - **Show:** Hidden files (Ctrl-.), checked while shown; Sort by Name, Size, Modified, Owner, Permissions, with a check on the active panel's sort column. Choosing the checked column reverses the order, like clicking the header. Then Zoom in (Ctrl-=), Zoom out (Ctrl--) and Actual size (Ctrl-0), see Zoom. The sort commands are actions, so the keymap can bind them; unbound by default.

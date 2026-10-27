@@ -220,7 +220,57 @@ pub fn quits(keystroke: &gpui_kit::Keystroke) -> bool {
         .is_ok_and(|quit| quit.modifiers == keystroke.modifiers && quit.key == keystroke.key)
 }
 
+/// A key context no element has: bindings in it never fire.
+const NATIVE_MENU_ONLY: &str = "NativeMenuOnly";
+
+/// Whether gpui's native macOS menu can show `key` as a key equivalent: a
+/// character or a key gpui-pre-macos `key_to_native` knows. For any other
+/// AppKit takes the name's first letter, which also works as a shortcut:
+/// Shift-Enter showed as Shift-E (owner, 2026-10-27).
+#[cfg(test)]
+pub fn native_menu_key(key: &str) -> bool {
+    const NAMED: [&str; 13] = [
+        "space",
+        "backspace",
+        "escape",
+        "up",
+        "down",
+        "left",
+        "right",
+        "pageup",
+        "pagedown",
+        "home",
+        "end",
+        "delete",
+        "insert",
+    ];
+    let function = key
+        .strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=35).contains(&n));
+    key.chars().count() == 1 || NAMED.contains(&key) || function
+}
+
+/// macOS: menu actions whose primary key the native menu can't show (Enter,
+/// Tab; see [`native_menu_key`]). The menu shows an action's first binding,
+/// and nothing for a key sequence, so a two-key binding in a context that
+/// never exists, registered before the real ones, leaves these items
+/// without a key rather than with a wrong letter. Kept complete by
+/// `native_menu_shows_no_wrong_keys`.
+pub fn hide_native_menu_keys(cx: &mut App) {
+    let never = Some(NATIVE_MENU_ONLY);
+    cx.bind_keys([
+        KeyBinding::new("enter enter", OpenWith, never),
+        KeyBinding::new("enter enter", ShowProperties, never),
+        KeyBinding::new("tab tab", NextTab, never),
+        KeyBinding::new("tab tab", PrevTab, never),
+    ]);
+}
+
 pub fn bind_default_keys(cx: &mut App) {
+    if cfg!(target_os = "macos") {
+        hide_native_menu_keys(cx);
+    }
     let context = Some(FILE_MANAGER_CONTEXT);
     // gpui-component's menus (Linux) show an action's last-registered
     // binding, the native macOS menu its first. So an action with a second

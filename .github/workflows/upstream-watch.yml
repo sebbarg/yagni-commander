@@ -1,0 +1,69 @@
+# Weekly: opens an issue once the newest release on crates.io of a gpui crate
+# fixes one of the gpui problems we work around or live with
+# (scripts/check-upstream.sh), so upgrading gpui-kit is worth it. One issue
+# per check and fixed version, never a repeat. Actions are pinned to commit
+# SHAs.
+name: Upstream watch
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - check: menu-keys
+            crate: gpui-pre-macos
+            title: shows Enter and Tab in the macOS menu
+            body: >-
+              The native macOS menu can now show Shift-Enter, Alt-Enter,
+              Ctrl-Tab and Ctrl-Shift-Tab (`key_to_native` maps Enter and Tab).
+              Once a gpui-kit release uses this version: upgrade, then remove
+              `actions::hide_native_menu_keys`, its tests
+              (`native_menu_shows_no_wrong_keys`,
+              `gpui_still_cannot_show_enter_and_tab_in_the_native_menu`), the
+              SPEC note under Menu and the `menu-keys` check (ARCHITECTURE,
+              Gotchas, menu shortcut labels).
+          - check: x11-position
+            crate: gpui-pre-linux
+            title: sets the window position on X11
+            body: >-
+              The X11 window's WM_NORMAL_HINTS now carry a position
+              (`size_hints.position`), so KWin may restore the saved window
+              position and center a first start. Once a gpui-kit release uses
+              this version: upgrade, verify on KDE under X11, then drop the
+              entry in ARCHITECTURE, Known issues and the `x11-position` check.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check the newest ${{ matrix.crate }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHECK: ${{ matrix.check }}
+          CRATE: ${{ matrix.crate }}
+          TITLE: ${{ matrix.title }}
+          BODY: ${{ matrix.body }}
+        run: |
+          status=0
+          version=$(scripts/check-upstream.sh "$CHECK") || status=$?
+          if [[ $status -eq 1 ]]; then
+            echo "$CRATE $version: not fixed yet"
+            exit 0
+          fi
+          [[ $status -eq 0 ]] || exit "$status"
+          title="$CRATE $version $TITLE"
+          found=$(gh issue list --state all --search "\"$title\" in:title" --json number --jq length)
+          if [[ $found -gt 0 ]]; then
+            echo "already reported: $title"
+            exit 0
+          fi
+          gh issue create --title "$title" \
+            --body "$BODY"$'\n\n'"Opened by the Upstream watch workflow (scripts/check-upstream.sh $CHECK)."
