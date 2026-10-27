@@ -97,7 +97,7 @@ Decided with the owner 2026-10-04, on the `zoom` branch, modeled on Zed.
 
 ### Tabs
 
-Tabs per side (v1; pulled forward from v2 on 2026-10-02). Ctrl-T clones the visible tab into a new one after it, Ctrl-W closes the active tab (never the last one), Ctrl-Tab/Ctrl-Shift-Tab cycle with wrap-around; all on the active side. The tab header is always shown above the path header; a tab's label is its folder's last component, tabs shrink evenly and truncate. A click activates a tab; only Ctrl-W closes one. Background tabs keep their listing; only the visible tab per side is watched, and a tab re-reads quietly when it comes to the front. Ctrl-U swaps whole sides. Tabs and each side's active tab are restored on restart; a command-line folder replaces the active tab's folder.
+Tabs per side (v1; pulled forward from v2 on 2026-10-02). Ctrl-T clones the visible tab into a new one after it, Ctrl-W (also Cmd-W on macOS) closes the active tab (never the last one), Ctrl-Tab/Ctrl-Shift-Tab cycle with wrap-around; all on the active side. The tab header is always shown above the path header; a tab's label is its folder's last component, tabs shrink evenly and truncate. A click activates a tab; only Ctrl-W closes one. Background tabs keep their listing; only the visible tab per side is watched, and a tab re-reads quietly when it comes to the front. Ctrl-U swaps whole sides. Tabs and each side's active tab are restored on restart; a command-line folder replaces the active tab's folder.
 
 ### Mounts
 
@@ -154,7 +154,7 @@ A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some
 | Ctrl-U | Swap the two sides, with all their tabs. |
 | Ctrl-R | Reload the visible tab of each side and re-read the config (see Config). |
 | Ctrl-T | New tab on the active side, a copy of the visible one (see Tabs). |
-| Ctrl-W | Close the active tab; the last tab of a side stays. |
+| Ctrl-W (also Cmd-W on macOS) | Close the active tab; the last tab of a side stays. |
 | Tab, Shift-Tab | Switch to the other panel (two panels, so both keys do the same). |
 | Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |

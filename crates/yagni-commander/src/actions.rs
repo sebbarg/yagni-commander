@@ -226,6 +226,11 @@ pub fn bind_default_keys(cx: &mut App) {
     } else {
         ("ctrl-shift-c", "ctrl-alt-c")
     };
+    let close_tab = if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-w"
+    };
     cx.bind_keys([
         KeyBinding::new(quit, Quit, None),
         KeyBinding::new("tab", SwitchPanel, context),
@@ -296,7 +301,10 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("alt-z", SyncOtherPanel, context),
         KeyBinding::new("ctrl-u", SwapPanels, context),
         KeyBinding::new("ctrl-t", NewTab, context),
+        // macOS also takes Cmd-W, shown in its menu.
+        KeyBinding::new(close_tab, CloseTab, context),
         KeyBinding::new("ctrl-w", CloseTab, context),
+        KeyBinding::new(close_tab, CloseTab, context),
         KeyBinding::new("ctrl-tab", NextTab, context),
         KeyBinding::new("ctrl-shift-tab", PrevTab, context),
         KeyBinding::new("ctrl-r", Reload, context),

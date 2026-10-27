@@ -118,6 +118,18 @@ fn ctrl_t_opens_a_tab_on_the_same_folder_and_ctrl_w_closes_it(cx: &mut TestAppCo
     assert_eq!(tab_state(&commander, Side::Left, cx), (1, 0));
 }
 
+#[cfg(target_os = "macos")]
+#[gpui_kit::test]
+fn cmd_w_closes_a_tab_on_macos(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("ctrl-t ctrl-t");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (3, 2));
+    cx.simulate_keystrokes("cmd-w");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (2, 1));
+    cx.simulate_keystrokes("ctrl-w");
+    assert_eq!(tab_state(&commander, Side::Left, cx), (1, 0));
+}
+
 #[gpui_kit::test]
 fn ctrl_tab_and_ctrl_shift_tab_cycle_the_active_sides_tabs(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
@@ -2348,6 +2360,11 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
         assert_eq!(first(action, cx).as_deref(), Some(keys));
     }
+    let close_tab = if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-w"
+    };
     for (action, keys) in [
         (
             &crate::actions::DirectoryHotlist as &dyn gpui_kit::Action,
@@ -2356,7 +2373,7 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         (&crate::actions::MountsLeft, "alt-f1"),
         (&crate::actions::MountsRight, "alt-f2"),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
-        (&crate::actions::CloseTab, "ctrl-w"),
+        (&crate::actions::CloseTab, close_tab),
         (&crate::actions::NextTab, "ctrl-tab"),
         (&crate::actions::PrevTab, "ctrl-shift-tab"),
     ] {
