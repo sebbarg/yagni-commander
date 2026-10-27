@@ -56,6 +56,36 @@ const POSIX_RENAME: &str = "posix-rename@openssh.com";
 /// OpenSSH's fsync of an open file.
 const FSYNC: &str = "fsync@openssh.com";
 
+/// Where OpenSSH's `sftp-server` program lives: Debian and Ubuntu (package
+/// openssh-sftp-server), Arch, Fedora and RHEL, macOS, Homebrew. The tests
+/// run it over pipes in place of a host; `YAGNI_SFTP_SERVER` names another.
+pub const SERVER_PATHS: &[&str] = &[
+    "/usr/lib/openssh/sftp-server",
+    "/usr/lib/ssh/sftp-server",
+    "/usr/libexec/openssh/sftp-server",
+    "/usr/libexec/sftp-server",
+    "/opt/homebrew/opt/openssh/libexec/sftp-server",
+    "/usr/local/opt/openssh/libexec/sftp-server",
+];
+
+/// The `sftp-server` the tests use: `YAGNI_SFTP_SERVER`, else the first of
+/// [`SERVER_PATHS`] that exists. Panics with how to get one.
+pub fn test_server() -> std::path::PathBuf {
+    std::env::var_os("YAGNI_SFTP_SERVER")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            SERVER_PATHS
+                .iter()
+                .map(std::path::PathBuf::from)
+                .find(|p| p.exists())
+        })
+        .expect(
+            "the remote-folder tests need OpenSSH's sftp-server (Debian/Ubuntu: \
+             sudo apt install openssh-sftp-server; it starts no server) or \
+             YAGNI_SFTP_SERVER=/path/to/sftp-server",
+        )
+}
+
 /// Larger packets are refused: OpenSSH sends at most 256 KiB, so anything
 /// much bigger is a broken or hostile server.
 const MAX_PACKET: u32 = 1 << 20;
@@ -859,11 +889,7 @@ pub(crate) mod tests {
 
     /// OpenSSH's SFTP server program, run directly over pipes (no ssh).
     pub(crate) fn server_program() -> PathBuf {
-        ["/usr/lib/openssh/sftp-server", "/usr/libexec/sftp-server"]
-            .iter()
-            .map(PathBuf::from)
-            .find(|p| p.exists())
-            .expect("OpenSSH's sftp-server is needed (Ubuntu: openssh-sftp-server)")
+        super::test_server()
     }
 
     /// A client talking to a local `sftp-server`.

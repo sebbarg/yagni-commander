@@ -109,7 +109,7 @@ Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `
 
 ## Development
 
-`cargo test --workspace`, `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
+`cargo test --workspace`, `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. The remote-folder tests run OpenSSH's `sftp-server` locally in place of a host (no server is started): `sudo apt install openssh-sftp-server` on Kubuntu; Arch's `openssh` and macOS have it already; elsewhere point `YAGNI_SFTP_SERVER` at it. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
 
 - [SPEC.md](SPEC.md): what the app does, and why.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the code is organized, technical decisions, known issues.

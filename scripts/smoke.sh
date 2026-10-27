@@ -61,11 +61,15 @@ remote=$work/remote
 mkdir -p "$remote"
 printf fetched >"$remote/fetch.txt"
 printf before >"$remote/edit-me.txt"
-sftp_server=
-for candidate in /usr/lib/openssh/sftp-server /usr/libexec/sftp-server; do
-    [[ -x $candidate ]] && { sftp_server=$candidate; break; }
+# The same places as core's `sftp::SERVER_PATHS`.
+sftp_server=${YAGNI_SFTP_SERVER:-}
+for candidate in /usr/lib/openssh/sftp-server /usr/lib/ssh/sftp-server \
+    /usr/libexec/openssh/sftp-server /usr/libexec/sftp-server \
+    /opt/homebrew/opt/openssh/libexec/sftp-server /usr/local/opt/openssh/libexec/sftp-server; do
+    [[ -n $sftp_server ]] && break
+    [[ -x $candidate ]] && sftp_server=$candidate
 done
-[[ -n $sftp_server ]] || { echo "smoke: sftp-server is not installed (openssh-sftp-server)" >&2; exit 2; }
+[[ -n $sftp_server ]] || { echo "smoke: OpenSSH's sftp-server is needed (Debian/Ubuntu: openssh-sftp-server) or YAGNI_SFTP_SERVER" >&2; exit 2; }
 printf '#!/bin/sh\ncd "%s" && exec "%s"\n' "$remote" "$sftp_server" >"$work/bin/ssh"
 chmod +x "$work/bin/ssh"
 # An old log file that startup must delete.

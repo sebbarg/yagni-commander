@@ -44,7 +44,11 @@ sed -i.bak "/^\[workspace.package\]/,/^\[/ s/^version = \".*\"/version = \"$vers
 rm Cargo.toml.bak
 "$cargo" update --workspace -q
 [[ $("$cargo" pkgid -p yagni-commander | sed 's/.*[#@]//') == "$version" ]] || fail "could not set the version in Cargo.toml"
-"$cargo" test --workspace -q
+# A failed run leaves the tree as it found it, so it can simply be rerun.
+"$cargo" test --workspace -q || {
+    git checkout -q Cargo.toml Cargo.lock
+    fail "the tests failed; the version is back to $current"
+}
 
 git commit -q -am "Release $tag"
 git tag -a "$tag" -m "$tag"

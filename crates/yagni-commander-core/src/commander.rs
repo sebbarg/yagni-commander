@@ -3706,7 +3706,11 @@ mod remote_tests {
         c.connect(top.join("a"));
         assert!(c.cancel_load(c.active()));
         c.run_loads_now();
-        assert_eq!(c.panel(c.active()).path(), top, "the cancelled read: where it was");
+        assert_eq!(
+            c.panel(c.active()).path(),
+            top,
+            "the cancelled read: where it was"
+        );
         c.go_to(top.join("c"));
         c.run_loads_now();
         assert_eq!(c.panel(c.active()).path(), top.join("c"), "not a stale /a");

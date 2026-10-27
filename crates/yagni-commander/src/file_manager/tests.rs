@@ -7323,11 +7323,7 @@ mod remote_folders {
                 ]);
                 return command;
             }
-            let program = ["/usr/lib/openssh/sftp-server", "/usr/libexec/sftp-server"]
-                .into_iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .expect("OpenSSH's sftp-server is needed (Ubuntu: openssh-sftp-server)");
-            std::process::Command::new(program)
+            std::process::Command::new(yagni_commander_core::sftp::test_server())
         }
         remote::set_connector(local);
     }
