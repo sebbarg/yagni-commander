@@ -6,7 +6,7 @@ What comes next. v1 is complete; what remains is verification on real machines, 
 
 Built and tested in a Linux container (X11 under Xvfb, no window manager); since then the owner has checked macOS, KDE on X11 and Wayland, and Omarchy (Hyprland) (see "Verified by the owner" below). What is left is Linux on real machines.
 
-- **Builds and tests:** `cargo test` and `scripts/smoke.sh` on Kubuntu and Omarchy (packages in the README; names not yet verified there).
+- **Builds and tests:** `cargo test` on Kubuntu verified by the owner (2026-10-27, the 1.7.0 release run). Still to check: `cargo test` on Omarchy, and `scripts/smoke.sh` on both (packages in the README; names not yet verified there).
 - **Check for updates (2026-10-04):** the item in the macOS app menu, below About; a check behind a proxy or offline (an error box, no hang beyond 15 s).
 - **Column widths (2026-10-04):** Modified showing the whole time at every zoom level on Omarchy: verified by the owner. To check: Owner sized to the listing's owners (no gap after `seb:seb`).
 - **Window size (2026-10-04):** a first start on a small display (below 1500x800 logical, e.g. the Omarchy laptop or a 1366x768 one) opens maximized, on KDE X11 and Wayland; on KDE Wayland, a maximized window reopening maximized; a maximized viewer (both platforms); the first-start size at fractional scaling (`wayland-info`: does `wl_output` report scale 2 for 1.5?); on KDE Wayland (Kubuntu 26.04, 125%), the saved size restored (2026-10-14: it opened at 1200x800 every time because gpui knew no displays at launch; fixed by `windows::when_displays_known`, verified by the owner; the position stays KWin's, see ARCHITECTURE, Known issues).
