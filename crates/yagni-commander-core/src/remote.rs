@@ -321,19 +321,28 @@ fn keep_stderr(
     })
 }
 
+/// A host's shared session.
+#[derive(Default)]
+struct Slot {
+    session: Mutex<Option<Session>>,
+    /// Being connected (maybe waiting at a password prompt): others wait
+    /// for it rather than connecting, and asking, themselves.
+    connecting: AtomicBool,
+}
+
 /// The sessions panels browse with, one per host. A broken one is dropped
 /// and the next use connects again.
-type Sessions = Mutex<HashMap<String, Arc<Mutex<Option<Session>>>>>;
+type Sessions = Mutex<HashMap<String, Arc<Slot>>>;
 static SESSIONS: std::sync::LazyLock<Sessions> = std::sync::LazyLock::new(Sessions::default);
 
 /// How long a read waits for the shared session before it takes one of its
 /// own: the one in use may be stuck on a dead connection (ssh gives up on
-/// it after about 45 s).
+/// it after about 45 s). Not while the session is being made.
 const BUSY_WAIT: Duration = Duration::from_secs(2);
 
 /// Runs `f` on the shared session with `host`, connecting first if there is
-/// none. Uses of one host wait for each other, up to [`BUSY_WAIT`]; other
-/// hosts don't.
+/// none. Uses of one host wait for each other, up to [`BUSY_WAIT`] once
+/// connected; other hosts don't.
 pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>) -> io::Result<T> {
     let slot = SESSIONS
         .lock()
@@ -342,11 +351,13 @@ pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>)
         .or_default()
         .clone();
     let started = std::time::Instant::now();
-    let mut slot = loop {
-        match slot.try_lock() {
-            Ok(slot) => break slot,
+    let mut session = loop {
+        match slot.session.try_lock() {
+            Ok(session) => break session,
             Err(std::sync::TryLockError::Poisoned(p)) => break p.into_inner(),
-            Err(std::sync::TryLockError::WouldBlock) if started.elapsed() >= BUSY_WAIT => {
+            Err(std::sync::TryLockError::WouldBlock)
+                if started.elapsed() >= BUSY_WAIT && !slot.connecting.load(Ordering::Relaxed) =>
+            {
                 let mut own = connect(host)?;
                 return f(&mut own.client).map_err(|e| own.explain(e));
             }
@@ -355,16 +366,19 @@ pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>)
             }
         }
     };
-    if slot.is_none() {
-        *slot = Some(connect(host)?);
+    if session.is_none() {
+        slot.connecting.store(true, Ordering::Relaxed);
+        let connected = connect(host);
+        slot.connecting.store(false, Ordering::Relaxed);
+        *session = Some(connected?);
     }
-    let session = slot.as_mut().expect("connected above");
-    match f(&mut session.client) {
+    let shared = session.as_mut().expect("connected above");
+    match f(&mut shared.client) {
         Ok(value) => Ok(value),
         Err(e) => {
-            let e = session.explain(e);
-            if session.client.is_broken() {
-                *slot = None;
+            let e = shared.explain(e);
+            if shared.client.is_broken() {
+                *session = None;
             }
             Err(e)
         }
@@ -395,6 +409,13 @@ pub(crate) fn read_listing(
         } else {
             location.path.to_vec()
         };
+        // Anything else would change what the panel path names.
+        if dir.first() != Some(&b'/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the server gave a login folder that is not an absolute path",
+            ));
+        }
         let mut names = Vec::new();
         client.read_dir(&dir, |name| {
             if valid_name(&name.name) {

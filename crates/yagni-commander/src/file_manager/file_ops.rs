@@ -213,6 +213,12 @@ impl FileManager {
             Rc::new(move |this, typed, window, cx| {
                 let to = destination(&dir, &home, typed, &sources)?;
                 let sources = sources.clone();
+                if from_archive.is_some() && remote::is_remote(to.path()) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "Can't extract to a remote folder",
+                    ));
+                }
                 let operation = match (&from_archive, kind) {
                     (Some(from), _) => Operation::ExtractEntries {
                         archive: from.archive.clone(),
@@ -1054,7 +1060,7 @@ impl FileManager {
             show_error(title, text, None, window, cx);
         } else if let Some(path) = running.then_edit {
             // Shift-F4 on a remote folder: the file exists now.
-            self.edit_remote(path, None, window, cx);
+            self.edit_remote(path, window, cx);
         } else if let Some(text) = left_out {
             show_message("Links left out", text, "OK", None, window, cx);
         }
@@ -1450,6 +1456,16 @@ fn destination(
         return Err(invalid("give a destination".into()));
     }
     let to = typed_path(dir, home, typed)?;
+    // Nothing on a host can be looked at here without waiting: the job
+    // decides (an existing folder there means into it).
+    if remote::is_remote(&to) {
+        let into = typed.ends_with('/') || sources.len() > 1;
+        return Ok(if into {
+            Destination::Into(to)
+        } else {
+            Destination::As(to)
+        });
+    }
     if inside_archive(&to) {
         return Err(invalid("Can't copy into an archive".into()));
     }

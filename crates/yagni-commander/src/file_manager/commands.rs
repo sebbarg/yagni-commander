@@ -12,7 +12,7 @@ use gpui_kit::{
     App, AppContext, ClipboardItem, Context, FocusHandle, Focusable, KeyDownEvent, ParentElement,
     SharedString, Styled, Window,
 };
-use yagni_commander_core::file_ops::{Operation, RemoteStamp};
+use yagni_commander_core::file_ops::Operation;
 use yagni_commander_core::{Command, Commander, EntryKind, Outcome, launch, remote, update};
 
 use super::file_ops::Kind;
@@ -258,14 +258,23 @@ impl FileManager {
         self.end_search(cx);
         let panel = self.active_panel(cx);
         if panel.is_remote() {
-            let stamp = panel.cursor_entry().map(|e| RemoteStamp {
-                size: e.size.unwrap_or(0),
-                mtime: e
-                    .modified
-                    .and_then(crate::file_manager::remote_edit::seconds),
-            });
+            // Only a plain file: a folder would be copied whole, and a
+            // symlink's copy would point the editor at a local file.
+            let plain = panel
+                .cursor_entry()
+                .is_some_and(|e| e.kind == EntryKind::File && !e.is_symlink);
+            if !plain {
+                show_error(
+                    "Cannot edit file",
+                    "Only plain files can be edited on a remote folder.",
+                    Some(self.focus.clone()),
+                    window,
+                    cx,
+                );
+                return;
+            }
             let path = panel.cursor_path();
-            self.edit_remote(path, stamp, window, cx);
+            self.edit_remote(path, window, cx);
             return;
         }
         let Some(editor) = configured_editor(None, window, cx) else {

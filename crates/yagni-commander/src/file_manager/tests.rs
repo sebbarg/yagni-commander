@@ -7601,6 +7601,60 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
+    fn f4_edits_only_plain_files(cx: &mut TestAppContext) {
+        let (tmp, _temp, _commander, cx) = editing(cx);
+        std::os::unix::fs::symlink("f", tmp.path().join("link")).unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        for target in ["link", "a"] {
+            cx.simulate_input(target);
+            cx.simulate_keystrokes("escape f4");
+            cx.run_until_parked();
+            assert_eq!(
+                box_text(cx),
+                "Cannot edit file\nOnly plain files can be edited on a remote folder.",
+                "{target}"
+            );
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+        }
+        assert!(!job_running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn f4_again_reopens_the_copy_in_use(cx: &mut TestAppContext) {
+        let (_tmp, _temp, _commander, cx) = editing(cx);
+        cx.simulate_keystrokes("f4");
+        wait_until(cx, |cx| !job_running(cx));
+        let first = edited_copy(cx);
+        save(cx, "unsent");
+        cx.simulate_keystrokes("f4");
+        cx.run_until_parked();
+        assert!(!job_running(cx), "nothing fetched again");
+        assert_eq!(edited_copy(cx), first);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "unsent");
+        let count = file_manager(cx).read_with(cx, |this, _| this.edited.len());
+        assert_eq!(count, 1);
+    }
+
+    #[gpui_kit::test]
+    fn f5_out_of_an_archive_to_a_remote_panel_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = on_remote(cx);
+        make_zip(&tmp.path().join("a/pkg.zip"), &[("README", "r")]);
+        // The right panel (local `a`) into the zip; the left one is remote.
+        cx.simulate_keystrokes("tab ctrl-r end enter end f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot copy\nCan't extract to a remote folder"
+        );
+        assert!(!job_running(cx));
+        assert!(!tmp.path().join("README").exists());
+    }
+
+    #[gpui_kit::test]
     fn shift_f4_creates_the_remote_file_and_edits_it(cx: &mut TestAppContext) {
         let (tmp, _temp, _commander, cx) = editing(cx);
         cx.simulate_keystrokes("shift-f4");

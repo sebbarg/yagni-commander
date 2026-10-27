@@ -33,7 +33,7 @@ mod safe_dir;
 mod vfs;
 pub use archive_names::{Format, is_archive};
 pub use compare::{Comparison, Difference};
-pub use edit::{RemoteStamp, Uploaded, remote_stamp, upload_edit};
+pub use edit::{RemoteStamp, Uploaded, copy_stamp, remote_stamp, upload_edit};
 
 /// Bytes copied between progress reports and cancel checks.
 const CHUNK: u64 = 4 << 20;
@@ -101,7 +101,7 @@ pub enum Destination {
 }
 
 impl Destination {
-    fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         match self {
             Destination::Into(path) | Destination::As(path) => path,
         }
@@ -279,6 +279,9 @@ pub fn system_trash(path: &Path) -> Result<(), String> {
 
 /// Runs `operation` to completion (or cancellation) on the calling thread.
 pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settings) -> Report {
+    if let Some(report) = refuse_remote(operation) {
+        return report;
+    }
     let (name, sources, to): (&'static str, &[PathBuf], Option<&Path>) = match operation {
         Operation::Copy { sources, to } => ("copy", sources, Some(to.path())),
         Operation::Move { sources, to } => ("move", sources, Some(to.path())),
@@ -289,7 +292,6 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         Operation::ExtractEntries { archive, to, .. } => {
             ("extract", std::slice::from_ref(archive), Some(to.path()))
         }
-        // Reads only: no engine, nothing logged.
         Operation::Rename { from, to } => {
             ("rename", std::slice::from_ref(from), Some(to.as_path()))
         }
@@ -298,6 +300,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
             std::slice::from_ref(path),
             None,
         ),
+        // Reads only: no engine, nothing logged.
         Operation::Compare { first, second } => {
             let (comparison, cancelled) = compare::run(first, second, observer);
             return Report {
@@ -372,6 +375,46 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         report.skipped
     ));
     engine.report
+}
+
+/// Operations that work on local files only (pack, extract, compare) and
+/// were given a remote path: each such path fails, nothing runs. A remote
+/// path names nothing locally, but a local call would take it as relative
+/// to the working folder.
+fn refuse_remote(operation: &Operation) -> Option<Report> {
+    let paths: Vec<&Path> = match operation {
+        Operation::Pack { sources, base, to } => sources
+            .iter()
+            .map(PathBuf::as_path)
+            .chain([base.as_path(), to.as_path()])
+            .collect(),
+        Operation::Extract { archives, into } => archives
+            .iter()
+            .map(PathBuf::as_path)
+            .chain([into.as_path()])
+            .collect(),
+        Operation::ExtractEntries { archive, to, .. } => vec![archive.as_path(), to.path()],
+        Operation::Compare { first, second } => vec![first.as_path(), second.as_path()],
+        _ => return None,
+    };
+    let remote: Vec<&Path> = paths
+        .into_iter()
+        .filter(|p| crate::remote::is_remote(p))
+        .collect();
+    if remote.is_empty() {
+        return None;
+    }
+    let failures = remote
+        .into_iter()
+        .map(|path| Failure {
+            path: path.to_path_buf(),
+            message: crate::remote::ON_REMOTE.to_owned(),
+        })
+        .collect();
+    Some(Report {
+        failures,
+        ..Report::default()
+    })
 }
 
 /// Whether an operation on `sources` (to `to`) has a remote end, so it

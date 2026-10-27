@@ -60,13 +60,21 @@ pub(super) trait Fs {
     /// to be single components.
     fn read_dir(&mut self, dir: &Path) -> io::Result<Vec<(OsString, Meta)>>;
     fn read_link(&mut self, path: &Path) -> io::Result<PathBuf>;
-    fn make_dir(&mut self, path: &Path) -> io::Result<()>;
+    /// A new folder with permissions `mode` (less the server's umask).
+    fn make_dir(&mut self, path: &Path, mode: u32) -> io::Result<()>;
     /// A new file (never an existing one), readable by its owner only
     /// until [`Fs::finish`] gives it its mode.
     fn create(&mut self, path: &Path) -> io::Result<Writer>;
     fn write(&mut self, writer: &mut Writer, offset: u64, data: &[u8]) -> io::Result<()>;
-    /// Ends the writing, with the time and mode given.
-    fn finish(&mut self, writer: Writer, mtime: Option<u32>, mode: Option<u32>) -> io::Result<()>;
+    /// Ends the writing, with the time and mode given; `sync` flushes the
+    /// file to disk first (a move deletes its original next).
+    fn finish(
+        &mut self,
+        writer: Writer,
+        mtime: Option<u32>,
+        mode: Option<u32>,
+        sync: bool,
+    ) -> io::Result<()>;
     /// Ends the writing and removes `path`.
     fn abandon(&mut self, writer: Writer, path: &Path);
     /// Reads file `path` into `sink` (offset, piece; false stops).
@@ -163,8 +171,9 @@ impl Fs for LocalFs {
         fs::read_link(path)
     }
 
-    fn make_dir(&mut self, path: &Path) -> io::Result<()> {
-        fs::create_dir(path)
+    fn make_dir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().mode(mode).create(path)
     }
 
     fn create(&mut self, path: &Path) -> io::Result<Writer> {
@@ -183,7 +192,13 @@ impl Fs for LocalFs {
         }
     }
 
-    fn finish(&mut self, writer: Writer, mtime: Option<u32>, mode: Option<u32>) -> io::Result<()> {
+    fn finish(
+        &mut self,
+        writer: Writer,
+        mtime: Option<u32>,
+        mode: Option<u32>,
+        sync: bool,
+    ) -> io::Result<()> {
         let Writer::Local(file) = writer else {
             unreachable!("a local file system writes local files")
         };
@@ -193,6 +208,9 @@ impl Fs for LocalFs {
         }
         if let Some(mode) = mode {
             let _ = file.set_permissions(fs::Permissions::from_mode(mode));
+        }
+        if sync {
+            file.sync_all()?;
         }
         Ok(())
     }
@@ -334,9 +352,9 @@ impl Fs for SftpFs {
             .map(|t| PathBuf::from(OsString::from_vec(t)))
     }
 
-    fn make_dir(&mut self, path: &Path) -> io::Result<()> {
+    fn make_dir(&mut self, path: &Path, mode: u32) -> io::Result<()> {
         let at = self.at(path)?;
-        match self.session.client.mkdir(at, 0o700) {
+        match self.session.client.mkdir(at, mode) {
             Ok(()) => Ok(()),
             Err(e) => Err(self.exists_or(e, at)),
         }
@@ -366,11 +384,17 @@ impl Fs for SftpFs {
         self.explain(result)
     }
 
-    fn finish(&mut self, writer: Writer, mtime: Option<u32>, mode: Option<u32>) -> io::Result<()> {
+    fn finish(
+        &mut self,
+        writer: Writer,
+        mtime: Option<u32>,
+        mode: Option<u32>,
+        sync: bool,
+    ) -> io::Result<()> {
         let Writer::Remote(upload) = writer else {
             unreachable!("a remote file system writes remote files")
         };
-        let result = upload.finish(&mut self.session.client, mtime, mode);
+        let result = upload.finish(&mut self.session.client, mtime, mode, sync);
         self.explain(result)
     }
 

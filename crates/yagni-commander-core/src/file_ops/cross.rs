@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 use super::vfs::{self, Fs, Kind, Meta};
 use super::{Choice, Destination, Engine, Incoming, Step};
 
+/// Path components a copy goes down to (a local path is at most 4096
+/// bytes, so a real tree is far shallower).
+const MAX_DEPTH: usize = 1024;
+
 /// A file system and the paths on it, for messages when it can't be
 /// reached.
 fn open_or_fail(engine: &mut Engine<'_>, at: &Path, paths: &[PathBuf]) -> Option<Box<dyn Fs>> {
@@ -139,7 +143,7 @@ impl Engine<'_> {
         {
             return false;
         }
-        match fs.make_dir(dir) {
+        match fs.make_dir(dir, 0o755) {
             Ok(()) => {
                 self.note(format_args!("created directory {}", dir.display()));
                 true
@@ -229,7 +233,27 @@ impl Engine<'_> {
         target: &Path,
         delete_source: bool,
     ) -> Step {
-        match dst.make_dir(target) {
+        // A folder copied into itself under another name (two aliases of
+        // one host) would never end.
+        if target.components().count() > MAX_DEPTH {
+            return self.fail(source, "folders nested too deep (copied into itself?)");
+        }
+        // A move from a local folder stops at mount points, as the local
+        // engine's does: their contents are not this folder's to delete.
+        if delete_source && src.host().is_none() && self.mounts.is_some() {
+            use std::os::unix::fs::MetadataExt;
+            let dev = std::fs::symlink_metadata(source).map(|m| m.dev());
+            match (super::place(source), dev) {
+                (Some((real, parent_dev)), Ok(dev))
+                    if self.is_mount_point(&real, dev, parent_dev) =>
+                {
+                    return self.fail(source, super::MOUNT_POINT);
+                }
+                (Some(_), Ok(_)) => {}
+                _ => return self.fail(source, "cannot tell whether this is a mount point"),
+            }
+        }
+        match dst.make_dir(target, 0o700) {
             Ok(()) => self.note(format_args!("created directory {}", target.display())),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
                 if dst.lstat(target).is_ok_and(|m| m.kind != Kind::Dir) {
@@ -391,7 +415,12 @@ impl Engine<'_> {
             })
         };
         match result {
-            Ok(true) => match dst.finish(writer, meta.mtime, meta.mode.map(|m| m & 0o777)) {
+            Ok(true) => match dst.finish(
+                writer,
+                meta.mtime,
+                meta.mode.map(|m| m & 0o777),
+                self.sync_copies,
+            ) {
                 Ok(()) => Step::Done,
                 Err(e) => {
                     let _ = dst.remove_file(path);
@@ -631,7 +660,7 @@ impl Engine<'_> {
         }
         match fs
             .create(path)
-            .and_then(|writer| fs.finish(writer, None, Some(0o644)))
+            .and_then(|writer| fs.finish(writer, None, Some(0o644), false))
         {
             Ok(()) => self.note(format_args!("created {}", path.display())),
             Err(e) => {

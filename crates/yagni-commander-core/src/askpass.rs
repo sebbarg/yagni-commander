@@ -93,6 +93,40 @@ pub fn runtime_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(format!("/tmp/yc-{uid}")))
 }
 
+/// Makes `dir` the user's private folder, or checks that it is: a real
+/// folder (not a symlink), owned by the user, readable by nobody else. In
+/// a shared `/tmp` another user could have made it first, to read the
+/// questions or plant ssh's connection sockets; then it is refused.
+pub fn secure_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    if let Some(parent) = dir.parent()
+        && !parent.exists()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    let refused = |why: &str| {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{}: {why}", dir.display()),
+        )
+    };
+    let meta = std::fs::symlink_metadata(dir)?;
+    if !meta.file_type().is_dir() {
+        return Err(refused("not a folder of its own"));
+    }
+    if meta.uid() != nix::unistd::getuid().as_raw() {
+        return Err(refused("owned by another user"));
+    }
+    if meta.mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
 /// The longest Unix socket path, without its final NUL (macOS's `sun_path`
 /// is 104 bytes, Linux's 108).
 const SOCKET_PATH_MAX: usize = 103;
@@ -112,9 +146,9 @@ pub struct Server {
 }
 
 impl Server {
-    /// Listens on a socket of this process in `dir` (created private).
+    /// Listens on a socket of this process in `dir` (see [`secure_dir`]).
     pub fn start(dir: &Path) -> io::Result<(Self, Receiver<Question>)> {
-        crate::storage::private_dir(dir)?;
+        secure_dir(dir)?;
         let socket = dir.join(format!("ask-{}", std::process::id()));
         let _ = std::fs::remove_file(&socket);
         let listener = UnixListener::bind(&socket)?;
@@ -312,6 +346,30 @@ mod tests {
         )));
         assert!(!fits_control_path(&Path::new("/x").join("y".repeat(60))));
         assert!(fits_control_path(&runtime_dir()) || runtime_dir().starts_with("/tmp"));
+    }
+
+    #[test]
+    fn a_folder_that_is_a_symlink_or_open_to_others_is_handled() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let err = secure_dir(&link).unwrap_err();
+        assert!(
+            err.to_string().ends_with("not a folder of its own"),
+            "{err}"
+        );
+        assert!(Server::start(&link).is_err());
+        let open = tmp.path().join("open");
+        std::fs::create_dir(&open).unwrap();
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).unwrap();
+        secure_dir(&open).unwrap();
+        let mode = std::fs::metadata(&open).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        secure_dir(&tmp.path().join("a/b")).unwrap();
+        assert!(tmp.path().join("a/b").is_dir());
     }
 
     #[test]

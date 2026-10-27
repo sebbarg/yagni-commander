@@ -3632,6 +3632,90 @@ mod across {
     }
 
     #[test]
+    fn a_move_up_stops_at_a_mount_point_and_keeps_it() {
+        use_local_server();
+        let (from, to) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::create_dir_all(from.path().join("d/mnt")).unwrap();
+        fs::write(from.path().join("d/mnt/data"), "x").unwrap();
+        fs::write(from.path().join("d/f"), "f").unwrap();
+        let report = run_with_mounts(
+            &Operation::Move {
+                sources: vec![from.path().join("d")],
+                to: Destination::Into(remote("mount", to.path())),
+            },
+            &[from.path().join("d/mnt")],
+            &mut Script::default(),
+        );
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].path, from.path().join("d/mnt"));
+        assert!(
+            from.path().join("d/mnt/data").exists(),
+            "the mount is untouched"
+        );
+        assert!(!from.path().join("d/f").exists(), "the rest moved");
+        assert!(to.path().join("d/f").exists());
+    }
+
+    #[test]
+    fn local_only_operations_refuse_remote_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("a.zip");
+        crate::test_archives::make_zip(&zip, &[("x", "1")]);
+        let target = remote("guard", tmp.path());
+        for operation in [
+            Operation::ExtractEntries {
+                archive: zip.clone(),
+                inner: Vec::new(),
+                names: vec!["x".into()],
+                to: Destination::Into(target.clone()),
+            },
+            Operation::Extract {
+                archives: vec![zip.clone()],
+                into: target.clone(),
+            },
+            Operation::Pack {
+                sources: vec![zip.clone()],
+                base: tmp.path().to_path_buf(),
+                to: target.join("b.zip"),
+            },
+            Operation::Compare {
+                first: zip.clone(),
+                second: target.clone(),
+            },
+        ] {
+            let report = run_across(operation, &mut Script::default());
+            assert_eq!(report.failures[0].message, crate::remote::ON_REMOTE);
+        }
+        assert_eq!(
+            fs::read_dir(tmp.path()).unwrap().count(),
+            1,
+            "nothing written"
+        );
+    }
+
+    #[test]
+    fn an_edit_refuses_links_on_either_side() {
+        use crate::file_ops::{copy_stamp, upload_edit};
+        use_local_server();
+        let (here, there) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        fs::write(here.path().join("real"), "local secret").unwrap();
+        symlink(here.path().join("real"), here.path().join("link")).unwrap();
+        assert!(copy_stamp(&here.path().join("link")).is_err());
+        let target = remote("links", &there.path().join("t"));
+        assert!(upload_edit(&here.path().join("link"), &target, None).is_err());
+        assert!(!there.path().join("t").exists(), "nothing sent");
+        fs::write(there.path().join("dest"), "d").unwrap();
+        symlink("dest", there.path().join("rlink")).unwrap();
+        let rlink = remote("links", &there.path().join("rlink"));
+        assert!(upload_edit(&here.path().join("real"), &rlink, None).is_err());
+        assert!(
+            fs::symlink_metadata(there.path().join("rlink"))
+                .unwrap()
+                .is_symlink()
+        );
+    }
+
+    #[test]
     fn a_host_that_cannot_be_reached_fails_every_source() {
         let to = tempfile::tempdir().unwrap();
         let report = run_across(

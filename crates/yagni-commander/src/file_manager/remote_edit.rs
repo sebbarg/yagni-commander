@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime};
 use gpui_kit::component::WindowExt;
 use gpui_kit::{Context, Focusable, InteractiveElement, ParentElement, Window, div};
 use yagni_commander_core::file_ops::{
-    Destination, Operation, RemoteStamp, Report, Uploaded, upload_edit,
+    Destination, Operation, RemoteStamp, Report, Uploaded, copy_stamp, upload_edit,
 };
 use yagni_commander_core::launch;
 
@@ -26,18 +26,11 @@ use crate::button_row::{ButtonRow, OnPress};
 /// How often the edited copies are checked for a save.
 pub(crate) const EDIT_POLL: Duration = Duration::from_secs(1);
 
-/// `time` as SFTP seconds, if it fits.
-pub(crate) fn seconds(time: SystemTime) -> Option<u32> {
-    let secs = time.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs();
-    u32::try_from(secs).ok()
-}
-
 /// A remote file being fetched for the editor.
 pub(crate) struct Fetching {
     dir: tempfile::TempDir,
     file: PathBuf,
     remote: PathBuf,
-    stamp: Option<RemoteStamp>,
     editor: String,
 }
 
@@ -51,6 +44,9 @@ pub(crate) struct Edited {
     /// The copy's time and size when last uploaded (or fetched).
     seen: Option<(SystemTime, u64)>,
     uploading: Option<Receiver<io::Result<Uploaded>>>,
+    /// Upload over the remote file once the running upload ends ("Upload"
+    /// in the changed box).
+    force: bool,
     /// Holds the copy's folder; dropped with it.
     _dir: tempfile::TempDir,
 }
@@ -82,17 +78,25 @@ impl FileManager {
         Ok(())
     }
 
-    /// F4 on remote file `remote` (`stamp`: the remote file as listed).
+    /// F4 on remote file `remote`. A file already open keeps its copy:
+    /// the editor opens that again (fetching anew would delete the copy
+    /// under the editor and lose unsent saves).
     pub(super) fn edit_remote(
         &mut self,
         remote: PathBuf,
-        stamp: Option<RemoteStamp>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(editor) = configured_editor(Some(self.focus.clone()), window, cx) else {
             return;
         };
+        if let Some(edited) = self.edited.iter().find(|e| e.remote == remote) {
+            if let Err(e) = launch::open_in_editor(&editor, &edited.local) {
+                let refocus = Some(self.focus.clone());
+                show_error("Cannot open editor", e.to_string(), refocus, window, cx);
+            }
+            return;
+        }
         if self.refuse_second_job(window, cx) {
             return;
         }
@@ -116,7 +120,6 @@ impl FileManager {
                     dir,
                     file,
                     remote,
-                    stamp,
                     editor,
                 });
             }
@@ -163,6 +166,16 @@ impl FileManager {
         if report.cancelled {
             return;
         }
+        // The copy has the remote file's size and time: what an upload
+        // must still find there. Anything but a plain file is refused.
+        let stamp = match copy_stamp(&fetching.file) {
+            Ok(stamp) => stamp,
+            Err(e) => {
+                let refocus = Some(self.focus.clone());
+                show_error("Cannot edit file", e.to_string(), refocus, window, cx);
+                return;
+            }
+        };
         if let Err(e) = launch::open_in_editor(&fetching.editor, &fetching.file) {
             show_error(
                 "Cannot open editor",
@@ -173,14 +186,13 @@ impl FileManager {
             );
             return;
         }
-        // A file edited again replaces its earlier copy.
-        self.edited.retain(|e| e.remote != fetching.remote);
         self.edited.push(Edited {
             seen: state(&fetching.file),
             local: fetching.file,
             remote: fetching.remote,
-            stamp: fetching.stamp,
+            stamp: Some(stamp),
             uploading: None,
+            force: false,
             _dir: fetching.dir,
         });
         if !self.edit_watch {
@@ -227,6 +239,11 @@ impl FileManager {
                 }
                 continue;
             }
+            if edited.force {
+                edited.force = false;
+                self.upload(ix, None);
+                continue;
+            }
             let now = state(&edited.local);
             if now.is_some() && now != edited.seen {
                 edited.seen = now;
@@ -262,9 +279,10 @@ impl FileManager {
         let upload: OnPress = Rc::new({
             let (this, focus) = (this.clone(), focus.clone());
             move |window, cx| {
+                // Started by the watch, after any upload still running.
                 let _ = this.update(cx, |fm, _| {
-                    if let Some(ix) = fm.edited.iter().position(|e| e.remote == remote) {
-                        fm.upload(ix, None);
+                    if let Some(edited) = fm.edited.iter_mut().find(|e| e.remote == remote) {
+                        edited.force = true;
                     }
                 });
                 window.close_dialog(cx);

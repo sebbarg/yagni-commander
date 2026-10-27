@@ -53,6 +53,8 @@ const OPEN_EXCLUSIVE: u32 = 0x20;
 
 /// OpenSSH's rename that replaces an existing target, atomically.
 const POSIX_RENAME: &str = "posix-rename@openssh.com";
+/// OpenSSH's fsync of an open file.
+const FSYNC: &str = "fsync@openssh.com";
 
 /// Larger packets are refused: OpenSSH sends at most 256 KiB, so anything
 /// much bigger is a broken or hostile server.
@@ -116,6 +118,8 @@ pub struct Client {
     broken: bool,
     /// The server offers [`POSIX_RENAME`].
     posix_rename: bool,
+    /// The server offers [`FSYNC`].
+    fsync: bool,
 }
 
 impl std::fmt::Debug for Client {
@@ -136,6 +140,7 @@ impl Client {
             next_id: 0,
             broken: false,
             posix_rename: false,
+            fsync: false,
         };
         let mut init = Packet::new(FXP_INIT);
         init.u32(3);
@@ -155,6 +160,7 @@ impl Client {
         // Extensions: name and version pairs to the end.
         while let (Ok(name), Ok(_)) = (body.bytes(), body.bytes()) {
             client.posix_rename |= name == POSIX_RENAME.as_bytes();
+            client.fsync |= name == FSYNC.as_bytes();
         }
         Ok(client)
     }
@@ -407,7 +413,8 @@ impl Client {
     }
 
     /// Renames `from` over `to`, replacing it: atomically with OpenSSH's
-    /// extension, else by removing `to` first.
+    /// extension, else `to` is moved aside first and put back if the
+    /// rename fails, so it is never lost.
     pub fn rename_over(&mut self, from: &[u8], to: &[u8]) -> io::Result<()> {
         if self.posix_rename {
             return self
@@ -418,11 +425,39 @@ impl Client {
                 })?
                 .expect_ok();
         }
-        match self.remove(to) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-            _ => {}
+        let aside = [to, b".yagni-old"].concat();
+        let moved = match self.rename(to, &aside) {
+            Ok(()) => true,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(e) => return Err(e),
+        };
+        match self.rename(from, to) {
+            Ok(()) => {
+                if moved {
+                    let _ = self.remove(&aside);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                if moved {
+                    let _ = self.rename(&aside, to);
+                }
+                Err(e)
+            }
         }
-        self.rename(from, to)
+    }
+
+    /// Flushes an open file to the server's disk, where the server can
+    /// (OpenSSH's extension); a no-op elsewhere.
+    pub fn fsync(&mut self, handle: &Handle) -> io::Result<()> {
+        if !self.fsync {
+            return Ok(());
+        }
+        self.request(FXP_EXTENDED, |p| {
+            p.bytes(FSYNC.as_bytes());
+            p.bytes(&handle.0);
+        })?
+        .expect_ok()
     }
 
     pub fn readlink(&mut self, path: &[u8]) -> io::Result<Vec<u8>> {
@@ -598,12 +633,14 @@ impl Upload {
         Ok(())
     }
 
-    /// Waits for every write, sets the time and mode given, and closes.
+    /// Waits for every write, sets the time and mode given, flushes to
+    /// disk if `sync`, and closes.
     pub fn finish(
         mut self,
         client: &mut Client,
         mtime: Option<u32>,
         mode: Option<u32>,
+        sync: bool,
     ) -> io::Result<()> {
         while self.pending > 0 {
             self.receive(client)?;
@@ -613,6 +650,13 @@ impl Upload {
             None if mtime.is_some() || mode.is_some() => client.fsetstat(&self.handle, mtime, mode),
             None => Ok(()),
         };
+        let set = set.and_then(|()| {
+            if sync {
+                client.fsync(&self.handle)
+            } else {
+                Ok(())
+            }
+        });
         let closed = client.close(self.handle);
         set.and(closed)
     }
@@ -980,7 +1024,7 @@ pub(crate) mod tests {
                 .unwrap();
         }
         upload
-            .finish(&mut client, Some(1_000_000_000), Some(0o640))
+            .finish(&mut client, Some(1_000_000_000), Some(0o640), true)
             .unwrap();
         assert!(std::fs::read(&target).unwrap() == data);
         let meta = std::fs::metadata(&target).unwrap();
@@ -1004,7 +1048,9 @@ pub(crate) mod tests {
         let err = client.open_write(bytes(&target), 0o644, true).unwrap_err();
         assert!(client.exists_error(&err, bytes(&target)));
         let handle = client.open_write(bytes(&target), 0o644, false).unwrap();
-        Upload::new(handle).finish(&mut client, None, None).unwrap();
+        Upload::new(handle)
+            .finish(&mut client, None, None, false)
+            .unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"", "truncated");
     }
 
@@ -1082,8 +1128,28 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn openssh_offers_posix_rename() {
-        assert!(local_client().posix_rename);
+    fn openssh_offers_posix_rename_and_fsync() {
+        let client = local_client();
+        assert!(client.posix_rename && client.fsync);
+    }
+
+    #[test]
+    fn rename_over_without_the_extension_keeps_the_target_on_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = |name: &str| tmp.path().join(name);
+        let mut client = local_client();
+        client.posix_rename = false;
+        std::fs::write(p("a"), "a").unwrap();
+        std::fs::write(p("b"), "b").unwrap();
+        client.rename_over(bytes(&p("a")), bytes(&p("b"))).unwrap();
+        assert_eq!(std::fs::read_to_string(p("b")).unwrap(), "a");
+        assert!(!p("b.yagni-old").exists());
+        assert!(
+            client
+                .rename_over(bytes(&p("gone")), bytes(&p("b")))
+                .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(p("b")).unwrap(), "a", "put back");
     }
 
     #[test]
