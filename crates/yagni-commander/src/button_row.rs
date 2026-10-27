@@ -7,15 +7,19 @@
 //! selection, Enter and Space press it. Tab past either end leaves the row,
 //! e.g. back to a prompt's text field. Escape is left to the dialog (cancel).
 //! In a message box, Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy its text.
+//! A label may mark one letter with `&` (`Feed to &listbox`), drawn
+//! underlined; the key that goes with it is bound by the dialog.
 
 use std::rc::Rc;
 
 use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
-    App, ClipboardItem, Context, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Window, div, prelude::FluentBuilder,
+    App, ClipboardItem, Context, FocusHandle, Focusable, HighlightStyle, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, StyledText, UnderlineStyle, Window,
+    div, prelude::FluentBuilder, px,
 };
+use yagni_commander_core::hotlist;
 
 use crate::actions::{
     BUTTON_ROW_CONTEXT, CopyText, NextButton, PressButton, PrevButton, TabNext, TabPrev,
@@ -125,6 +129,18 @@ impl Focusable for ButtonRow {
     }
 }
 
+/// `text` with the byte range of its marked letter underlined.
+fn underlined(text: SharedString, range: std::ops::Range<usize>) -> StyledText {
+    let underline = HighlightStyle {
+        underline: Some(UnderlineStyle {
+            thickness: px(1.0),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    StyledText::new(text).with_highlights([(range, underline)])
+}
+
 impl Render for ButtonRow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let last = self.buttons.len().saturating_sub(1);
@@ -170,7 +186,9 @@ impl Render for ButtonRow {
                 }),
             )
             .children(self.buttons.iter().enumerate().map(|(ix, (label, _))| {
-                let selector = format!("button-{label}");
+                let label = hotlist::label(label);
+                let text = SharedString::from(label.text);
+                let selector = format!("button-{text}");
                 div()
                     .relative()
                     .debug_selector(move || selector)
@@ -179,7 +197,12 @@ impl Render for ButtonRow {
                     })
                     .child(
                         Button::new(("button", ix))
-                            .label(label.clone())
+                            .map(|b| match label.underline {
+                                Some(range) => b
+                                    .accessibility_label(text.clone())
+                                    .child(underlined(text, range)),
+                                None => b.label(text),
+                            })
                             .tab_stop(false)
                             .disabled(self.disabled.contains(&ix))
                             .when(ix == self.selected, |b| b.primary())

@@ -329,7 +329,7 @@ check "properties counted the folder" bash -c 'xclip -o -selection clipboard | g
 check "properties added up the sizes" bash -c 'xclip -o -selection clipboard | grep -qx "Size: 8 bytes (8 B)"'
 keys Escape
 
-echo "Alt-F7 finds files: by name with an exclude, feed to panel, F5; by content, go to file"
+echo "Alt-F7 finds files: by name with an exclude, feed to listbox, F5; by content, go to file"
 mkdir -p "$left/findme/deep" "$left/findme/target"
 printf 'fn a' >"$left/findme/a.rs"
 printf 'a needle' >"$left/findme/deep/b.rs"
@@ -354,8 +354,8 @@ keys Tab
 shot 08i2-find-buttons-focused
 keys Right Return
 shot 08j-find-results-panel
-# Fed into the right side, now active; the left one stays in findme.
-check "results fed to the right side" title_is "$left/findme"
+# Fed into a new tab on the left; the first tab stays in findme.
+check "results fed to a new tab" title_is "$left/findme"
 keys ctrl+a F5 ctrl+a
 typed "$right"
 keys Return
@@ -369,10 +369,10 @@ sleep 1
 shot 08k-find-content
 keys Return
 check "go to file opened its folder" title_is "$left/findme/deep"
-# Put the panels back: right on $right, left on $left.
-keys BackSpace BackSpace BackSpace
-typed right
-keys Return Tab BackSpace
+# Closing the results tab shows the tab searched from, still in findme.
+keys ctrl+w
+check "the tab searched from kept its folder" title_is "$left/findme"
+keys BackSpace
 check "back in left after find" title_is "$left"
 keys Tab
 check "right back on right" title_is "$right"

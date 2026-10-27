@@ -230,7 +230,7 @@ impl Commander {
     }
 
     fn request(&mut self, side: Side, nav: Navigation, kind: LoadKind) {
-        // Search results are shown at once ("Feed to panel", Alt-Z).
+        // Search results are shown at once ("Feed to listbox", Alt-Z).
         if kind == LoadKind::Navigate
             && let Some(results) = nav.results.clone()
         {
@@ -582,17 +582,16 @@ impl Commander {
         );
     }
 
-    /// Alt-F7's "Feed to panel": the other side shows `results` and
-    /// becomes the active one, so the side searched from keeps its folder.
-    /// Like a command, ignored while that side is loading, and ends the
-    /// quick search.
+    /// Alt-F7's "Feed to listbox": a new tab on the active side shows
+    /// `results` and comes to the front, so the tab searched from keeps
+    /// its folder. Ends the quick search. Works while the active tab
+    /// loads: that read stays with the tab it belongs to.
     pub fn feed(&mut self, results: Results) {
-        let target = self.active.other();
-        if self.panel(target).loading().is_some() {
-            return;
-        }
+        let side = self.active;
         self.error = None;
         self.search.clear();
+        let copy = self.panel(side).duplicate();
+        self.tabs[side as usize].open(copy);
         let nav = Navigation {
             target: results.root.clone(),
             select: None,
@@ -600,8 +599,7 @@ impl Commander {
             results: Some(Arc::new(results)),
             up_if_missing: false,
         };
-        self.request(target, nav, LoadKind::Navigate);
-        self.active = target;
+        self.request(side, nav, LoadKind::Navigate);
     }
 
     /// Alt-F7's "go to file": the active panel shows `path`'s folder with
@@ -2608,38 +2606,49 @@ mod results_tests {
             .collect()
     }
 
-    /// The left panel shows the `*.rs` results (fed from the right side).
+    /// The left panel shows the `*.rs` results in a new tab.
     fn fed(tmp: &tempfile::TempDir) -> Commander {
         let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
-        c.set_active(Side::Right);
         c.feed(results(tmp.path(), "*.rs"));
         c
     }
 
     #[test]
-    fn feed_goes_to_the_other_side_and_makes_it_active() {
+    fn feed_opens_a_new_tab_on_the_active_side() {
         let tmp = tree();
         let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        c.set_active(Side::Right);
+        c.execute(Command::SortBy(Side::Right, SortKey::Size));
         c.feed(results(tmp.path(), "*.rs"));
-        assert!(c.panel(Side::Right).in_results());
-        assert!(
-            !c.panel(Side::Left).in_results(),
-            "the side searched from stays"
-        );
         assert_eq!(c.active(), Side::Right);
+        let tabs = c.tabs(Side::Right);
+        assert_eq!((tabs.count(), tabs.index()), (2, 1));
+        assert!(c.panel(Side::Right).in_results());
+        assert_eq!(c.panel(Side::Right).sort(), tabs.get(0).unwrap().sort());
+        assert!(
+            !tabs.get(0).unwrap().in_results(),
+            "the tab searched from stays"
+        );
+        assert_eq!(c.tabs(Side::Left).count(), 1);
+        assert!(!c.panel(Side::Left).in_results());
     }
 
     #[test]
-    fn feed_is_ignored_while_the_other_side_loads() {
+    fn feed_works_while_the_active_tab_loads() {
         let tmp = tree();
         let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
-        c.execute(Command::SwitchPanel);
-        c.execute(Command::Reload); // both sides
-        c.set_active(Side::Left);
+        c.execute(Command::Reload);
+        assert!(c.panel(Side::Left).loading().is_some());
         c.feed(results(tmp.path(), "*.rs"));
+        assert!(c.panel(Side::Left).in_results());
+        assert!(c.panel(Side::Left).loading().is_none());
         c.run_loads_now();
-        assert!(!c.panel(Side::Right).in_results());
-        assert_eq!(c.active(), Side::Left);
+        assert!(
+            c.panel(Side::Left).in_results(),
+            "the read lands in its tab"
+        );
+        let first = c.tabs(Side::Left).get(0).unwrap();
+        assert!(first.loading().is_none() && !first.in_results());
     }
 
     #[test]
@@ -2673,7 +2682,6 @@ mod results_tests {
         c.execute(Command::CursorTo(Side::Left, a));
         c.execute(Command::ToggleSelection);
         c.execute(Command::CursorEnd);
-        c.execute(Command::SwitchPanel); // feeds the other side: left
         c.feed(results(tmp.path(), "*.rs"));
         let panel = c.panel(Side::Left);
         assert_eq!(panel.cursor(), 0, "fed: cursor at the top");
@@ -2725,7 +2733,6 @@ mod results_tests {
     fn enter_on_a_folder_result_enters_the_real_folder() {
         let tmp = tree();
         let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
-        c.set_active(Side::Right);
         c.feed(results(tmp.path(), "sub"));
         c.execute(Command::CursorDown);
         assert_eq!(c.panel(Side::Left).cursor_entry().unwrap().label, "src/sub");
@@ -2891,7 +2898,6 @@ mod results_tests {
         let tmp = tree();
         let root = tmp.path().join("src");
         let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
-        c.set_active(Side::Right);
         c.feed(results(&root, "*.rs"));
         fs::remove_dir_all(&root).unwrap();
         c.execute(Command::GoUp);

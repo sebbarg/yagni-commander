@@ -27,7 +27,7 @@ pub const DEFAULT_SKIP: [&str; 2] = [".git", "node_modules"];
 /// Why a command that writes a name is refused in a results listing.
 pub const IN_RESULTS: &str = "Not available in search results.";
 
-/// A finished search, as a panel shows it ("Feed to panel").
+/// A finished search, as a panel shows it ("Feed to listbox").
 #[derive(Debug, Clone)]
 pub struct Results {
     pub root: std::path::PathBuf,

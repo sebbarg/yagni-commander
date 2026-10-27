@@ -5719,8 +5719,7 @@ mod results_panel {
         let results =
             find::Results::new(tmp.path().into(), "*.rs".into(), std::sync::Arc::new(found));
         commander.update(cx, |c, cx| {
-            // Fed from the right: the left side shows them, active.
-            c.set_active(Side::Right);
+            // Fed on the left: a new tab there shows them.
             c.feed(results);
             cx.notify();
         });
@@ -6270,16 +6269,26 @@ mod find_files {
     }
 
     #[gpui_kit::test]
-    fn feed_to_panel_fills_the_other_side_and_activates_it(cx: &mut TestAppContext) {
+    fn feed_to_panel_opens_a_new_tab_on_the_active_side(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = opened(cx);
         search(cx, "*.rs *.txt");
-        click(cx, "button-Feed to panel", 1);
+        click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
         assert!(!dialog_open(cx));
-        assert_eq!(commander.read_with(cx, |c, _| c.active()), Side::Right);
-        assert!(!commander.read_with(cx, |c, _| c.panel(Side::Left).in_results()));
+        assert_eq!(commander.read_with(cx, |c, _| c.active()), Side::Left);
+        let (tabs, front, searched_from_stays) = commander.read_with(cx, |c, _| {
+            let tabs = c.tabs(Side::Left);
+            (
+                tabs.count(),
+                tabs.index(),
+                !tabs.get(0).unwrap().in_results(),
+            )
+        });
+        assert_eq!((tabs, front), (2, 1));
+        assert!(searched_from_stays);
+        assert!(!commander.read_with(cx, |c, _| c.panel(Side::Right).in_results()));
         let (in_results, labels) = commander.read_with(cx, |c, _| {
-            let panel = c.panel(Side::Right);
+            let panel = c.panel(Side::Left);
             (
                 panel.in_results(),
                 panel
@@ -6291,17 +6300,17 @@ mod find_files {
         });
         assert!(in_results);
         assert_eq!(labels, ["..", "a/x.rs", "b/y.txt"]);
-        assert_eq!(path(&commander, Side::Right, cx), tmp.path());
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
         // The keys go to the results.
         cx.simulate_keystrokes("end");
-        assert_eq!(cursor(&commander, Side::Right, cx), 2);
+        assert_eq!(cursor(&commander, Side::Left, cx), 2);
     }
 
     #[gpui_kit::test]
     fn copy_keys_on_a_result_use_its_real_path(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = opened(cx);
         search(cx, "*.rs");
-        click(cx, "button-Feed to panel", 1);
+        click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
         cx.simulate_keystrokes("end ctrl-c");
         let file = tmp.path().join("a/x.rs");
@@ -6319,7 +6328,7 @@ mod find_files {
         search(cx, "*.rs *.txt");
         let view = dialog(cx);
         let found = view.read_with(cx, |v, _| v.found_entries());
-        click(cx, "button-Feed to panel", 1);
+        click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
         let shared = commander.read_with(cx, |c, _| {
             std::sync::Arc::ptr_eq(&c.panel(c.active()).results().unwrap().entries, &found)
@@ -6362,7 +6371,7 @@ mod find_files {
     fn feed_does_nothing_without_results(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = opened(cx);
         search(cx, "*.none");
-        click(cx, "button-Feed to panel", 1);
+        click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
         assert!(dialog_open(cx));
         assert!(!commander.read_with(cx, |c, _| c.panel(Side::Left).in_results()));

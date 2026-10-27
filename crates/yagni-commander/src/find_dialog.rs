@@ -125,7 +125,7 @@ pub struct FindDialog {
     /// then.
     resizing: Option<(Point<Pixels>, Size<Pixels>)>,
     /// Named by their path relative to `root`; shared with a results
-    /// panel after "Feed to panel".
+    /// panel after "Feed to listbox".
     found: Arc<Vec<Entry>>,
     /// The folder and masks `found` came from (the panel's header).
     root: PathBuf,
@@ -167,7 +167,7 @@ impl FindDialog {
         let buttons = ButtonRow::build(
             [
                 ("Search", on(Self::search_or_stop)),
-                ("Feed to panel", on(|v, _, cx| v.feed(cx))),
+                ("Feed to &listbox", on(|v, _, cx| v.feed(cx))),
                 ("Close", on(|v, _, cx| v.close(cx))),
             ],
             0,
@@ -470,7 +470,7 @@ impl FindDialog {
         cx.emit(FindEvent::Closed);
     }
 
-    /// "Feed to panel" (also Alt-L).
+    /// "Feed to listbox" (also Alt-L).
     pub fn feed(&mut self, cx: &mut Context<Self>) {
         if self.running.is_some() || self.found.is_empty() {
             return;
