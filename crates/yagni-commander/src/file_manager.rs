@@ -400,7 +400,8 @@ impl FileManager {
                 self.notice = None;
                 self.commander.update(cx, |c, cx| {
                     let dir = yagni_commander_core::hotlist::expand(&entry_path, c.home());
-                    c.go_to(dir);
+                    // A host in a tab of its own; a local folder in place.
+                    c.connect(dir);
                     cx.notify();
                 });
             }

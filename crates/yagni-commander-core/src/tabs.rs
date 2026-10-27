@@ -61,6 +61,19 @@ impl Tabs {
         self.panels.insert(self.active, panel);
     }
 
+    /// Closes tab `ix` (a Connect tab that could not connect); the tab in
+    /// front stays in front if it is another one. False on the only tab.
+    pub(crate) fn remove(&mut self, ix: usize) -> bool {
+        if self.panels.len() == 1 || ix >= self.panels.len() {
+            return false;
+        }
+        self.panels.remove(ix);
+        if ix < self.active || self.active == self.panels.len() {
+            self.active -= 1;
+        }
+        true
+    }
+
     /// Ctrl-W: closes the tab in front; its right neighbor comes to front,
     /// else its left one. False (nothing happens) on the only tab.
     pub(crate) fn close(&mut self) -> bool {
@@ -107,6 +120,21 @@ pub fn label(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remove_keeps_the_front_tab_in_front() {
+        let dir = tempfile::tempdir().unwrap();
+        let panel = || Panel::open(dir.path(), false).unwrap();
+        let mut tabs = Tabs::from_panels(vec![panel(), panel(), panel()], 1);
+        let front = tabs.get(1).unwrap().id();
+        assert!(tabs.remove(0));
+        assert_eq!((tabs.count(), tabs.index()), (2, 0));
+        assert_eq!(tabs.get(0).unwrap().id(), front);
+        assert!(tabs.remove(0), "the front one: the next comes forward");
+        assert_eq!((tabs.count(), tabs.index()), (1, 0));
+        assert!(!tabs.remove(0), "never the last tab");
+        assert!(!tabs.remove(5));
+    }
     use std::path::PathBuf;
 
     fn panel(name: &str) -> Panel {

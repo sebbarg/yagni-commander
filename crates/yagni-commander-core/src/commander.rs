@@ -137,6 +137,9 @@ pub struct Commander {
     hidden_columns: Vec<SortKey>,
     /// Panels show an icon before each name (`Config::icons`).
     icons: bool,
+    /// A tab opened by [`Commander::connect`] whose first read is pending:
+    /// it closes again if that read fails or is cancelled.
+    connecting: Option<PanelId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +233,7 @@ impl Commander {
             requests: Vec::new(),
             hidden_columns: Vec::new(),
             icons: true,
+            connecting: None,
         }
     }
 
@@ -487,10 +491,21 @@ impl Commander {
         let in_front = at == self.visible(at.0);
         let panel = self.panel_at_mut(at);
         let loading = panel.take_loading().expect("loading_tab found it");
+        let id = panel.id();
+        let connecting = self.connecting == Some(id);
+        if connecting {
+            self.connecting = None;
+        }
+        let panel = self.panel_at_mut(at);
         match result {
             Ok(listing) => panel.apply(listing, loading.select.as_deref()),
             Err(e) => {
                 let error = format!("{}: {e}", loading.path.display());
+                if connecting {
+                    self.close_tab_at(at);
+                    self.error = Some(error);
+                    return true;
+                }
                 if in_front {
                     self.error = Some(error);
                 } else {
@@ -530,6 +545,13 @@ impl Commander {
     /// Also stops a quiet re-read (one hung on a dead mount), without
     /// starting another.
     pub fn cancel_load(&mut self, side: Side) -> bool {
+        // A Connect tab given up on goes away again.
+        if self.connecting == Some(self.panel(side).id()) && self.panel(side).loading().is_some() {
+            self.connecting = None;
+            self.panel_mut(side).take_loading();
+            self.close_tab_at(self.visible(side));
+            return true;
+        }
         if self.panel_mut(side).take_loading().is_none() {
             let panel = self.panel_mut(side);
             if panel.take_refresh().is_none() {
@@ -554,6 +576,59 @@ impl Commander {
         }
         self.reread_if_stale(self.visible(side));
         true
+    }
+
+    /// Connect (Ctrl-F) and a hotlist entry on a host: `dir` opens in a tab
+    /// of its own on the active side, so the folder shown stays in its tab
+    /// (owner, 2026-10-27). A tab there already on that host comes to the
+    /// front instead, and goes to `dir` when it names a folder. If the new
+    /// tab's first read fails or is cancelled, the tab closes again. A
+    /// local `dir` is a plain [`Commander::go_to`].
+    pub fn connect(&mut self, dir: PathBuf) {
+        let side = self.active;
+        let Some(location) = crate::remote::parse(&dir) else {
+            return self.go_to(dir);
+        };
+        if self.panel(side).loading().is_some() {
+            return;
+        }
+        let host = location.host.to_owned();
+        let names_folder = !location.path.is_empty();
+        let existing = self
+            .tabs(side)
+            .iter()
+            .position(|p| crate::remote::parse(p.path()).is_some_and(|l| l.host == host));
+        self.error = None;
+        self.search.clear();
+        if let Some(ix) = existing {
+            if self.tabs[side as usize].select(ix) {
+                self.bring_to_front(side);
+            }
+            if names_folder && self.panel(side).path() != dir {
+                self.go_to_on(side, dir);
+            }
+            return;
+        }
+        let copy = self.panel(side).duplicate();
+        self.connecting = Some(copy.id());
+        self.tabs[side as usize].open(copy);
+        let nav = Navigation {
+            target: dir,
+            select: None,
+            archive: None,
+            results: None,
+            up_if_missing: false,
+        };
+        self.request(side, nav, LoadKind::Navigate);
+    }
+
+    /// Closes tab `at`; the side's tab in front then shows.
+    fn close_tab_at(&mut self, at: TabRef) {
+        let (side, ix) = at;
+        let was_front = ix == self.tabs[side as usize].index();
+        if self.tabs[side as usize].remove(ix) && was_front {
+            self.bring_to_front(side);
+        }
     }
 
     /// Ctrl-D: the active panel goes to `dir` (a hotlist entry) as a normal
@@ -3450,6 +3525,75 @@ mod remote_tests {
         assert_eq!(c.panel(c.active()).path(), top);
         let cursor = c.panel(c.active()).cursor_entry().unwrap();
         assert_eq!(cursor.label, "a", "the cursor on the folder we came from");
+    }
+
+    fn tab_paths(c: &Commander) -> Vec<PathBuf> {
+        c.tabs(c.active())
+            .iter()
+            .map(|p| p.path().to_path_buf())
+            .collect()
+    }
+
+    #[test]
+    fn connect_opens_a_tab_and_reuses_one_on_the_same_host() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("sub")).unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        let top = remote("tabs", tmp.path());
+        c.connect(top.clone());
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top.clone()]);
+        assert_eq!(c.tabs(c.active()).index(), 1, "the new tab in front");
+        // Back to the local tab; connecting again finds the host's tab.
+        c.execute(Command::PrevTab);
+        c.run_loads_now();
+        c.connect(PathBuf::from("sftp://tabs"));
+        c.run_loads_now();
+        assert_eq!(c.tabs(c.active()).count(), 2);
+        assert_eq!(c.panel(c.active()).path(), top, "stays where it was");
+        // An entry naming a folder takes that tab there.
+        c.execute(Command::PrevTab);
+        c.connect(top.join("sub"));
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top.join("sub")]);
+        // A local folder is a plain go_to.
+        c.connect(tmp.path().join("sub"));
+        c.run_loads_now();
+        assert_eq!(c.tabs(c.active()).count(), 2);
+        assert_eq!(c.panel(c.active()).path(), tmp.path().join("sub"));
+    }
+
+    #[test]
+    fn a_connect_tab_that_fails_or_is_cancelled_closes() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut c = Commander::new(tmp.path(), tmp.path(), true).unwrap();
+        c.connect(remote("fails", &tmp.path().join("gone")));
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf()]);
+        assert!(
+            c.error().is_some_and(|e| e.contains("No such file")),
+            "{:?}",
+            c.error()
+        );
+        c.connect(remote("fails", tmp.path()));
+        assert_eq!(c.tabs(c.active()).count(), 2);
+        assert!(c.cancel_load(c.active()));
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf()]);
+        c.run_loads_now();
+        assert_eq!(
+            c.tabs(c.active()).count(),
+            1,
+            "the cancelled read is dropped"
+        );
+        // A later failure of a tab that did connect keeps the tab.
+        let top = remote("fails", tmp.path());
+        c.connect(top.clone());
+        c.run_loads_now();
+        c.go_to(remote("fails", &tmp.path().join("gone")));
+        c.run_loads_now();
+        assert_eq!(tab_paths(&c), [tmp.path().to_path_buf(), top]);
     }
 
     #[test]

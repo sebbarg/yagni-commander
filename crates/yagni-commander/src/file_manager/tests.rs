@@ -7813,7 +7813,7 @@ mod connect {
 
     #[gpui_kit::test]
     fn ctrl_f_lists_the_hosts_and_enter_opens_the_first(cx: &mut TestAppContext) {
-        let (_tmp, _home, commander, cx) = with_hosts(cx);
+        let (tmp, _home, commander, cx) = with_hosts(cx);
         cx.simulate_keystrokes("ctrl-f");
         cx.run_until_parked();
         assert!(dialog_open(cx));
@@ -7827,6 +7827,14 @@ mod connect {
             login_folder("db"),
             "by name"
         );
+        // In a tab of its own: the local folder stays in the first.
+        let tabs: Vec<_> = commander.read_with(cx, |c, _| {
+            c.tabs(Side::Left)
+                .iter()
+                .map(|p| p.path().to_path_buf())
+                .collect()
+        });
+        assert_eq!(tabs, [tmp.path().to_path_buf(), login_folder("db")]);
     }
 
     #[gpui_kit::test]

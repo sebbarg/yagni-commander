@@ -49,7 +49,7 @@ impl FileManager {
                 let _ = me.update(cx, |fm, cx| {
                     fm.connect_dialog = None;
                     fm.commander.update(cx, |c, cx| {
-                        c.go_to(remote::path_of(&host, b""));
+                        c.connect(remote::path_of(&host, b""));
                         cx.notify();
                     });
                 });
