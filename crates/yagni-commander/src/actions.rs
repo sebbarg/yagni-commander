@@ -15,6 +15,13 @@ const SELECT_CONTEXT: &str = "Select";
 const SELECT_LIST_CONTEXT: &str = "Select > List";
 /// Key context of a dialog's [`crate::button_row::ButtonRow`].
 pub const BUTTON_ROW_CONTEXT: &str = "ButtonRow";
+/// Key context of the Connect dialog's field: Tab goes to its buttons.
+pub const CONNECT_FIELD_CONTEXT: &str = "ConnectField";
+
+/// The Connect dialog's Tab and Shift-Tab out of its field.
+pub mod connect {
+    gpui_kit::actions!(connect, [ToButtons, ToButtonsBack]);
+}
 
 actions!(
     yagni_commander,
@@ -423,6 +430,13 @@ pub fn bind_default_keys(cx: &mut App) {
             base_actions::Confirm { secondary: false },
             Some(SELECT_LIST_CONTEXT),
         ),
+    ]);
+    // More specific than Root's Tab: into the buttons at the first, or with
+    // Shift at the last.
+    let field = Some(CONNECT_FIELD_CONTEXT);
+    cx.bind_keys([
+        KeyBinding::new("tab", connect::ToButtons, field),
+        KeyBinding::new("shift-tab", connect::ToButtonsBack, field),
     ]);
     // More specific than the dialog's own Enter (always OK) and Root's Tab.
     let row = Some(BUTTON_ROW_CONTEXT);

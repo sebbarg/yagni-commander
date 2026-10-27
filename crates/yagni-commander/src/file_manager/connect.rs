@@ -111,6 +111,7 @@ impl FileManager {
             cx,
         );
         buttons.update(cx, |row, _| row.set_apart(1));
+        view.update(cx, |v, _| v.buttons = Some(buttons.clone()));
         focus_when_open(view.read(cx).field.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let (connect, cancel) = (connect.clone(), cancel.clone());

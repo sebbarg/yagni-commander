@@ -7958,6 +7958,82 @@ mod connect {
         );
     }
 
+    /// The button with the focus ring, or `None` (the field has focus).
+    fn ring_on(cx: &mut VisualTestContext) -> Option<&'static str> {
+        let ring = cx.debug_bounds("focus-ring-button")?;
+        [
+            ("Edit ~/.ssh/config", "button-Edit ~/.ssh/config"),
+            ("Cancel", "button-Cancel"),
+            ("Connect", "button-Connect"),
+        ]
+        .into_iter()
+        .find(|(_, selector)| {
+            cx.debug_bounds(selector)
+                .is_some_and(|bounds| bounds.contains(&ring.center()))
+        })
+        .map(|(name, _)| name)
+    }
+
+    #[gpui_kit::test]
+    fn tab_goes_through_the_field_and_every_button(cx: &mut TestAppContext) {
+        let (_tmp, _home, commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        let mut seen = vec![ring_on(cx)];
+        for _ in 0..4 {
+            cx.simulate_keystrokes("tab");
+            cx.run_until_parked();
+            seen.push(ring_on(cx));
+        }
+        assert_eq!(
+            seen,
+            [
+                None,
+                Some("Edit ~/.ssh/config"),
+                Some("Cancel"),
+                Some("Connect"),
+                None
+            ]
+        );
+        let mut back = Vec::new();
+        for _ in 0..4 {
+            cx.simulate_keystrokes("shift-tab");
+            cx.run_until_parked();
+            back.push(ring_on(cx));
+        }
+        assert_eq!(
+            back,
+            [
+                Some("Connect"),
+                Some("Cancel"),
+                Some("Edit ~/.ssh/config"),
+                None
+            ]
+        );
+        // Back in the field, Enter connects to the highlighted host.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(path(&commander, Side::Left, cx), login_folder("db"));
+    }
+
+    #[gpui_kit::test]
+    fn the_default_button_is_highlighted_again_after_leaving_the_row(cx: &mut TestAppContext) {
+        let (_tmp, _home, _commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab shift-tab"); // Edit, then the field
+        cx.run_until_parked();
+        assert_eq!(ring_on(cx), None);
+        cx.simulate_keystrokes("shift-tab"); // into the row at its last
+        cx.run_until_parked();
+        assert_eq!(
+            ring_on(cx),
+            Some("Connect"),
+            "not Edit, left selected before"
+        );
+    }
+
     #[gpui_kit::test]
     fn no_config_says_what_to_type(cx: &mut TestAppContext) {
         let (_tmp, home, _commander, cx) = with_hosts(cx);

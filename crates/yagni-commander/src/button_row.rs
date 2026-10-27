@@ -40,6 +40,9 @@ pub struct ButtonRow {
     /// The first this many buttons sit apart at the left (a side action);
     /// the keys still go through all of them in order.
     apart: usize,
+    /// The button the row starts on, the default for Enter in a text
+    /// field; the selection goes back to it when the row loses focus.
+    default: usize,
 }
 
 impl ButtonRow {
@@ -49,9 +52,11 @@ impl ButtonRow {
         selected: usize,
         cx: &mut Context<Self>,
     ) -> Self {
+        let selected = selected.min(buttons.len().saturating_sub(1));
         Self {
             focus: cx.focus_handle().tab_stop(true),
-            selected: selected.min(buttons.len().saturating_sub(1)),
+            selected,
+            default: selected,
             buttons,
             disabled: Vec::new(),
             copy_text: None,
@@ -71,6 +76,14 @@ impl ButtonRow {
             .map(|(label, on_press)| (SharedString::from(label), on_press))
             .collect();
         cx.new(|cx| Self::new(buttons, selected, cx))
+    }
+
+    /// Focuses the row on its first button, or its last (Tab or Shift-Tab
+    /// from a field before it).
+    pub fn enter(&mut self, first: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let last = self.buttons.len().saturating_sub(1);
+        self.select(if first { 0 } else { last }, cx);
+        self.focus.focus(window, cx);
     }
 
     /// Draws the first `count` buttons apart, at the left.
@@ -156,6 +169,11 @@ impl Render for ButtonRow {
         // The selected button is the default (Enter in a text field); the
         // ring says the row itself has the keys.
         let focused = self.focus.is_focused(window);
+        // Out of the row, the highlight shows the default again: Enter in a
+        // text field presses that one, whatever was selected in the row.
+        if !focused {
+            self.selected = self.default;
+        }
         let accent = crate::theme::Theme::get(cx).colors.accent;
         div()
             .key_context(BUTTON_ROW_CONTEXT)
