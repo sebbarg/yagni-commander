@@ -7683,6 +7683,31 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
+    fn the_tab_says_sftp(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = on_remote(cx);
+        let name = tmp
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let label = |cx: &mut VisualTestContext| {
+            commander.read_with(cx, |c, _| crate::panel_view::tab_label(c.panel(Side::Left)))
+        };
+        assert_eq!(label(cx), format!("sftp:{name}"));
+        commander.update(cx, |c, cx| {
+            c.go_to("sftp://test-host/".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert_eq!(label(cx), "sftp:test-host", "the root: the host");
+        let right = commander.read_with(cx, |c, _| {
+            crate::panel_view::tab_label(c.panel(Side::Right))
+        });
+        assert_eq!(right, "a", "a local tab as before");
+    }
+
+    #[gpui_kit::test]
     fn the_header_keeps_the_host_in_sight(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = on_remote(cx);
         let parts = commander.read_with(cx, |c, _| {
