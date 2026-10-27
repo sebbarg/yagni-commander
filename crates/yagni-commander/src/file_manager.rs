@@ -13,6 +13,7 @@ use yagni_commander_core::{
     Command, Commander, Config, Setting, Side, SortKey, Step, config, oplog,
 };
 
+mod askpass;
 pub(crate) mod commands;
 mod connect;
 mod file_ops;

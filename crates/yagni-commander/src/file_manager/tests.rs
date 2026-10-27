@@ -7667,3 +7667,92 @@ mod connect {
         assert!(cx.debug_bounds("connect-empty").is_some());
     }
 }
+
+mod ssh_questions {
+    use super::*;
+    use std::sync::mpsc;
+    use yagni_commander_core::askpass::{Kind, Question};
+
+    /// `open`, with the file manager taking questions from the returned
+    /// sender.
+    fn asking(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        mpsc::Sender<Question>,
+        &mut VisualTestContext,
+    ) {
+        let (tmp, _commander, cx) = open(cx);
+        let (send, questions) = mpsc::channel();
+        file_manager(cx).update_in(cx, |this, window, cx| this.ask_from(questions, window, cx));
+        (tmp, send, cx)
+    }
+
+    fn arrive(cx: &mut VisualTestContext) {
+        cx.executor()
+            .advance_clock(crate::file_manager::commands::OPENER_POLL * 2);
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn a_password_is_typed_masked_and_sent_once(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let (question, answer) = Question::new("me@box's password: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        assert!(dialog_open(cx));
+        assert!(cx.debug_bounds("ssh-question").is_some());
+        cx.simulate_input("hunter2");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(answer.try_recv().unwrap().as_deref(), Some("hunter2"));
+        assert!(answer.try_recv().is_err(), "answered once");
+    }
+
+    #[gpui_kit::test]
+    fn escape_cancels_a_password(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let (question, answer) = Question::new("Passphrase: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        cx.simulate_input("x");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(answer.try_recv().unwrap(), None);
+    }
+
+    #[gpui_kit::test]
+    fn a_host_key_defaults_to_no(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let prompt = "The authenticity of host 'box' can't be established.\nContinue (yes/no)? ";
+        let (question, answer) = Question::new(prompt, Kind::Confirm);
+        send.send(question).unwrap();
+        arrive(cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(answer.try_recv().unwrap(), None);
+
+        let (question, answer) = Question::new(prompt, Kind::Confirm);
+        send.send(question).unwrap();
+        arrive(cx);
+        cx.simulate_keystrokes("left enter");
+        cx.run_until_parked();
+        assert_eq!(answer.try_recv().unwrap().as_deref(), Some("yes"));
+    }
+
+    #[gpui_kit::test]
+    fn focus_returns_to_the_panels(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let (question, _answer) = Question::new("password: ", Kind::Secret);
+        send.send(question).unwrap();
+        arrive(cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let focused =
+            file_manager(cx).update_in(cx, |this, window, _| this.focus.is_focused(window));
+        assert!(focused);
+    }
+}

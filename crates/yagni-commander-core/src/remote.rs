@@ -129,23 +129,65 @@ pub fn set_connector(connector: Connector) {
     *CONNECTOR.write().unwrap_or_else(PoisonError::into_inner) = connector;
 }
 
-/// `ssh -s host sftp`, never prompting.
+/// How ssh may ask the user (see [`crate::askpass`]): set once by the app.
+#[derive(Debug, Clone)]
+pub struct Asking {
+    /// `SSH_ASKPASS` and the variables our helper needs.
+    pub env: Vec<(OsString, OsString)>,
+    /// Where ssh keeps the shared connections (`ControlPath`).
+    pub control_dir: PathBuf,
+}
+
+static ASKING: RwLock<Option<Asking>> = RwLock::new(None);
+
+/// Lets ssh ask through the app and share one connection per host.
+pub fn set_asking(asking: Asking) {
+    *ASKING.write().unwrap_or_else(PoisonError::into_inner) = Some(asking);
+}
+
+/// How long a shared connection outlives its last use.
+const CONTROL_PERSIST: &str = "ControlPersist=600";
+
+/// `ssh -s host sftp`. With [`Asking`] set, ssh asks the user through the
+/// app and shares one authenticated connection per host, so a host asks
+/// once; without it ssh never asks (`BatchMode`).
 pub fn ssh_command(host: &str) -> Command {
+    let asking = ASKING
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    ssh_command_with(host, asking.as_ref())
+}
+
+fn ssh_command_with(host: &str, asking: Option<&Asking>) -> Command {
     let mut command = crate::shell_path::command("ssh");
     command.args([
-        "-o",
-        "BatchMode=yes",
         "-o",
         "ConnectTimeout=15",
         "-o",
         "ServerAliveInterval=15",
         "-o",
         "ServerAliveCountMax=3",
-        "-s",
-        "--",
-        host,
-        "sftp",
     ]);
+    match asking {
+        Some(asking) => {
+            command.envs(asking.env.iter().map(|(k, v)| (k, v)));
+            // Too long a folder: no sharing (each connection asks again)
+            // rather than no connection at all.
+            if crate::askpass::fits_control_path(&asking.control_dir) {
+                let path = asking.control_dir.join("cm-%C");
+                let mut control_path = OsString::from("ControlPath=");
+                control_path.push(path.as_os_str());
+                command
+                    .args(["-o", "ControlMaster=auto", "-o", CONTROL_PERSIST, "-o"])
+                    .arg(control_path);
+            }
+        }
+        None => {
+            command.args(["-o", "BatchMode=yes"]);
+        }
+    }
+    command.args(["-s", "--", host, "sftp"]);
     command
 }
 
@@ -159,10 +201,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// What ssh wrote to its error output, trimmed.
+    /// What ssh wrote to its error output, as a message.
     fn stderr_text(&self) -> String {
         let bytes = self.stderr.lock().unwrap_or_else(PoisonError::into_inner);
-        String::from_utf8_lossy(&bytes).trim().to_owned()
+        ssh_message(&bytes)
     }
 
     /// `e` with ssh's own explanation, once the connection broke.
@@ -185,6 +227,17 @@ impl Drop for Session {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// ssh's error output as a message: its lines, without the notice that a
+/// host key was just added (it comes first and explains nothing).
+fn ssh_message(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("Warning: Permanently added"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Starts a new session with `host`. Each file operation has its own, so a
@@ -222,10 +275,7 @@ fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
             let _ = child.kill();
             let _ = child.wait();
             let _ = reading.join();
-            let text =
-                String::from_utf8_lossy(&stderr.lock().unwrap_or_else(PoisonError::into_inner))
-                    .trim()
-                    .to_owned();
+            let text = ssh_message(&stderr.lock().unwrap_or_else(PoisonError::into_inner));
             Err(if !text.is_empty() {
                 io::Error::new(io::ErrorKind::ConnectionRefused, text)
             } else if e.kind() == io::ErrorKind::InvalidData {
@@ -472,13 +522,37 @@ pub(crate) mod tests {
         assert!(!valid_host("a b"));
     }
 
+    fn args(command: &Command) -> Vec<String> {
+        command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
     #[test]
-    fn the_ssh_command_never_prompts_and_ends_options_before_the_host() {
-        let command = ssh_command("box");
-        let args: Vec<_> = command.get_args().map(|a| a.to_string_lossy()).collect();
+    fn without_asking_ssh_never_prompts_and_options_end_before_the_host() {
+        let args = args(&ssh_command_with("box", None));
         assert!(args.iter().any(|a| a == "BatchMode=yes"));
+        assert!(!args.iter().any(|a| a.starts_with("ControlMaster")));
         let dashes = args.iter().position(|a| a == "--").unwrap();
         assert_eq!(args[dashes + 1..], ["box", "sftp"]);
+    }
+
+    #[test]
+    fn with_asking_ssh_asks_through_the_app_and_shares_connections() {
+        let asking = Asking {
+            env: vec![("SSH_ASKPASS".into(), "/bin/helper".into())],
+            control_dir: PathBuf::from("/run/yc"),
+        };
+        let command = ssh_command_with("box", Some(&asking));
+        let args = args(&command);
+        assert!(!args.iter().any(|a| a == "BatchMode=yes"));
+        assert!(args.iter().any(|a| a == "ControlMaster=auto"));
+        assert!(args.iter().any(|a| a == "ControlPath=/run/yc/cm-%C"));
+        assert!(args.iter().any(|a| a == CONTROL_PERSIST));
+        let env: Vec<_> = command.get_envs().collect();
+        assert!(env.contains(&("SSH_ASKPASS".as_ref(), Some("/bin/helper".as_ref()))));
+        assert_eq!(args[args.len() - 3..], ["--", "box", "sftp"]);
     }
 
     #[test]
@@ -553,6 +627,27 @@ pub(crate) mod tests {
         command.args(["-c", "echo 'Permission denied (publickey).' >&2; exit 255"]);
         let err = connect_with("x", command).unwrap_err();
         assert_eq!(err.to_string(), "Permission denied (publickey).");
+    }
+
+    #[test]
+    fn the_host_key_notice_is_left_out_of_messages() {
+        let stderr = b"Warning: Permanently added 'box' (ED25519) to the list of known hosts.\r\n\
+                       Permission denied (publickey,password).\n";
+        assert_eq!(
+            ssh_message(stderr),
+            "Permission denied (publickey,password)."
+        );
+    }
+
+    #[test]
+    fn a_too_long_control_folder_turns_sharing_off() {
+        let asking = Asking {
+            env: Vec::new(),
+            control_dir: Path::new("/x").join("y".repeat(80)),
+        };
+        let args = args(&ssh_command_with("box", Some(&asking)));
+        assert!(!args.iter().any(|a| a.starts_with("Control")));
+        assert!(!args.iter().any(|a| a == "BatchMode=yes"), "still asks");
     }
 
     #[test]

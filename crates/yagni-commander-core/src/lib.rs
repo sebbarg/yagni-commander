@@ -5,6 +5,7 @@
 
 pub mod apps;
 pub mod archive;
+pub mod askpass;
 mod commander;
 pub mod config;
 mod entry;

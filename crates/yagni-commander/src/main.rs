@@ -24,7 +24,7 @@ mod windows;
 mod zoom;
 
 use gpui_kit::{App, AppContext, WindowOptions};
-use yagni_commander_core::{Commander, oplog, storage};
+use yagni_commander_core::{Commander, askpass, oplog, storage};
 
 use crate::actions::Quit;
 use crate::app_state::AppState;
@@ -32,7 +32,16 @@ use crate::config_state::CurrentConfig;
 use crate::file_manager::FileManager;
 use crate::theme::Theme;
 
+/// The askpass socket, alive as long as the app.
+struct AskpassServer(#[allow(dead_code)] askpass::Server);
+
+impl gpui_kit::Global for AskpassServer {}
+
 fn main() {
+    // Run by ssh as its askpass helper: ask the running app, nothing else.
+    if let Some(code) = yagni_commander_core::askpass::run_helper() {
+        std::process::exit(code);
+    }
     // gpui's macOS text system warns about every duplicate face in the system
     // font family (harmless: it skips them), once per font key loaded.
     env_logger::Builder::from_env(
@@ -92,6 +101,24 @@ fn main() {
     });
     let notice = current.problem.clone().or(log_problem).or(unknown_theme);
 
+    // ssh's questions (passwords, host keys) come to the app's dialogs, and
+    // ssh shares one connection per host so each asks once. Without the
+    // socket ssh never asks (keys and the agent only).
+    let control_dir = askpass::runtime_dir();
+    let questions = match askpass::Server::start(&control_dir) {
+        Ok((server, questions)) => {
+            yagni_commander_core::remote::set_asking(yagni_commander_core::remote::Asking {
+                env: server.env(),
+                control_dir,
+            });
+            Some((server, questions))
+        }
+        Err(e) => {
+            log::warn!("no ssh prompts: {e}");
+            None
+        }
+    };
+
     // The icon SVGs (e.g. the menus' check mark).
     gpui_kit::application()
         .with_assets(gpui_kit::assets::Assets)
@@ -124,7 +151,15 @@ fn main() {
                 };
                 // Wraps the view in gpui-kit's Root, which hosts dialogs and notifications.
                 let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
-                    cx.new(|cx| FileManager::new(commander, notice, window, cx))
+                    cx.new(|cx| {
+                        let mut view = FileManager::new(commander, notice, window, cx);
+                        if let Some((server, questions)) = questions {
+                            view.ask_from(questions, window, cx);
+                            // Kept for the app's life: it owns the socket.
+                            cx.set_global(AskpassServer(server));
+                        }
+                        view
+                    })
                 })
                 .expect("failed to open window");
                 windows::maximize_late(main_window, bounds, cx);
