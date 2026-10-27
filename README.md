@@ -28,11 +28,23 @@ A personal project. Bug reports are welcome; feature requests will mostly get a 
 - Type to jump: a quick search box finds names starting with what you type.
 - A mounts dropdown per panel (Alt-F1, Alt-F2, or the folder button before the path): Root, USB drives and network mounts (and Home, if it is a filesystem of its own), without the system's own mounts.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
+- Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
 - A viewer (F3) that opens multi-GB files instantly.
 - Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
 - Panels follow changes made by other programs.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
 - Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
+
+## Remote folders (SFTP)
+
+Ctrl-F (or Commands > Connect...) lists the hosts in your `~/.ssh/config`; pick one, or type `user@host`, and its home folder opens in a new tab, labeled `sftp:`. From there it works like a local folder: copy and move in either direction or between two hosts (F5, F6), delete (F8, permanently: there is no trash on a host), rename (F2), new folder (F7), view (F3). Hotlist entries can point at `sftp://host/path` too.
+
+- The connection is your own `ssh`, so everything in `~/.ssh/config` (aliases, users, ports, keys, jump hosts), your ssh agent and `known_hosts` work as they do in a terminal. Password, passphrase and new-host-key questions come up in the app, once per host.
+- The host needs an SFTP server. Most Linux servers and macOS (with Remote Login on) have one; routers and other small devices often don't, and the app says so.
+- Remote tabs are not remembered: a restart never connects anywhere. Quitting closes the connections.
+- Not on remote folders yet: Find files (Alt-F7), Properties, Open with, Compare, packing and extracting.
+
+**Editing (F4) works on a local copy.** The file is copied to a private folder on your machine and opened in your editor; every save is copied back to the host, after a check that nobody changed the file there in the meantime (if somebody did, you are asked first). That is fine for a config file or a quick fix. It is not a remote development setup: only the one file is edited, the copy lives on your machine, and the editor knows nothing about the host. For serious work on a remote machine, use an editor built for it, such as VS Code with its Remote - SSH extension (or Zed's remote development), which runs on the host and edits there directly.
 
 ## Installing
 
