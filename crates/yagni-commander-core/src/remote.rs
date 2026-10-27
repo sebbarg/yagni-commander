@@ -358,8 +358,13 @@ const BUSY_WAIT: Duration = Duration::from_secs(2);
 
 /// Runs `f` on the shared session with `host`, connecting first if there is
 /// none. Uses of one host wait for each other, up to [`BUSY_WAIT`] once
-/// connected; other hosts don't.
-pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>) -> io::Result<T> {
+/// connected; other hosts don't. A kept session found dead (the computer
+/// slept, the network changed) is replaced and `f` runs once more; a
+/// session made for this call is not retried.
+pub fn with_session<T>(
+    host: &str,
+    mut f: impl FnMut(&mut Client) -> io::Result<T>,
+) -> io::Result<T> {
     let slot = SESSIONS
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
@@ -382,23 +387,28 @@ pub fn with_session<T>(host: &str, f: impl FnOnce(&mut Client) -> io::Result<T>)
             }
         }
     };
-    if session.is_none() {
-        slot.connecting.store(true, Ordering::Relaxed);
-        let connected = connect(host);
-        slot.connecting.store(false, Ordering::Relaxed);
-        *session = Some(connected?);
-    }
-    let shared = session.as_mut().expect("connected above");
-    match f(&mut shared.client) {
-        Ok(value) => Ok(value),
-        Err(e) => {
-            let e = shared.explain(e);
-            if shared.client.is_broken() {
-                *session = None;
-            }
-            Err(e)
+    let kept = session.is_some();
+    for attempt in 0..2 {
+        if session.is_none() {
+            slot.connecting.store(true, Ordering::Relaxed);
+            let connected = connect(host);
+            slot.connecting.store(false, Ordering::Relaxed);
+            *session = Some(connected?);
+        }
+        let shared = session.as_mut().expect("connected above");
+        let e = match f(&mut shared.client) {
+            Ok(value) => return Ok(value),
+            Err(e) => shared.explain(e),
+        };
+        if !shared.client.is_broken() {
+            return Err(e);
+        }
+        *session = None;
+        if !kept || attempt == 1 {
+            return Err(e);
         }
     }
+    unreachable!("the second attempt returns")
 }
 
 /// The time an SFTP `mtime` stands for.
@@ -519,10 +529,17 @@ fn owner_of(long_name: &[u8], attrs: Attrs) -> Option<String> {
 pub(crate) mod tests {
     use super::*;
 
-    /// Every remote host is this machine, through a local `sftp-server`.
+    /// Every remote host is this machine, through a local `sftp-server`;
+    /// on host `dies-soon` the server ends after 0.3 s.
     pub(crate) fn use_local_server() {
-        fn local(_: &str) -> Command {
-            Command::new(crate::sftp::tests::server_program())
+        fn local(host: &str) -> Command {
+            let server = crate::sftp::tests::server_program();
+            if host == "dies-soon" {
+                let mut command = Command::new("timeout");
+                command.arg("0.3").arg(server);
+                return command;
+            }
+            Command::new(server)
         }
         set_connector(local);
     }
@@ -771,6 +788,42 @@ pub(crate) mod tests {
         assert!(begun.elapsed() < BUSY_WAIT * 3);
         held.send(()).unwrap();
         holder.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn a_kept_session_that_died_is_replaced_without_an_error() {
+        use_local_server();
+        let tmp = tempfile::tempdir().unwrap();
+        let path = remote("revive", tmp.path());
+        let none = AtomicBool::new(false);
+        read_listing(&path, &AtomicUsize::new(0), &none).unwrap();
+        // The server behind the kept session goes away, as after a sleep.
+        let slot = SESSIONS.lock().unwrap().get("revive").unwrap().clone();
+        let child_id = {
+            let mut session = slot.session.lock().unwrap();
+            let session = session.as_mut().unwrap();
+            let _ = session.child.kill();
+            let _ = session.child.wait();
+            session.child.id()
+        };
+        let listing = read_listing(&path, &AtomicUsize::new(0), &none).unwrap();
+        assert_eq!(listing.path, path);
+        let now = slot.session.lock().unwrap().as_ref().unwrap().child.id();
+        assert_ne!(now, child_id, "a new session");
+    }
+
+    #[test]
+    fn a_new_session_that_dies_is_not_retried() {
+        use std::sync::atomic::AtomicU32;
+        use_local_server();
+        let calls = AtomicU32::new(0);
+        let result = with_session("dies-soon", |client| {
+            calls.fetch_add(1, Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(600));
+            client.stat(b"/")
+        });
+        assert!(result.is_err());
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     #[test]
