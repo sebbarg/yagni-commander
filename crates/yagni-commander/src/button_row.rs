@@ -37,6 +37,9 @@ pub struct ButtonRow {
     selected: usize,
     /// What Ctrl-C copies while the row has focus (a message box's text).
     copy_text: Option<SharedString>,
+    /// The first this many buttons sit apart at the left (a side action);
+    /// the keys still go through all of them in order.
+    apart: usize,
 }
 
 impl ButtonRow {
@@ -52,6 +55,7 @@ impl ButtonRow {
             buttons,
             disabled: Vec::new(),
             copy_text: None,
+            apart: 0,
         }
     }
 
@@ -67,6 +71,11 @@ impl ButtonRow {
             .map(|(label, on_press)| (SharedString::from(label), on_press))
             .collect();
         cx.new(|cx| Self::new(buttons, selected, cx))
+    }
+
+    /// Draws the first `count` buttons apart, at the left.
+    pub fn set_apart(&mut self, count: usize) {
+        self.apart = count;
     }
 
     /// Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy `text` while the row has
@@ -185,31 +194,39 @@ impl Render for ButtonRow {
                     None => cx.propagate(),
                 }),
             )
-            .children(self.buttons.iter().enumerate().map(|(ix, (label, _))| {
-                let label = hotlist::label(label);
-                let text = SharedString::from(label.text);
-                let selector = format!("button-{text}");
-                div()
-                    .relative()
-                    .debug_selector(move || selector)
-                    .when(focused && ix == self.selected, |d| {
-                        d.child(focus_ring(accent, "button"))
-                    })
-                    .child(
-                        Button::new(("button", ix))
-                            .map(|b| match label.underline {
-                                Some(range) => b
-                                    .accessibility_label(text.clone())
-                                    .child(underlined(text, range)),
-                                None => b.label(text),
+            .children(
+                self.buttons
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(ix, (label, _))| {
+                        // The space that pushes the rest to the right.
+                        let gap = (self.apart > 0 && ix == self.apart).then(|| div().flex_1());
+                        let label = hotlist::label(label);
+                        let text = SharedString::from(label.text);
+                        let selector = format!("button-{text}");
+                        let button = div()
+                            .relative()
+                            .debug_selector(move || selector)
+                            .when(focused && ix == self.selected, |d| {
+                                d.child(focus_ring(accent, "button"))
                             })
-                            .tab_stop(false)
-                            .disabled(self.disabled.contains(&ix))
-                            .when(ix == self.selected, |b| b.primary())
-                            .on_click(
-                                cx.listener(move |this, _, window, cx| this.press(ix, window, cx)),
-                            ),
-                    )
-            }))
+                            .child(
+                                Button::new(("button", ix))
+                                    .map(|b| match label.underline {
+                                        Some(range) => b
+                                            .accessibility_label(text.clone())
+                                            .child(underlined(text, range)),
+                                        None => b.label(text),
+                                    })
+                                    .tab_stop(false)
+                                    .disabled(self.disabled.contains(&ix))
+                                    .when(ix == self.selected, |b| b.primary())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.press(ix, window, cx)
+                                    })),
+                            );
+                        gap.into_iter().chain([button])
+                    }),
+            )
     }
 }

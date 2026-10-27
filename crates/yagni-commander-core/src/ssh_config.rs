@@ -53,6 +53,28 @@ impl SshHost {
     }
 }
 
+/// `home/.ssh/config` for the Connect dialog's Edit button: made empty if
+/// missing, readable by the user only (ssh refuses a config others can
+/// write), in a `.ssh` made 0700 if that is missing too.
+pub fn ensure_config(home: &Path) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let dir = home.join(".ssh");
+    match fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    let path = dir.join("config");
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => Err(e),
+        _ => Ok(path),
+    }
+}
+
 /// The hosts of `home/.ssh/config`, in the order they first appear. A
 /// missing or unreadable file gives none.
 pub fn hosts(home: &Path) -> Vec<SshHost> {
@@ -299,6 +321,20 @@ mod tests {
     fn an_include_loop_ends() {
         let home = home_with("Host a\nInclude config\n");
         assert_eq!(aliases(&hosts(home.path())), ["a"]);
+    }
+
+    #[test]
+    fn ensure_config_makes_a_private_file_and_keeps_an_existing_one() {
+        use std::os::unix::fs::PermissionsExt;
+        let home = tempfile::tempdir().unwrap();
+        let path = ensure_config(home.path()).unwrap();
+        assert_eq!(path, home.path().join(".ssh/config"));
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&home.path().join(".ssh")), 0o700);
+        fs::write(&path, "Host a\n").unwrap();
+        ensure_config(home.path()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "Host a\n");
     }
 
     #[test]

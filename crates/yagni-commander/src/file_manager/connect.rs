@@ -4,10 +4,10 @@ use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::{App, AppContext, Context, Focusable, ParentElement, WeakEntity, Window};
-use yagni_commander_core::remote;
+use yagni_commander_core::{launch, remote, ssh_config};
 
 use super::FileManager;
-use super::commands::{focus_when_open, show_error, themed_dialog};
+use super::commands::{configured_editor, focus_when_open, show_error, themed_dialog};
 use crate::button_row::{ButtonRow, OnPress};
 use crate::connect_dialog::ConnectDialog;
 
@@ -81,11 +81,36 @@ impl FileManager {
                 window.close_dialog(cx);
             }
         });
+        // Edit: the config in the editor (made if missing). The dialog
+        // closes; Ctrl-F again reads the edited file.
+        let edit_button: OnPress = Rc::new({
+            let (cancel, home, focus) = (cancel.clone(), home.clone(), focus.clone());
+            move |window, cx| {
+                cancel(window, cx);
+                window.close_dialog(cx);
+                let (home, focus) = (home.clone(), focus.clone());
+                window.defer(cx, move |window, cx| {
+                    let Some(editor) = configured_editor(Some(focus.clone()), window, cx) else {
+                        return;
+                    };
+                    let opened = ssh_config::ensure_config(&home)
+                        .and_then(|path| launch::open_in_editor(&editor, &path));
+                    if let Err(e) = opened {
+                        show_error("Cannot open editor", e.to_string(), Some(focus), window, cx);
+                    }
+                });
+            }
+        });
         let buttons = ButtonRow::build(
-            [("Cancel", cancel_button), ("Connect", connect_button)],
-            1,
+            [
+                ("Edit ~/.ssh/config", edit_button),
+                ("Cancel", cancel_button),
+                ("Connect", connect_button),
+            ],
+            2,
             cx,
         );
+        buttons.update(cx, |row, _| row.set_apart(1));
         focus_when_open(view.read(cx).field.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             let (connect, cancel) = (connect.clone(), cancel.clone());

@@ -7897,6 +7897,67 @@ mod connect {
         assert_eq!(path(&commander, Side::Left, cx), login_folder("web"));
     }
 
+    fn click(cx: &mut VisualTestContext, selector: &'static str) {
+        let at = cx.debug_bounds(selector).expect("drawn").center();
+        cx.simulate_click(at, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+    }
+
+    #[gpui_kit::test]
+    fn edit_opens_the_config_in_the_editor_and_makes_it_if_missing(cx: &mut TestAppContext) {
+        let (_tmp, home, _commander, cx) = with_hosts(cx);
+        let ssh = home.path().join(".ssh");
+        std::fs::remove_dir_all(&ssh).unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let editor = out.path().join("editor");
+        let got = out.path().join("got");
+        std::fs::write(
+            &editor,
+            format!("#!/bin/sh\necho \"$1\" > '{}'\n", got.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        set_editor(&editor.display().to_string(), cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        // Apart at the left, and not the default: Enter still connects.
+        let edit = cx.debug_bounds("button-Edit ~/.ssh/config").unwrap();
+        let cancel = cx.debug_bounds("button-Cancel").unwrap();
+        assert!(
+            cancel.left() - edit.right() > gpui_kit::px(40.0),
+            "{edit:?} {cancel:?}"
+        );
+        click(cx, "button-Edit ~/.ssh/config");
+        assert!(!dialog_open(cx));
+        let config = ssh.join("config");
+        for _ in 0..200 {
+            if got.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&got).unwrap().trim(),
+            config.display().to_string()
+        );
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&config).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    #[gpui_kit::test]
+    fn edit_without_an_editor_says_so(cx: &mut TestAppContext) {
+        let (_tmp, _home, _commander, cx) = with_hosts(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        click(cx, "button-Edit ~/.ssh/config");
+        assert_eq!(
+            box_text(cx),
+            "Cannot open editor\nNo editor configured: set `editor` in config.toml."
+        );
+    }
+
     #[gpui_kit::test]
     fn no_config_says_what_to_type(cx: &mut TestAppContext) {
         let (_tmp, home, _commander, cx) = with_hosts(cx);
