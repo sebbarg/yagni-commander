@@ -2,22 +2,22 @@
 # Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
 # Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
 # (checked by the theme tests); text_dim and hidden are lifted from Tokyo
-# Night's comment colors for that.
+# Night's comment colors for that (dialogs are drawn on the popups' color).
 name = "Tokyo Night"
 mode = "dark"
 
 [colors]
 window_bg = "#16161e"
 panel_bg = "#1a1b26"
-dialog_bg = "#1a1b26"
+dialog_bg = "#292e42"
 header_bg = "#1f2335"
 header_active_bg = "#2f3549"
 popup_bg = "#292e42"
-popup_border = "#545c7e"
+raised_border = "#545c7e"
 border = "#292e42"
 text = "#c0caf5"
 text_secondary = "#a9b1d6"
-text_dim = "#8089b0"
+text_dim = "#8b94bb"
 directory = "#7aa2f7"
 symlink = "#7dcfff"
 hidden = "#8c94ba"

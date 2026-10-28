@@ -7041,6 +7041,80 @@ mod themes {
     }
 
     #[gpui_kit::test]
+    fn a_click_on_the_open_dropdown_closes_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        click(cx, "settings-theme", 1);
+        assert!(dropdown_open(cx));
+        click(cx, "settings-theme", 1);
+        assert!(!dropdown_open(cx), "closed, not closed and reopened");
+        assert!(settings_open(cx));
+        assert_eq!(theme_name(cx), "Tokyo Night");
+    }
+
+    #[gpui_kit::test]
+    fn a_row_click_picks_by_its_selector(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        click(cx, "settings-theme", 1);
+        assert!(cx.debug_bounds("dropdown-theme-list").is_some());
+        click(cx, "dropdown-theme-row-4", 1);
+        assert_eq!(theme_name(cx), "Classic");
+        assert!(cx.debug_bounds("dropdown-theme-list").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn a_click_elsewhere_closes_the_list_and_keeps_its_focus(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        click(cx, "settings-editor", 1);
+        cx.run_until_parked();
+        assert!(!dropdown_open(cx));
+        assert!(settings_open(cx));
+        cx.simulate_input("vi");
+        let view = settings_view(cx);
+        assert_eq!(view.read_with(cx, |v, cx| v.editor_text(cx)), "vi");
+    }
+
+    #[gpui_kit::test]
+    fn the_dropdown_moves_with_home_and_end_and_closes_on_tab(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        cx.simulate_keystrokes("end enter");
+        assert_eq!(theme_name(cx), "Classic");
+        cx.simulate_keystrokes("enter home enter");
+        assert_eq!(theme_name(cx), "Tokyo Night");
+        cx.simulate_keystrokes("enter down tab");
+        assert!(!dropdown_open(cx));
+        assert!(settings_open(cx));
+        assert_eq!(theme_name(cx), "Tokyo Night", "Tab doesn't pick");
+    }
+
+    #[gpui_kit::test]
+    fn picking_the_current_theme_saves_nothing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        open_theme_dropdown(cx);
+        cx.simulate_keystrokes("enter");
+        assert!(!dropdown_open(cx));
+        assert_eq!(config(cx).theme, None);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("theme ="));
+    }
+
+    #[gpui_kit::test]
     fn the_theme_dropdown_shows_the_current_theme(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();

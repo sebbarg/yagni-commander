@@ -6,10 +6,7 @@ use crate::file_manager::commands::themed_dialog;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use gpui_kit::base::actions::SelectDown;
-use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputEvent, InputState};
-use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, WindowExt};
 use gpui_kit::{
@@ -20,9 +17,9 @@ use gpui_kit::{
 use yagni_commander_core::Setting;
 use yagni_commander_core::config::parse_keep_days;
 
-use crate::actions::select;
 use crate::button_row::{ButtonRow, OnPress};
 use crate::config_state::CurrentConfig;
+use crate::dropdown::{Dropdown, DropdownEvent};
 use crate::file_manager::FileManager;
 use crate::file_manager::commands::{focus_when_open, text_field};
 use crate::theme::{self, Theme};
@@ -32,9 +29,7 @@ pub struct SettingsView {
     editor: Entity<InputState>,
     days: Entity<InputState>,
     /// The Theme dropdown: the built-ins' display names.
-    theme: Entity<SelectState<Vec<SharedString>>>,
-    #[cfg(test)]
-    theme_trigger: gpui_kit::FocusHandle,
+    theme: Entity<Dropdown>,
     days_error: Option<&'static str>,
     /// Where the operation log is written, if there is a state folder.
     log_dir: Option<PathBuf>,
@@ -75,20 +70,20 @@ impl SettingsView {
         let selected = themes
             .iter()
             .position(|(_, name)| *name == current_name)
-            .map(|row| IndexPath::default().row(row));
+            .unwrap_or(0);
         let names: Vec<SharedString> = themes.iter().map(|(_, n)| n.clone().into()).collect();
-        let theme = cx.new(|cx| SelectState::new(names, selected, window, cx));
+        let theme = cx.new(|cx| {
+            let mut dropdown = Dropdown::new("theme", names, selected, 200.0, cx);
+            dropdown.set_disabled(disabled);
+            dropdown
+        });
         let subscriptions = vec![
             cx.subscribe_in(
                 &theme,
                 window,
-                move |this, _, event: &SelectEvent<Vec<SharedString>>, window, cx| {
-                    let SelectEvent::Confirm(Some(name)) = event else {
-                        return;
-                    };
-                    if let Some((id, _)) = themes.iter().find(|(_, n)| n == name.as_ref()) {
-                        this.change(Setting::Theme((*id).into()), window, cx);
-                    }
+                move |this, _, DropdownEvent::Picked(ix), window, cx| {
+                    let id = themes[*ix].0;
+                    this.change(Setting::Theme(id.into()), window, cx);
                 },
             ),
             cx.subscribe_in(
@@ -114,8 +109,6 @@ impl SettingsView {
             file_manager,
             editor,
             days,
-            #[cfg(test)]
-            theme_trigger: theme.focus_handle(cx),
             theme,
             days_error: None,
             log_dir,
@@ -149,16 +142,15 @@ impl SettingsView {
         }
     }
 
-    /// The dropdown's list is open. While open, its focus handle is the
-    /// list's, not the trigger's.
     #[cfg(test)]
     pub fn theme_open(&self, cx: &App) -> bool {
-        self.theme.focus_handle(cx) != self.theme_trigger
+        self.theme.read(cx).is_open()
     }
 
     #[cfg(test)]
     pub fn theme_value(&self, cx: &App) -> Option<String> {
-        self.theme.read(cx).selected_value().map(|v| v.to_string())
+        let ix = self.theme.read(cx).selected();
+        theme::ids_and_names().get(ix).map(|(_, name)| name.clone())
     }
 
     #[cfg(test)]
@@ -253,11 +245,7 @@ impl Render for SettingsView {
                         div()
                             .debug_selector(|| "settings-theme".into())
                             .w(crate::zoom::rems_from_px(200.0))
-                            // Opens the closed list (see `actions::select`).
-                            .on_action(|_: &select::Open, window, cx| {
-                                window.dispatch_action(Box::new(SelectDown), cx)
-                            })
-                            .child(Select::new(&self.theme).disabled(disabled)),
+                            .child(self.theme.clone()),
                     ),
             )
             .child(

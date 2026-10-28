@@ -63,7 +63,8 @@ pub struct Colors {
     pub window_bg: Rgba,
     /// Panel list background; also lists inside dialogs, and text fields in light themes.
     pub panel_bg: Rgba,
-    /// Dialog background, applied by `themed_dialog`.
+    /// Dialog background, applied by `themed_dialog`. Dark themes raise
+    /// dialogs like popups (`popup_bg`); the light ones keep their own.
     pub dialog_bg: Rgba,
     /// Path header and footer of the inactive panel.
     pub header_bg: Rgba,
@@ -72,9 +73,12 @@ pub struct Colors {
     /// Popups (hotlist, mounts, Open with) and the menus: a clear step
     /// apart from the panels they open over.
     pub popup_bg: Rgba,
-    /// The edge of our popups: brighter than `border` in dark themes, where
-    /// a quiet edge disappears.
-    pub popup_border: Rgba,
+    /// Edges on the raised surfaces (popups, menus, and dialogs in dark
+    /// themes): the popups' own edge, text fields, buttons and our dialog
+    /// controls (`field_frame`), dividers. Brighter than `border` in dark
+    /// themes, where a quiet edge disappears.
+    pub raised_border: Rgba,
+    /// Edges on the panels: tabs, the panel frame, lists inside dialogs.
     pub border: Rgba,
     /// Default text, e.g. file names.
     pub text: Rgba,
@@ -176,7 +180,10 @@ impl Theme {
         let mut colors = ThemeConfigColors::default();
         colors.background = hex(c.panel_bg);
         colors.foreground = hex(c.text);
-        colors.border = hex(c.border);
+        // gpui-component draws only on raised surfaces (menus, dialogs and
+        // its controls), so its edges, the menus' separators among them, are
+        // ours there; `border` stays the panels'.
+        colors.border = hex(c.raised_border);
         colors.caret = hex(c.text);
         colors.ring = hex(c.accent);
         colors.selection = hex(with_alpha(c.accent, 0.35));
@@ -195,7 +202,9 @@ impl Theme {
         colors.muted_foreground = hex(c.text_dim);
         colors.popover = hex(c.popup_bg);
         colors.popover_foreground = hex(c.text);
-        colors.input = hex(c.border);
+        // Text fields' and buttons' edges, and in dark mode their tint too:
+        // `border` disappears on a raised dialog.
+        colors.input = hex(c.raised_border);
         colors.list = hex(c.panel_bg);
         colors.list_active = hex(with_alpha(c.accent, 0.2));
         colors.list_active_border = hex(c.accent);
@@ -233,15 +242,33 @@ fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
 }
 
 /// The frame of our popups (hotlist, mounts, Open with): `popup_bg`, the
-/// `popup_border`, round corners and a shadow, so they stand out from the
+/// `raised_border`, round corners and a shadow, so they stand out from the
 /// panels behind them.
 pub fn popup_frame<E: Styled>(element: E, theme: &Theme) -> E {
     element
         .bg(theme.colors.popup_bg)
         .border_1()
-        .border_color(theme.colors.popup_border)
+        .border_color(theme.colors.raised_border)
         .rounded(crate::zoom::rems_from_px(4.0))
         .shadow(theme.popup_shadow())
+}
+
+/// The frame of our own controls in dialogs (the dropdown, the find
+/// dialog's "Skip folders"), drawn like gpui-component's text fields: the
+/// `input` edge, and in dark mode its tint, in light mode `panel_bg`. This
+/// copies gpui-component's `Theme::input_background` rule; an upgrade that
+/// changes it shows only in the smoke screenshots.
+pub fn field_frame<E: Styled>(element: E, theme: &Theme) -> E {
+    let c = &theme.colors;
+    let fill = match theme.mode {
+        Mode::Dark => with_alpha(c.raised_border, 0.3),
+        Mode::Light => c.panel_bg,
+    };
+    element
+        .bg(fill)
+        .border_1()
+        .border_color(c.raised_border)
+        .rounded(crate::zoom::rems_from_px(6.0))
 }
 
 impl Theme {
@@ -445,10 +472,35 @@ mod tests {
         assert_eq!((theme.name.as_str(), unknown), ("Tokyo Night", true));
     }
 
+    /// Dark dialogs share the popups' color, so every floating surface
+    /// looks alike (owner, 2026-10-28); the light themes keep their own.
     #[test]
-    fn tokyo_night_dialogs_look_as_before() {
-        let c = Theme::default().colors;
-        assert_eq!(c.dialog_bg, c.panel_bg);
+    fn dark_dialogs_are_raised_like_popups() {
+        for (id, _) in BUILTIN {
+            let theme = Theme::builtin(id).unwrap();
+            let c = &theme.colors;
+            if theme.mode == Mode::Dark {
+                assert_eq!(c.dialog_bg, c.popup_bg, "{id}");
+            }
+            assert!(
+                contrast(c.dialog_bg, c.panel_bg) >= 1.05,
+                "{id}: lists and fields don't stand out on a dialog"
+            );
+        }
+    }
+
+    /// With `border` as their edge, fields and buttons vanished on Tokyo
+    /// Night's and Gruvbox's raised dialogs (`border` was `popup_bg`).
+    #[test]
+    fn dialog_controls_have_visible_edges() {
+        for (id, _) in BUILTIN {
+            let theme = Theme::builtin(id).unwrap();
+            let edge = color(&theme.component_config().colors.input.unwrap());
+            assert!(
+                contrast(edge, theme.colors.dialog_bg) >= 1.4,
+                "{id}: control edges too faint on dialogs"
+            );
+        }
     }
 
     #[test]
@@ -474,6 +526,7 @@ mod tests {
         assert_eq!(config.name, "Tokyo Night");
         assert_eq!(config.mode, ThemeMode::Dark);
         assert_eq!(config.colors.background, Some(to_hex(c.panel_bg)));
+        assert_eq!(config.colors.border, Some(to_hex(c.raised_border)));
         assert_eq!(config.colors.primary, Some(to_hex(c.accent)));
         assert_eq!(
             config.colors.primary_foreground,
@@ -495,8 +548,8 @@ mod tests {
                 "{id}: popup_bg too close to panel_bg"
             );
             assert!(
-                contrast(c.popup_border, c.popup_bg) >= 1.5,
-                "{id}: popup_border too faint"
+                contrast(c.raised_border, c.popup_bg) >= 1.5,
+                "{id}: raised_border too faint"
             );
         }
     }

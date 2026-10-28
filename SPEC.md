@@ -58,8 +58,9 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - Five built-in themes (decided 2026-10-04), in this order in the dropdown: **Tokyo Night** (the default), **Gruvbox Dark** (dark, warm: the original palette, two colors lifted for contrast), **Everforest Dark** (dark, muted green-gray; medium contrast, its grays lifted), **Catppuccin Latte** (light, soft; its pastel accents darkened to reach 4.5:1, same hues) and **Classic** (light: white lists, gray `#d4d0c8` window, headers and dialogs, a navy cursor bar, red marked files; the colors of old Total Commander, not its 3D look).
 - The config key `theme` holds a theme's id: `tokyo-night`, `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` or `classic`. Missing means Tokyo Night. The commented template lists the ids.
 - An unknown id: Tokyo Night is used and the status line says `Unknown theme "x", using Tokyo Night`; every other setting still applies and the file is not rewritten.
+- Dropdowns in dialogs (the Theme dropdown in Settings): Enter, Space or Alt-Down opens the list on the chosen item; Up/Down and Home/End move; Enter, Space or a click picks; Escape, Alt-Up, Tab or a click elsewhere closes without picking.
 - The Theme dropdown in Settings saves the key and switches at once: the main window, every viewer window, open dialogs and popups. The zoom level is kept. Ctrl-R applies a hand-edited `theme`.
-- Dialogs use their own role (`dialog_bg`); in Classic, text fields are white like the lists.
+- Dialogs use their own role (`dialog_bg`). In the dark themes it is the popups' and menus' color, so every floating surface looks alike; in Classic, text fields are white like the lists.
 
 ### Zoom
 

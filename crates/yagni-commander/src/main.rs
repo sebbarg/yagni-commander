@@ -4,6 +4,7 @@ mod button_row;
 mod columns;
 mod config_state;
 mod connect_dialog;
+mod dropdown;
 mod file_manager;
 mod find_dialog;
 mod fonts;

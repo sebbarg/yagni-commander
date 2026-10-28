@@ -1,7 +1,6 @@
 //! Actions and the default keymap. The keymap is data, so a user config file
 //! can later add or override bindings without touching the views.
 
-use gpui_kit::base::actions as base_actions;
 use gpui_kit::component::input;
 use gpui_kit::{App, KeyBinding, actions};
 
@@ -9,10 +8,10 @@ use gpui_kit::{App, KeyBinding, actions};
 pub const FILE_MANAGER_CONTEXT: &str = "FileManager";
 /// Key context of gpui-base's text fields.
 const INPUT_CONTEXT: &str = "Input";
-/// Key context of gpui-base's select (gpui-component's `Select`), and of
-/// its open list.
-const SELECT_CONTEXT: &str = "Select";
-const SELECT_LIST_CONTEXT: &str = "Select > List";
+/// Key context of a closed [`crate::dropdown::Dropdown`], and of its open
+/// list.
+pub const DROPDOWN_CONTEXT: &str = "Dropdown";
+pub const DROPDOWN_LIST_CONTEXT: &str = "DropdownList";
 /// Key context of a dialog's [`crate::button_row::ButtonRow`].
 pub const BUTTON_ROW_CONTEXT: &str = "ButtonRow";
 /// Key context of the Connect dialog's field: Tab goes to its buttons.
@@ -154,10 +153,9 @@ pub mod open_with {
 /// Key context of the directory hotlist popup (Ctrl-D).
 pub const HOTLIST_CONTEXT: &str = "Hotlist";
 
-/// The Settings Theme dropdown (gpui-component's `Select`): Enter or Space
-/// opens the closed list.
-pub mod select {
-    gpui_kit::actions!(select, [Open]);
+/// Our dropdown in dialogs ([`crate::dropdown::Dropdown`]).
+pub mod dropdown {
+    gpui_kit::actions!(dropdown, [Open, Up, Down, First, Last, Pick, Close]);
 }
 
 /// Hotlist popup actions; a module of their own because the names repeat.
@@ -413,23 +411,25 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("shift-delete", input::Cut, input),
         KeyBinding::new("shift-insert", input::Paste, input),
     ]);
-    // gpui-component's Select (the Settings Theme dropdown). On the closed
-    // dropdown gpui-base turns Enter into `Confirm`, opens the list and
-    // propagates, so the dialog's `Confirm` (OK) would close the dialog.
-    // Its other opening actions propagate too, and gpui then tries the
-    // key's next binding, the same `Confirm`. So Enter and Space are our
-    // `select::Open`, which the view handles without propagating
-    // (`settings_dialog`). In the open list (`List` inside the Select)
-    // Enter is the list's own pick, and Space picks too.
-    let select = Some(SELECT_CONTEXT);
+    // Our dropdown. Its own contexts sit inside the dialog's, so Enter and
+    // Escape reach it before the dialog's OK and Cancel.
+    let closed = Some(DROPDOWN_CONTEXT);
+    let list = Some(DROPDOWN_LIST_CONTEXT);
     cx.bind_keys([
-        KeyBinding::new("enter", select::Open, select),
-        KeyBinding::new("space", select::Open, select),
-        KeyBinding::new(
-            "space",
-            base_actions::Confirm { secondary: false },
-            Some(SELECT_LIST_CONTEXT),
-        ),
+        KeyBinding::new("enter", dropdown::Open, closed),
+        KeyBinding::new("space", dropdown::Open, closed),
+        KeyBinding::new("alt-down", dropdown::Open, closed),
+        KeyBinding::new("up", dropdown::Up, list),
+        KeyBinding::new("down", dropdown::Down, list),
+        KeyBinding::new("home", dropdown::First, list),
+        KeyBinding::new("end", dropdown::Last, list),
+        KeyBinding::new("pageup", dropdown::First, list),
+        KeyBinding::new("pagedown", dropdown::Last, list),
+        KeyBinding::new("enter", dropdown::Pick, list),
+        KeyBinding::new("space", dropdown::Pick, list),
+        KeyBinding::new("escape", dropdown::Close, list),
+        KeyBinding::new("alt-up", dropdown::Close, list),
+        KeyBinding::new("tab", dropdown::Close, list),
     ]);
     // More specific than Root's Tab: into the buttons at the first, or with
     // Shift at the last.

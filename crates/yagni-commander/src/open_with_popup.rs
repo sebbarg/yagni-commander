@@ -163,7 +163,7 @@ impl Render for OpenWithPopup {
                     .px(rems_from_px(10.0))
                     .mb(rems_from_px(4.0))
                     .border_b_1()
-                    .border_color(colors.border)
+                    .border_color(colors.raised_border)
                     .text_color(colors.text_secondary)
                     .child("Open with"),
             )

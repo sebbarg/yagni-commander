@@ -160,7 +160,12 @@ impl Render for HotlistPopup {
             .text_color(colors.text)
             .children(entries)
             .when(count > 0, |d| {
-                d.child(div().my(rems_from_px(4.0)).h(px(1.0)).bg(colors.border))
+                d.child(
+                    div()
+                        .my(rems_from_px(4.0))
+                        .h(px(1.0))
+                        .bg(colors.raised_border),
+                )
             })
             .child(row(count, self.highlight == count).child("Add current folder"))
             .child(row(count + 1, self.highlight == count + 1).child("Configure..."))

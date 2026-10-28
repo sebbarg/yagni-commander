@@ -701,9 +701,7 @@ impl FindDialog {
             .justify_between()
             .h(crate::zoom::rems_from_px(SKIP_CONTROL_HEIGHT))
             .px(crate::zoom::rems_from_px(8.0))
-            .rounded(crate::zoom::rems_from_px(6.0))
-            .border_1()
-            .border_color(colors.border)
+            .map(|d| crate::theme::field_frame(d, Theme::get(cx)))
             .cursor_pointer()
             .on_action(
                 cx.listener(|this, _: &act::SkipOpen, window, cx| this.open_skip(window, cx)),
@@ -938,7 +936,7 @@ impl Render for FindDialog {
                 div()
                     .h(px(1.0))
                     .my(crate::zoom::rems_from_px(4.0))
-                    .bg(colors.border),
+                    .bg(colors.raised_border),
             )
             .child(row("Containing text", div().child(text_field(&self.text))))
             .child(
