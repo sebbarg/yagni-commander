@@ -1099,4 +1099,4 @@ impl Render for FileManager {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

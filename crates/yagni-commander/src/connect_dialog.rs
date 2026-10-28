@@ -13,8 +13,6 @@ use gpui_kit::{
 };
 use yagni_commander_core::ssh_config::SshHost;
 
-use crate::actions::{CONNECT_FIELD_CONTEXT, connect};
-use crate::button_row::ButtonRow;
 use crate::file_manager::commands::dialog_field;
 use crate::theme::Theme;
 use crate::zoom::rems_from_px;
@@ -40,8 +38,6 @@ pub struct ConnectDialog {
     cursor: usize,
     pub(crate) field: Entity<InputState>,
     scroll: ScrollHandle,
-    /// The dialog's buttons, for Tab out of the field.
-    pub(crate) buttons: Option<Entity<ButtonRow>>,
     _subscription: Subscription,
 }
 
@@ -65,7 +61,6 @@ impl ConnectDialog {
             cursor: 0,
             field,
             scroll: ScrollHandle::new(),
-            buttons: None,
             _subscription: subscription,
         };
         this.refilter(cx);
@@ -90,14 +85,6 @@ impl ConnectDialog {
         self.cursor = (self.cursor as isize + by).clamp(0, last) as usize;
         self.scroll.scroll_to_item(self.cursor);
         cx.notify();
-    }
-
-    /// Tab (`first`) or Shift-Tab out of the field: into the buttons at
-    /// their first or last, so each is reached in turn.
-    fn tab_into_buttons(&mut self, first: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(buttons) = &self.buttons {
-            buttons.update(cx, |row, cx| row.enter(first, window, cx));
-        }
     }
 
     /// The host the highlighted row names.
@@ -197,16 +184,7 @@ impl Render for ConnectDialog {
                     cx.stop_propagation();
                 }),
             )
-            .child(
-                dialog_field(&self.field)
-                    .key_context(CONNECT_FIELD_CONTEXT)
-                    .on_action(cx.listener(|this, _: &connect::ToButtons, window, cx| {
-                        this.tab_into_buttons(true, window, cx)
-                    }))
-                    .on_action(cx.listener(|this, _: &connect::ToButtonsBack, window, cx| {
-                        this.tab_into_buttons(false, window, cx)
-                    })),
-            )
+            .child(dialog_field(&self.field))
             .child(
                 div()
                     .id("connect-list")

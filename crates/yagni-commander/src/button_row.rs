@@ -4,8 +4,11 @@
 //! dialog, even when another button has keyboard focus, and has no arrow-key
 //! navigation. This row owns the keyboard instead: it keeps its own selected
 //! button (drawn as the primary one), Left/Right and Tab/Shift-Tab move the
-//! selection, Enter and Space press it. Tab past either end leaves the row,
-//! e.g. back to a prompt's text field. Escape is left to the dialog (cancel).
+//! selection over the enabled buttons, Enter and Space press it. Tab past
+//! either end leaves the row for the dialog's next control (or wraps, when
+//! the row is the only one), never for anything outside the dialog; Tab
+//! into the row lands on its first button, Shift-Tab on its last. Escape is
+//! left to the dialog (cancel).
 //! In a message box, Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy its text.
 //! A label may mark one letter with `&` (`Feed to &listbox`), drawn
 //! underlined; the key that goes with it is bound by the dialog.
@@ -15,9 +18,9 @@ use std::rc::Rc;
 use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
-    App, ClipboardItem, Context, FocusHandle, Focusable, HighlightStyle, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, StyledText, UnderlineStyle, Window,
-    div, prelude::FluentBuilder, px,
+    App, ClipboardItem, Context, FocusHandle, Focusable, Global, HighlightStyle,
+    InteractiveElement, IntoElement, Keystroke, ParentElement, Render, SharedString, Styled,
+    StyledText, UnderlineStyle, Window, div, prelude::FluentBuilder, px,
 };
 use yagni_commander_core::hotlist;
 
@@ -28,6 +31,48 @@ use crate::zoom::rems_from_px;
 
 /// What a button does when pressed. It closes the dialog itself if it should.
 pub type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// Whether the last key was Tab (`Some(true)`) or Shift-Tab (`Some(false)`).
+/// gpui says only that focus moved, not why, so a row that gains focus reads
+/// this to start on its first or its last button.
+#[derive(Default)]
+struct TabDirection(Option<bool>);
+
+impl Global for TabDirection {}
+
+/// Called for every keystroke, before the bindings (an interceptor set up
+/// with the keymap, `actions::bind_default_keys`).
+pub fn record_key(keystroke: &Keystroke, cx: &mut App) {
+    let m = &keystroke.modifiers;
+    let tab = keystroke.key == "tab" && !(m.control || m.alt || m.platform || m.function);
+    cx.set_global(TabDirection(tab.then_some(!m.shift)));
+}
+
+/// Moves focus to the next (or previous) tab stop, staying inside the
+/// dialog: gpui-base's Root does this for Tab, but the row handles Tab
+/// itself, and `Window::focus_next` alone would reach a dialog underneath
+/// (a conflict over the progress dialog). Returns whether focus moved.
+fn step_focus(forward: bool, window: &mut Window, cx: &mut App) -> bool {
+    let before = window.focused(cx);
+    let step = |window: &mut Window, cx: &mut App| {
+        if forward {
+            window.focus_next(cx)
+        } else {
+            window.focus_prev(cx)
+        }
+    };
+    let trap = gpui_kit::base::active_focus_trap(window, cx);
+    step(window, cx);
+    if let Some(trap) = trap {
+        for _ in 0..100 {
+            if trap.contains_focused(window, cx) || window.focused(cx) == before {
+                break;
+            }
+            step(window, cx);
+        }
+    }
+    window.focused(cx) != before
+}
 
 pub struct ButtonRow {
     focus: FocusHandle,
@@ -43,6 +88,8 @@ pub struct ButtonRow {
     /// The button the row starts on, the default for Enter in a text
     /// field; the selection goes back to it when the row loses focus.
     default: usize,
+    /// Focused at the last render, to see focus arrive.
+    was_focused: bool,
 }
 
 impl ButtonRow {
@@ -61,6 +108,7 @@ impl ButtonRow {
             disabled: Vec::new(),
             copy_text: None,
             apart: 0,
+            was_focused: false,
         }
     }
 
@@ -76,14 +124,6 @@ impl ButtonRow {
             .map(|(label, on_press)| (SharedString::from(label), on_press))
             .collect();
         cx.new(|cx| Self::new(buttons, selected, cx))
-    }
-
-    /// Focuses the row on its first button, or its last (Tab or Shift-Tab
-    /// from a field before it).
-    pub fn enter(&mut self, first: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let last = self.buttons.len().saturating_sub(1);
-        self.select(if first { 0 } else { last }, cx);
-        self.focus.focus(window, cx);
     }
 
     /// Draws the first `count` buttons apart, at the left.
@@ -109,6 +149,37 @@ impl ButtonRow {
         self.disabled.retain(|&ix| ix != index);
         if !enabled {
             self.disabled.push(index);
+        }
+    }
+
+    /// The next enabled button after `from` (before it, backward).
+    fn enabled_from(&self, from: usize, forward: bool) -> Option<usize> {
+        let enabled = |ix: &usize| !self.disabled.contains(ix);
+        if forward {
+            (from + 1..self.buttons.len()).find(enabled)
+        } else {
+            (0..from).rev().find(enabled)
+        }
+    }
+
+    /// The first enabled button (the last, backward).
+    fn enabled_end(&self, first: bool) -> usize {
+        let enabled = |ix: &usize| !self.disabled.contains(ix);
+        let found = if first {
+            (0..self.buttons.len()).find(enabled)
+        } else {
+            (0..self.buttons.len()).rev().find(enabled)
+        };
+        found.unwrap_or(self.selected)
+    }
+
+    /// Tab (or Shift-Tab): the next enabled button, else out of the row,
+    /// else (the row is the dialog's only control) round to the other end.
+    fn tab(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ix) = self.enabled_from(self.selected, forward) {
+            self.select(ix, cx);
+        } else if !step_focus(forward, window, cx) {
+            self.select(self.enabled_end(forward), cx);
         }
     }
 
@@ -165,7 +236,6 @@ fn underlined(text: SharedString, range: std::ops::Range<usize>) -> StyledText {
 
 impl Render for ButtonRow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let last = self.buttons.len().saturating_sub(1);
         // The selected button is the default (Enter in a text field); the
         // ring says the row itself has the keys.
         let focused = self.focus.is_focused(window);
@@ -173,7 +243,13 @@ impl Render for ButtonRow {
         // text field presses that one, whatever was selected in the row.
         if !focused {
             self.selected = self.default;
+        } else if !self.was_focused
+            && let Some(forward) = cx.try_global::<TabDirection>().and_then(|t| t.0)
+        {
+            // Tab in: the first button; Shift-Tab in: the last.
+            self.selected = self.enabled_end(forward);
         }
+        self.was_focused = focused;
         let accent = crate::theme::Theme::get(cx).colors.accent;
         div()
             .key_context(BUTTON_ROW_CONTEXT)
@@ -182,25 +258,17 @@ impl Render for ButtonRow {
             .justify_end()
             .gap(rems_from_px(8.0))
             .on_action(cx.listener(move |this, _: &PrevButton, _, cx| {
-                this.select(this.selected.saturating_sub(1), cx)
+                if let Some(ix) = this.enabled_from(this.selected, false) {
+                    this.select(ix, cx)
+                }
             }))
             .on_action(cx.listener(move |this, _: &NextButton, _, cx| {
-                this.select((this.selected + 1).min(last), cx)
-            }))
-            .on_action(cx.listener(move |this, _: &TabNext, window, cx| {
-                if this.selected < last {
-                    this.select(this.selected + 1, cx);
-                } else {
-                    window.focus_next(cx);
+                if let Some(ix) = this.enabled_from(this.selected, true) {
+                    this.select(ix, cx)
                 }
             }))
-            .on_action(cx.listener(|this, _: &TabPrev, window, cx| {
-                if this.selected > 0 {
-                    this.select(this.selected - 1, cx);
-                } else {
-                    window.focus_prev(cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &TabNext, window, cx| this.tab(true, window, cx)))
+            .on_action(cx.listener(|this, _: &TabPrev, window, cx| this.tab(false, window, cx)))
             .on_action(cx.listener(|this, _: &PressButton, window, cx| {
                 this.press(this.selected, window, cx)
             }))

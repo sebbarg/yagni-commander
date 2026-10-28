@@ -243,6 +243,25 @@ impl FindDialog {
         self.input(field).read(cx).value().to_string()
     }
 
+    /// The focusable controls by name, for tab-order tests.
+    #[cfg(test)]
+    pub fn tab_stops(&self, cx: &App) -> Vec<(&'static str, FocusHandle)> {
+        let mut stops = vec![
+            ("masks", self.masks.focus_handle(cx)),
+            ("search-in", self.search_in.focus_handle(cx)),
+            ("text", self.text.focus_handle(cx)),
+            ("skip", self.skip_focus.clone()),
+            ("results", self.list_focus.clone()),
+        ];
+        stops.extend(
+            OPTIONS
+                .iter()
+                .zip(&self.option_focus)
+                .map(|((id, _), f)| (*id, f.clone())),
+        );
+        stops
+    }
+
     #[cfg(test)]
     pub fn set_field(
         &mut self,

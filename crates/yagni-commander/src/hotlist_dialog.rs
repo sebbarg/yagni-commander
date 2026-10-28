@@ -175,8 +175,11 @@ impl HotlistDialog {
 }
 
 impl Render for HotlistDialog {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Theme::get(cx).colors.clone();
+        // Like the find dialog's results: the border says the list has the
+        // keys, also while it is empty.
+        let list_focused = self.list_focus.is_focused(window);
         let underline = HighlightStyle {
             underline: Some(UnderlineStyle {
                 thickness: px(1.0),
@@ -240,7 +243,11 @@ impl Render for HotlistDialog {
                     .mt(crate::zoom::rems_from_px(4.0))
                     .min_h(crate::zoom::rems_from_px(120.0))
                     .border_1()
-                    .border_color(colors.border)
+                    .border_color(if list_focused {
+                        colors.accent
+                    } else {
+                        colors.border
+                    })
                     .bg(colors.panel_bg)
                     .when(self.entries.is_empty(), |d| {
                         d.child(
@@ -394,6 +401,18 @@ fn entry_name(entry: &HotlistEntry, ix: usize) -> String {
         format!("Entry {}", ix + 1)
     } else {
         text
+    }
+}
+
+#[cfg(test)]
+impl HotlistDialog {
+    /// The focusable controls by name, for tab-order tests.
+    pub fn tab_stops(&self, cx: &App) -> Vec<(&'static str, FocusHandle)> {
+        vec![
+            ("list", self.list_focus.clone()),
+            ("name", self.name.focus_handle(cx)),
+            ("path", self.path.focus_handle(cx)),
+        ]
     }
 }
 

@@ -14,13 +14,6 @@ pub const DROPDOWN_CONTEXT: &str = "Dropdown";
 pub const DROPDOWN_LIST_CONTEXT: &str = "DropdownList";
 /// Key context of a dialog's [`crate::button_row::ButtonRow`].
 pub const BUTTON_ROW_CONTEXT: &str = "ButtonRow";
-/// Key context of the Connect dialog's field: Tab goes to its buttons.
-pub const CONNECT_FIELD_CONTEXT: &str = "ConnectField";
-
-/// The Connect dialog's Tab and Shift-Tab out of its field.
-pub mod connect {
-    gpui_kit::actions!(connect, [ToButtons, ToButtonsBack]);
-}
 
 actions!(
     yagni_commander,
@@ -275,6 +268,10 @@ pub fn hide_native_menu_keys(cx: &mut App) {
 }
 
 pub fn bind_default_keys(cx: &mut App) {
+    // Every keystroke, before the bindings: a button row gaining focus
+    // starts on its first or last button after Tab or Shift-Tab.
+    cx.intercept_keystrokes(|event, _, cx| crate::button_row::record_key(&event.keystroke, cx))
+        .detach();
     if cfg!(target_os = "macos") {
         hide_native_menu_keys(cx);
     }
@@ -430,13 +427,6 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("escape", dropdown::Close, list),
         KeyBinding::new("alt-up", dropdown::Close, list),
         KeyBinding::new("tab", dropdown::Close, list),
-    ]);
-    // More specific than Root's Tab: into the buttons at the first, or with
-    // Shift at the last.
-    let field = Some(CONNECT_FIELD_CONTEXT);
-    cx.bind_keys([
-        KeyBinding::new("tab", connect::ToButtons, field),
-        KeyBinding::new("shift-tab", connect::ToButtonsBack, field),
     ]);
     // More specific than the dialog's own Enter (always OK) and Root's Tab.
     let row = Some(BUTTON_ROW_CONTEXT);

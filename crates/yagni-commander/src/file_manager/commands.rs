@@ -601,6 +601,9 @@ impl FileManager {
             themed_dialog(dialog, cx)
                 .title(title.clone())
                 .w(crate::zoom::dialog_width(width, cx))
+                // Like every other dialog: Escape and Cancel close it, and
+                // the button would be a tab stop.
+                .close_button(false)
                 .child(dialog_field(&input))
                 .footer(buttons.clone())
                 // Enter in the text field.

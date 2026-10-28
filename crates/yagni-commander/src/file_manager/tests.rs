@@ -875,10 +875,13 @@ fn prompt_arrows_edit_text_and_tab_reaches_the_buttons(cx: &mut TestAppContext) 
     cx.simulate_input("ab");
     cx.simulate_keystrokes("left");
     cx.simulate_input("X");
-    cx.simulate_keystrokes("tab enter");
+    cx.simulate_keystrokes("tab tab enter");
     cx.run_until_parked();
     assert!(!dialog_open(cx));
-    assert!(tmp.path().join("aXb").is_dir(), "OK is preselected");
+    assert!(
+        tmp.path().join("aXb").is_dir(),
+        "Tab lands on Cancel, then OK"
+    );
     // Focus is back on the panels.
     cx.simulate_keystrokes("home");
     assert_eq!(cursor(&commander_of(cx), Side::Left, cx), 0);
@@ -8351,5 +8354,310 @@ mod ssh_questions {
         let focused =
             file_manager(cx).update_in(cx, |this, window, _| this.focus.is_focused(window));
         assert!(focused);
+    }
+}
+
+/// Tab and Shift-Tab in every dialog: in reading order (top to bottom, left
+/// to right), the buttons last, Tab into the buttons on the first and
+/// Shift-Tab on the last, disabled buttons skipped, round at the ends, and
+/// never out of the dialog on top.
+pub(crate) mod tab_order {
+    use super::*;
+    use gpui_kit::FocusHandle;
+
+    /// What has keyboard focus: `button:<label>` for a button row (its
+    /// focus ring inside that button; `labels` are the candidates), a name
+    /// from `named`, else the innermost key context of the focused element.
+    fn focus_name(
+        cx: &mut VisualTestContext,
+        labels: &[&str],
+        named: &[(&'static str, FocusHandle)],
+    ) -> String {
+        cx.run_until_parked();
+        let (focused, context) = cx.update(|window, cx| {
+            let context = window.context_stack().last().map(|c| format!("{c:?}"));
+            (window.focused(cx), context.unwrap_or_default())
+        });
+        if let Some(focused) = &focused
+            && let Some((name, _)) = named.iter().find(|(_, handle)| handle == focused)
+        {
+            return (*name).to_owned();
+        }
+        if context == "ButtonRow" {
+            let Some(ring) = cx.debug_bounds("focus-ring-button") else {
+                return "button:none".into();
+            };
+            for label in labels {
+                let selector = format!("button-{label}").leak();
+                if cx
+                    .debug_bounds(selector)
+                    .is_some_and(|button| button.contains(&ring.center()))
+                {
+                    return format!("button:{label}");
+                }
+            }
+            return "button:?".into();
+        }
+        context
+    }
+
+    /// Presses `key` once per entry of `expected`; what has focus after
+    /// each press must be that entry.
+    pub(crate) fn assert_order(
+        cx: &mut VisualTestContext,
+        key: &str,
+        expected: &[&str],
+        named: &[(&'static str, FocusHandle)],
+    ) {
+        let labels: Vec<&str> = expected
+            .iter()
+            .filter_map(|e| e.strip_prefix("button:"))
+            .collect();
+        let mut seen = Vec::new();
+        for _ in expected {
+            cx.simulate_keystrokes(key);
+            seen.push(focus_name(cx, &labels, named));
+        }
+        assert_eq!(seen, expected, "{key}");
+    }
+
+    pub(crate) fn assert_focus(
+        cx: &mut VisualTestContext,
+        expected: &str,
+        named: &[(&'static str, FocusHandle)],
+    ) {
+        let labels: Vec<&str> = expected.strip_prefix("button:").into_iter().collect();
+        assert_eq!(focus_name(cx, &labels, named), expected);
+    }
+
+    #[gpui_kit::test]
+    fn a_prompt_goes_field_cancel_ok(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("f7");
+        assert_focus(cx, "Input", &[]);
+        assert_order(
+            cx,
+            "tab",
+            &["button:Cancel", "button:OK", "Input", "button:Cancel"],
+            &[],
+        );
+        // No close button (x) in between: it was a tab stop after the buttons.
+        assert_order(
+            cx,
+            "shift-tab",
+            &["Input", "button:OK", "button:Cancel", "Input"],
+            &[],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_confirmation_goes_round_its_buttons(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("end f8");
+        assert_focus(cx, "button:Move to trash", &[]);
+        let order = ["button:Cancel", "button:Move to trash", "button:Cancel"];
+        assert_order(cx, "tab", &order, &[]);
+        assert_order(
+            cx,
+            "shift-tab",
+            &["button:Move to trash", "button:Cancel"],
+            &[],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_hotlist_dialog_reaches_every_button(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-d up enter");
+        cx.run_until_parked();
+        let named = file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist_dialog.as_ref().unwrap().read(cx).tab_stops(cx)
+        });
+        assert_focus(cx, "list", &named);
+        let order = [
+            "name",
+            "path",
+            "button:Add current folder",
+            "button:Remove",
+            "button:Move up",
+            "button:Move down",
+            "button:Cancel",
+            "button:OK",
+            "list",
+        ];
+        assert_order(cx, "tab", &order, &named);
+        let mut back: Vec<&str> = order.into_iter().rev().skip(1).collect();
+        back.push("list");
+        assert_order(cx, "shift-tab", &back, &named);
+    }
+
+    #[gpui_kit::test]
+    fn an_error_over_a_dialog_keeps_the_keys(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(
+            cfg.path(),
+            "[[hotlist]]\nname = \"Rel\"\npath = \"relative\"\n",
+            cx,
+        );
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-d up enter");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(
+            box_text(cx).starts_with("Hotlist not saved\n"),
+            "{}",
+            box_text(cx)
+        );
+        let named = file_manager(cx).read_with(cx, |this, cx| {
+            this.hotlist_dialog.as_ref().unwrap().read(cx).tab_stops(cx)
+        });
+        assert_focus(cx, "button:Dismiss", &named);
+        assert_order(cx, "tab", &["button:Dismiss"; 2], &named);
+        assert_order(cx, "shift-tab", &["button:Dismiss"; 2], &named);
+    }
+
+    #[gpui_kit::test]
+    fn a_conflict_never_tabs_into_the_progress_dialog(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        activate(cx);
+        conflict(&tmp, cx);
+        assert_focus(cx, "button:Overwrite", &[]);
+        let order = [
+            "button:Overwrite all",
+            "button:Skip",
+            "button:Skip all",
+            "button:Cancel",
+            "button:Overwrite",
+        ];
+        assert_order(cx, "tab", &order, &[]);
+        let back = [
+            "button:Cancel",
+            "button:Skip all",
+            "button:Skip",
+            "button:Overwrite all",
+            "button:Overwrite",
+        ];
+        assert_order(cx, "shift-tab", &back, &[]);
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, |cx| !job_running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_find_dialog_reads_left_to_right_and_skips_feed(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let named = file_manager(cx).read_with(cx, |this, cx| {
+            this.find.as_ref().unwrap().read(cx).tab_stops(cx)
+        });
+        assert_focus(cx, "masks", &named);
+        let order = [
+            "find-case-names",
+            "search-in",
+            "skip",
+            "text",
+            "find-case",
+            "find-words",
+            "find-regex",
+            "find-not",
+            "results",
+            // Feed to listbox is disabled until there are results.
+            "button:Search",
+            "button:Close",
+            "masks",
+        ];
+        assert_order(cx, "tab", &order, &named);
+        let mut back: Vec<&str> = order.into_iter().rev().skip(1).collect();
+        back.push("masks");
+        assert_order(cx, "shift-tab", &back, &named);
+    }
+
+    #[gpui_kit::test]
+    fn the_settings_go_top_to_bottom(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        let named = file_manager(cx).read_with(cx, |this, cx| {
+            this.settings.as_ref().unwrap().read(cx).tab_stops(cx)
+        });
+        assert_focus(cx, "button:Close", &named);
+        // The switches have no handle of ours: they show as the dialog.
+        let order = [
+            "theme",
+            "editor",
+            "Dialog",
+            "Dialog",
+            "days",
+            "Dialog",
+            "Dialog",
+            "Dialog",
+            "Dialog",
+            "button:Close",
+        ];
+        assert_order(cx, "tab", &order, &named);
+        let mut back: Vec<&str> = order.into_iter().rev().skip(1).collect();
+        back.push("button:Close");
+        assert_order(cx, "shift-tab", &back, &named);
+    }
+
+    #[gpui_kit::test]
+    fn the_link_prompt_goes_checkbox_then_buttons(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        activate(cx);
+        std::os::unix::fs::symlink("../f", tmp.path().join("b/link")).unwrap();
+        cx.simulate_keystrokes("home down down alt-f5"); // on "b"
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| cx.debug_bounds("link-prompt").is_some());
+        assert_focus(cx, "button:Follow", &[]);
+        let order = [
+            "button:Store as link",
+            "button:Leave out",
+            "button:Cancel",
+            "Dialog", // the checkbox, which has no handle of ours
+            "button:Follow",
+        ];
+        assert_order(cx, "tab", &order, &[]);
+        let back = [
+            "Dialog",
+            "button:Cancel",
+            "button:Leave out",
+            "button:Store as link",
+            "button:Follow",
+        ];
+        assert_order(cx, "shift-tab", &back, &[]);
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, |cx| !job_running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_connect_dialog_goes_field_then_buttons(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-f");
+        assert_focus(cx, "Input", &[]);
+        let order = [
+            "button:Edit ~/.ssh/config",
+            "button:Cancel",
+            "button:Connect",
+            "Input",
+        ];
+        assert_order(cx, "tab", &order, &[]);
+        let back = [
+            "button:Connect",
+            "button:Cancel",
+            "button:Edit ~/.ssh/config",
+            "Input",
+        ];
+        assert_order(cx, "shift-tab", &back, &[]);
     }
 }

@@ -153,6 +153,17 @@ impl SettingsView {
         theme::ids_and_names().get(ix).map(|(_, name)| name.clone())
     }
 
+    /// The text fields by name, for tab-order tests (the switches have no
+    /// handle of ours).
+    #[cfg(test)]
+    pub fn tab_stops(&self, cx: &App) -> Vec<(&'static str, gpui_kit::FocusHandle)> {
+        vec![
+            ("editor", self.editor.focus_handle(cx)),
+            ("days", self.days.focus_handle(cx)),
+            ("theme", self.theme.focus_handle(cx)),
+        ]
+    }
+
     #[cfg(test)]
     pub fn editor_text(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()

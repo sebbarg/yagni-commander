@@ -159,7 +159,8 @@ Folders on other machines over SFTP, worked on like local ones (owner, 2026-10-2
 ### Error messages
 
 - Errors are shown in a centered, modal message box with a Dismiss button. It stays until dismissed (button, Enter or Escape). No fading toasts for errors. Ctrl-C or Ctrl-Ins (also Cmd-C on macOS) copy the box's title and text to the clipboard (title, newline, text); the box stays open. Same for every message box (About). Decided with the owner 2026-10-03.
-- Dialog buttons: Left/Right or Tab/Shift-Tab move between buttons, Enter or Space presses the highlighted one, Escape cancels. The default button is highlighted when the dialog opens. In a prompt, the arrow keys edit the text and Tab moves to the buttons.
+- Dialog buttons: Left/Right or Tab/Shift-Tab move between buttons (disabled ones are skipped), Enter or Space presses the highlighted one, Escape cancels. The default button is highlighted when the dialog opens. In a prompt, the arrow keys edit the text and Tab moves to the buttons.
+- Tab order in every dialog (owner, 2026-10-28): reading order, top to bottom and left to right, the buttons last; Tab into the buttons lands on the first, Shift-Tab on the last; past either end it goes round to the other end; never out of the dialog on top (to a dialog under it or the panels). Dialogs have no close button (x): Escape and Cancel close them.
 - After dismissing an error from a prompt (e.g. rename), focus returns to the prompt's text field so the input can be corrected.
 
 ## Keyboard

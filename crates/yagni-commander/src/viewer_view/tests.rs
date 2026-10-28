@@ -1284,3 +1284,30 @@ fn viewer_windows_follow_a_theme_switch(cx: &mut TestAppContext) {
     assert!(cx.debug_bounds("viewer-status").is_some(), "redrawn");
     assert_eq!(cx.update(|_, cx| Theme::get(cx).name.clone()), "Classic");
 }
+
+#[gpui_kit::test]
+fn the_find_dialog_goes_field_options_buttons(cx: &mut TestAppContext) {
+    use crate::file_manager::tests::tab_order::{assert_focus, assert_order};
+    let (_tmp, _viewer, mut cx) = view(&numbered(10), cx);
+    cx.update(|window, _| window.activate_window());
+    cx.simulate_keystrokes("ctrl-f");
+    assert_focus(&mut cx, "Input", &[]);
+    let order = [
+        "FindOption",
+        "FindOption",
+        "FindOption",
+        "button:Find",
+        "button:Cancel",
+        "Input",
+    ];
+    assert_order(&mut cx, "tab", &order, &[]);
+    let back = [
+        "button:Cancel",
+        "button:Find",
+        "FindOption",
+        "FindOption",
+        "FindOption",
+        "Input",
+    ];
+    assert_order(&mut cx, "shift-tab", &back, &[]);
+}
