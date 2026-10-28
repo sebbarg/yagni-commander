@@ -245,7 +245,7 @@ impl Engine<'_> {
         let parent = vfs::parent(source).unwrap_or_default();
         let mut aside = None;
         for n in 0..100 {
-            let candidate = parent.join(format!(".yagni-moving-{n}"));
+            let candidate = parent.join(format!(".yc-moving-{n}"));
             match src.rename(source, &candidate) {
                 Ok(()) => {
                     aside = Some(candidate);
@@ -441,7 +441,7 @@ impl Engine<'_> {
         let name = vfs::file_name(target).unwrap_or_default();
         let folder = vfs::parent(target).unwrap_or_default();
         for n in 0..100 {
-            let temp = folder.join(format!(".{}.yagni-{n}.tmp", name.to_string_lossy()));
+            let temp = folder.join(format!(".{}.yc-{n}.tmp", name.to_string_lossy()));
             match create(dst, &temp) {
                 Ok(made) => return Ok((temp, made)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,

@@ -134,7 +134,9 @@ pub struct FileManager {
     /// The state file, for Help > Go to operation log without a log file.
     /// Tests replace it.
     pub(crate) state_file: Option<PathBuf>,
-    /// Where F3 inside an archive puts its private copies. Tests replace it.
+    /// Where F3 and F4 put their private copies (archive entries, remote
+    /// files): this run's folder in the system's temp folder, set by `main`.
+    /// Tests replace it.
     pub(crate) temp_dir: Option<PathBuf>,
     /// The open Properties box.
     pub(crate) info: Option<properties::RunningInfo>,
@@ -291,9 +293,7 @@ impl FileManager {
             settings: None,
             log_dir: yagni_commander_core::storage::log_dir(),
             state_file: yagni_commander_core::storage::state_file(),
-            // This instance's own folder, so others' cleanup leaves it alone.
-            temp_dir: yagni_commander_core::storage::viewer_temp_dir()
-                .map(|dir| dir.join(std::process::id().to_string())),
+            temp_dir: None,
             info: None,
             next_info: 0,
             menu_bar,

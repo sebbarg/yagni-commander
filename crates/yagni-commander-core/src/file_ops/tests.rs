@@ -640,9 +640,9 @@ fn trash_reports_failures_and_continues() {
 fn temp_names_avoid_existing_files() {
     let tmp = tempfile::tempdir().unwrap();
     let target = tmp.path().join("t");
-    fs::write(tmp.path().join(".t.yagni-0.tmp"), b"").unwrap();
+    fs::write(tmp.path().join(".t.yc-0.tmp"), b"").unwrap();
     let (temp, _) = create_temp(&target, create_new).unwrap();
-    assert_eq!(temp, tmp.path().join(".t.yagni-1.tmp"));
+    assert_eq!(temp, tmp.path().join(".t.yc-1.tmp"));
     let err = create_temp(&target, |_| -> io::Result<()> {
         Err(io::ErrorKind::AlreadyExists.into())
     });
@@ -1398,7 +1398,7 @@ fn set_mode(path: &Path, mode: u32) {
 fn temps_left(dir: &Path) -> Vec<String> {
     names(dir)
         .into_iter()
-        .filter(|n| n.contains(".yagni-"))
+        .filter(|n| n.contains(".yc-"))
         .collect()
 }
 

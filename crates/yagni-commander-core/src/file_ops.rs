@@ -1296,7 +1296,7 @@ fn create_temp<T>(
 ) -> io::Result<(PathBuf, T)> {
     let name = target.file_name().unwrap_or_default().to_string_lossy();
     for n in 0..100 {
-        let temp = target.with_file_name(format!(".{name}.yagni-{n}.tmp"));
+        let temp = target.with_file_name(format!(".{name}.yc-{n}.tmp"));
         match create(&temp) {
             Ok(created) => return Ok((temp, created)),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,

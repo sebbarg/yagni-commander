@@ -70,11 +70,15 @@ fn main() {
             std::process::exit(1);
         }
     }
-    // Private copies of archive entries a crashed run left behind (other
-    // running instances keep theirs).
-    if let Some(dir) = storage::viewer_temp_dir() {
-        storage::clear_stale_temp(&dir);
-    }
+    // This run's private copies (F3 inside an archive or on a host, F4 on a
+    // host): a random 0700 folder in the system's temp folder, removed on
+    // quit. After a crash the system clears it (reboot, tmpfiles, macOS).
+    let temp_dir = tempfile::Builder::new()
+        .prefix("yagni-commander-")
+        .tempdir()
+        .inspect_err(|e| eprintln!("yagni-commander: no temp folder: {e}"))
+        .ok();
+    let temp_path = temp_dir.as_ref().map(|dir| dir.path().to_path_buf());
     let home = storage::home_dir();
     let (left, right) = app_state.state.startup_tabs(&args, &home);
     let mut commander = Commander::start_tabs(left, right, app_state.state.show_hidden, home);
@@ -135,11 +139,13 @@ fn main() {
             cx.on_action(|_: &Quit, cx| cx.quit());
 
             cx.set_global(app_state);
+            let mut temp_dir = temp_dir;
             cx.on_app_quit(move |cx| {
                 cx.global::<AppState>().save();
                 // ssh would keep them for ControlPersist after we're gone.
                 yagni_commander_core::remote::close_shared(&control_dir);
                 askpass::remove_socket(&control_dir);
+                drop(temp_dir.take());
                 async {}
             })
             .detach();
@@ -156,6 +162,7 @@ fn main() {
                 let (main_window, _) = gpui_kit::open_window(options, cx, |window, cx| {
                     cx.new(|cx| {
                         let mut view = FileManager::new(commander, notice, window, cx);
+                        view.temp_dir = temp_path;
                         if let Some((server, questions)) = questions {
                             view.ask_from(questions, window, cx);
                             // Kept for the app's life: it owns the socket.

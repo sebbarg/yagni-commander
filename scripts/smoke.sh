@@ -27,10 +27,11 @@ done
 "$cargo" build --manifest-path "$root/Cargo.toml" -q
 app=$root/target/debug/yagni-commander
 
-mkdir -p "$shots" "$work/xdg" "$work/config/yagni-commander" "$work/state" "$work/data"
+mkdir -p "$shots" "$work/xdg" "$work/config/yagni-commander" "$work/state" "$work/data" "$work/tmp"
 chmod 700 "$work/xdg"
+# TMPDIR: the app's private copies (F3 in an archive, F4 on a host) go there.
 export DISPLAY=$display XDG_RUNTIME_DIR=$work/xdg XDG_CONFIG_HOME=$work/config \
-    XDG_STATE_HOME=$work/state XDG_DATA_HOME=$work/data
+    XDG_STATE_HOME=$work/state XDG_DATA_HOME=$work/data TMPDIR=$work/tmp
 # A stand-in for xdg-open (Enter on a file): records its argument, opens
 # nothing.
 mkdir -p "$work/bin"
@@ -646,7 +647,8 @@ sleep 0.5
 shot 08g-archive-viewer
 keys Escape
 check "entry viewer closed" bash -c '! xdotool search --name "^readme.txt - yagni-commander\$"'
-check "its private copy deleted" bash -c '[[ -z $(find "$1" -mindepth 2) ]]' _ "$work/state/yagni-commander/viewer-tmp"
+check "one temp folder for the run" bash -c '[[ $(compgen -G "$1/yagni-commander-*" | wc -l) == 1 ]]' _ "$work/tmp"
+check "its private copy deleted" bash -c '[[ -z $(find "$1"/yagni-commander-* -mindepth 1) ]]' _ "$work/tmp"
 xdotool windowfocus "$window"
 sleep 0.5
 keys ctrl+a F5
@@ -770,6 +772,8 @@ check "hidden files hidden again in the state" grep -q "show_hidden = false" \
 check "viewer geometry in the state" grep -q "^\[viewer\]" "$work/state/yagni-commander/state.toml"
 check "tabs in the state" grep -qF "left_tabs = [\"$left\", \"$left/docs\"]" "$work/state/yagni-commander/state.toml"
 check "right tab in the state" grep -qF "right_tabs = [\"$right\"]" "$work/state/yagni-commander/state.toml"
+check "temp folder removed on quit" bash -c '! compgen -G "$1/yagni-commander-*"' _ "$work/tmp"
+check "nothing temporary next to the state" test ! -e "$work/state/yagni-commander/viewer-tmp"
 check "zoom saved" grep -q '^ui_zoom = 24' "$work/state/yagni-commander/state.toml"
 check "viewer zoom saved" grep -q '^viewer_zoom = 24' "$work/state/yagni-commander/state.toml"
 

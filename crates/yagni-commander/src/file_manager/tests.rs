@@ -32,7 +32,6 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
         this.terminal = Some("true".into());
         // Never GitHub: nothing listens on port 1.
         this.update_url = "http://127.0.0.1:1/".into();
-        this.temp_dir = None;
         this.state_file = None;
     });
     cx

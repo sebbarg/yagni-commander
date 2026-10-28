@@ -455,7 +455,7 @@ impl Client {
                 })?
                 .expect_ok();
         }
-        let aside = [to, b".yagni-old"].concat();
+        let aside = [to, b".yc-old"].concat();
         let moved = match self.rename(to, &aside) {
             Ok(()) => true,
             Err(e) if e.kind() == io::ErrorKind::NotFound => false,
@@ -1169,7 +1169,7 @@ pub(crate) mod tests {
         std::fs::write(p("b"), "b").unwrap();
         client.rename_over(bytes(&p("a")), bytes(&p("b"))).unwrap();
         assert_eq!(std::fs::read_to_string(p("b")).unwrap(), "a");
-        assert!(!p("b.yagni-old").exists());
+        assert!(!p("b.yc-old").exists());
         assert!(
             client
                 .rename_over(bytes(&p("gone")), bytes(&p("b")))

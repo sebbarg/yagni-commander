@@ -33,12 +33,6 @@ pub fn log_dir() -> Option<PathBuf> {
     Some(state_dir()?.join("logs"))
 }
 
-/// Where F3 inside an archive puts its private copies: `viewer-tmp` next
-/// to the state file. Emptied at startup.
-pub fn viewer_temp_dir() -> Option<PathBuf> {
-    Some(state_dir()?.join("viewer-tmp"))
-}
-
 /// Creates `dir` (and its parents) readable by the owner only, or makes an
 /// existing one so.
 pub fn private_dir(dir: &Path) -> io::Result<()> {
@@ -48,47 +42,6 @@ pub fn private_dir(dir: &Path) -> io::Result<()> {
         .mode(0o700)
         .create(dir)?;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-}
-
-/// Startup: removes what earlier runs left in `base` (viewer copies after
-/// a crash). Each running instance has its own folder named after its
-/// process id (`base/<pid>`); those of instances still running stay.
-pub fn clear_stale_temp(base: &Path) {
-    let Ok(entries) = fs::read_dir(base) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let running = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<i32>().ok())
-            .is_some_and(is_running);
-        if running {
-            continue;
-        }
-        let path = entry.path();
-        let _ = if path.is_dir() {
-            clear_dir(&path)
-        } else {
-            fs::remove_file(&path)
-        };
-    }
-}
-
-/// Whether a process with this id exists (signal 0 checks without sending).
-fn is_running(pid: i32) -> bool {
-    use nix::errno::Errno;
-    use nix::sys::signal::kill;
-    use nix::unistd::Pid;
-    pid > 0 && matches!(kill(Pid::from_raw(pid), None), Ok(()) | Err(Errno::EPERM))
-}
-
-/// Removes `dir` with everything in it; a missing one is fine.
-pub fn clear_dir(dir: &Path) -> io::Result<()> {
-    match fs::remove_dir_all(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        result => result,
-    }
 }
 
 fn state_dir() -> Option<PathBuf> {
@@ -172,29 +125,10 @@ mod tests {
     use serde::Deserialize;
 
     #[test]
-    fn only_folders_of_running_instances_survive_the_cleanup() {
-        let tmp = tempfile::tempdir().unwrap();
-        let base = tmp.path().join("viewer-tmp");
-        let mine = std::process::id().to_string();
-        for name in [mine.as_str(), "999999999", "junk"] {
-            fs::create_dir_all(base.join(name).join("view-x")).unwrap();
-        }
-        fs::write(base.join("file"), b"").unwrap();
-        clear_stale_temp(&base);
-        let mut left: Vec<_> = fs::read_dir(&base)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        left.sort();
-        assert_eq!(left, [mine]);
-        clear_stale_temp(&tmp.path().join("missing")); // nothing to do
-    }
-
-    #[test]
-    fn private_dir_is_owner_only_and_clear_dir_removes_leftovers() {
+    fn private_dir_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join("viewer-tmp");
+        let dir = tmp.path().join("session/temp");
         private_dir(&dir).unwrap();
         assert_eq!(
             fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
@@ -206,12 +140,6 @@ mod tests {
             fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        fs::create_dir(dir.join("view-1")).unwrap();
-        fs::write(dir.join("view-1/left"), b"").unwrap();
-        clear_dir(&dir).unwrap();
-        assert!(!dir.exists());
-        clear_dir(&dir).unwrap(); // already gone
-        assert!(viewer_temp_dir().is_none_or(|d| d.ends_with("yagni-commander/viewer-tmp")));
     }
 
     #[derive(Debug, Default, PartialEq, Serialize, Deserialize)]

@@ -99,7 +99,7 @@ pub fn upload_edit(
     let folder = vfs::parent(remote).unwrap_or_default();
     let (temp, mut writer) = (0..100)
         .find_map(|n| {
-            let temp: PathBuf = folder.join(format!(".{}.yagni-{n}.tmp", name.to_string_lossy()));
+            let temp: PathBuf = folder.join(format!(".{}.yc-{n}.tmp", name.to_string_lossy()));
             match fs.create(&temp) {
                 Ok(writer) => Some(Ok((temp, writer))),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => None,

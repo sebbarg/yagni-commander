@@ -129,7 +129,7 @@ impl SafeDir {
         create_in(&dir, name, mode)
     }
 
-    /// A new hidden file next to `parts` (`.<name>.yagni-<n>.tmp`), to be
+    /// A new hidden file next to `parts` (`.<name>.yc-<n>.tmp`), to be
     /// renamed over it with [`SafeDir::replace`].
     pub(crate) fn create_temp_beside(
         &self,
@@ -140,7 +140,7 @@ impl SafeDir {
         for n in 0..100 {
             let mut temp = OsString::from(".");
             temp.push(name);
-            temp.push(format!(".yagni-{n}.tmp"));
+            temp.push(format!(".yc-{n}.tmp"));
             match create_in(&dir, &temp, mode) {
                 Ok(file) => return Ok((temp, file)),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -305,7 +305,7 @@ mod tests {
         fs::write(tmp.path().join("t"), b"old").unwrap();
         let root = SafeDir::open(tmp.path()).unwrap();
         let (temp, mut f) = root.create_temp_beside(&p("t"), Some(0o600)).unwrap();
-        assert!(temp.to_string_lossy().starts_with(".t.yagni-"), "{temp:?}");
+        assert!(temp.to_string_lossy().starts_with(".t.yc-"), "{temp:?}");
         f.write_all(b"new").unwrap();
         // A second temp gets another name.
         let (other, _) = root.create_temp_beside(&p("t"), None).unwrap();
