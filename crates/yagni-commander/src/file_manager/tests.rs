@@ -243,12 +243,25 @@ fn selected(commander: &Entity<Commander>, side: Side, cx: &VisualTestContext) -
 }
 
 #[gpui_kit::test]
-fn space_selects_and_moves_down(cx: &mut TestAppContext) {
+fn space_toggles_and_the_cursor_stays(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
-    cx.simulate_keystrokes("down space space");
+    cx.simulate_keystrokes("down space");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a"]);
+    assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    cx.simulate_keystrokes("down space");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a", "b"]);
+    cx.simulate_keystrokes("space");
+    assert_eq!(selected(&commander, Side::Left, cx), ["a"], "toggled back");
+    assert_eq!(cursor(&commander, Side::Left, cx), 2);
+}
+
+#[gpui_kit::test]
+fn insert_selects_and_moves_down(cx: &mut TestAppContext) {
+    let (_tmp, commander, cx) = open(cx);
+    cx.simulate_keystrokes("down insert insert");
     assert_eq!(selected(&commander, Side::Left, cx), ["a", "b"]);
     assert_eq!(cursor(&commander, Side::Left, cx), 3);
-    cx.simulate_keystrokes("up space");
+    cx.simulate_keystrokes("up insert");
     assert_eq!(selected(&commander, Side::Left, cx), ["a"]);
 }
 
@@ -1289,7 +1302,7 @@ fn progress_open(cx: &mut VisualTestContext) -> bool {
 fn f8_confirmed_trashes_the_selection(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
     use_fake_trash(cx);
-    cx.simulate_keystrokes("down space space f8");
+    cx.simulate_keystrokes("down insert insert f8");
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     wait_until(cx, |cx| !job_running(cx));
@@ -2467,7 +2480,7 @@ fn ctrl_c_and_ctrl_ins_copy_the_full_path_under_the_cursor(cx: &mut TestAppConte
     cx.simulate_keystrokes("end ctrl-insert");
     assert_eq!(clipboard_text(cx), Some(path("f")));
     // Only the cursor entry, never the selection.
-    cx.simulate_keystrokes("home down space ctrl-c");
+    cx.simulate_keystrokes("home down insert ctrl-c");
     assert_eq!(clipboard_text(cx), Some(path("b")));
     if cfg!(target_os = "macos") {
         cx.simulate_keystrokes("end cmd-c");
@@ -5185,7 +5198,7 @@ mod compare {
     fn two_selected_files_in_one_panel(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = open(cx);
         with_files(&tmp, "same", "same", cx);
-        cx.simulate_keystrokes("end up up space space");
+        cx.simulate_keystrokes("end up up insert insert");
         assert_eq!(compare(cx), "Compare\nThe files are identical.");
         assert_eq!(selected(&commander, Side::Left, cx), ["f", "g"], "kept");
         std::fs::write(tmp.path().join("g"), "diff").unwrap();
@@ -5215,7 +5228,7 @@ mod compare {
     fn one_selected_entry_per_panel_beats_the_cursor(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = open(cx);
         with_files(&tmp, "1", "1", cx);
-        // Left: f selected, cursor moves on to g. Right: cursor on h.
+        // Left: f selected, the cursor stays on it. Right: cursor on h.
         cx.simulate_keystrokes("end up up space tab end");
         assert_eq!(compare(cx), "Compare\nThe files differ.", "f vs h");
         cx.simulate_keystrokes("up space");
@@ -5226,7 +5239,7 @@ mod compare {
     fn the_names_label_a_pair_from_one_panel(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = open(cx);
         std::fs::write(tmp.path().join("b/new"), "").unwrap();
-        cx.simulate_keystrokes("down space space");
+        cx.simulate_keystrokes("down insert insert");
         assert_eq!(compare(cx), "Compare\nThe folders differ:\nonly in b: new");
     }
 
@@ -5244,7 +5257,7 @@ mod compare {
             "Cannot compare\nCannot compare a file with a folder."
         );
         // Three selected in the active panel.
-        cx.simulate_keystrokes("end up up space space space");
+        cx.simulate_keystrokes("end up up insert insert insert");
         assert_eq!(compare(cx), select);
     }
 

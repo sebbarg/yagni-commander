@@ -342,7 +342,7 @@ printf b >"$left/cmp2/x"
 printf o >"$left/cmp1/only"
 keys ctrl+r
 typed cmp1
-keys Escape space space
+keys Escape Insert Insert
 # Compare by content is the 13th Files item.
 keys F10 Down Down Down Down Down Down Down Down Down Down Down Down Down
 shot 08d-menu-compare
@@ -353,7 +353,7 @@ keys ctrl+c
 check "compare listed the differences" clipboard "$(printf 'Compare\nThe folders differ:\nonly in cmp1: only\ndifferent: x')"
 keys Return
 typed cmp1
-keys Escape space space   # deselect
+keys Escape Insert Insert   # deselect
 
 echo "Alt-Enter shows a folder's properties"
 mkdir -p "$left/propdir/sub"

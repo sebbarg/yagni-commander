@@ -32,8 +32,8 @@ use crate::actions::{
     OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack, PageDown, PageUp, PrevTab, Reload,
     Rename, SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
     ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
-    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
-    View, ZoomIn, ZoomOut, ZoomReset,
+    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu,
+    ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -907,6 +907,9 @@ impl Render for FileManager {
             }))
             .on_action(cx.listener(|this, _: &ToggleSelection, _, cx| {
                 this.execute(Command::ToggleSelection, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleAndDown, _, cx| {
+                this.execute(Command::ToggleAndDown, cx)
             }))
             .on_action(
                 cx.listener(|this, _: &SelectAll, _, cx| this.execute(Command::SelectAll, cx)),

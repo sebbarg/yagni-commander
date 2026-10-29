@@ -609,9 +609,9 @@ impl Panel {
         summary
     }
 
-    /// Space: toggles selection of the entry under the cursor and moves the
-    /// cursor down, so repeated presses select a run of entries. ".." can't be
-    /// selected, but the cursor still moves past it.
+    /// Toggles the selection of the entry under the cursor; the cursor stays
+    /// (Insert moves it down after, see `Command::ToggleAndDown`). ".." can't be
+    /// selected.
     pub(crate) fn toggle_selection(&mut self) {
         if let Some(entry) = self.cursor_entry().filter(|e| e.kind != EntryKind::Parent) {
             let name = entry.name.clone();
@@ -619,7 +619,6 @@ impl Panel {
                 self.selection.insert(name);
             }
         }
-        self.move_cursor(1);
     }
 
     /// A Shift-move to `to` (clamped): toggles every entry the cursor
@@ -999,15 +998,20 @@ mod tests {
     }
 
     #[test]
-    fn toggle_selects_then_moves_down_and_toggles_back() {
+    fn toggle_selects_in_place_and_toggles_back() {
         let tmp = fixture();
         let mut panel = Panel::open(tmp.path(), true).unwrap();
         select(&mut panel, "alpha");
 
         panel.toggle_selection();
         assert_eq!(selected_labels(&panel), ["alpha"]);
-        assert_eq!(panel.cursor_entry().unwrap().label, "beta");
+        assert_eq!(
+            panel.cursor_entry().unwrap().label,
+            "alpha",
+            "the cursor stays"
+        );
 
+        select(&mut panel, "beta");
         panel.toggle_selection();
         assert_eq!(selected_labels(&panel), ["alpha", "beta"]);
 
@@ -1017,13 +1021,13 @@ mod tests {
     }
 
     #[test]
-    fn parent_entry_is_never_selected_but_cursor_moves_past_it() {
+    fn parent_entry_is_never_selected() {
         let tmp = fixture();
         let mut panel = Panel::open(tmp.path(), true).unwrap();
         assert_eq!(panel.cursor(), 0);
         panel.toggle_selection();
         assert!(selected_labels(&panel).is_empty());
-        assert_eq!(panel.cursor(), 1);
+        assert_eq!(panel.cursor(), 0);
     }
 
     #[test]
@@ -1059,6 +1063,7 @@ mod tests {
         let mut panel = Panel::open(tmp.path(), true).unwrap();
         select(&mut panel, "alpha");
         panel.toggle_selection();
+        select(&mut panel, "beta");
         panel.toggle_selection();
         panel.sort_by(SortKey::Name);
         assert_eq!(selected_labels(&panel), ["beta", "alpha"]);

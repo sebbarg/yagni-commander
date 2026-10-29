@@ -49,8 +49,12 @@ pub enum Command {
     GoUp,
     /// Column header click on a panel.
     SortBy(Side, SortKey),
-    /// Space: toggle selection of the entry under the cursor, then move down.
+    /// Space: toggle the selection of the entry under the cursor (TC's
+    /// default; the cursor stays).
     ToggleSelection,
+    /// Insert: toggle the selection of the entry under the cursor, then
+    /// move down.
+    ToggleAndDown,
     /// Shift with a cursor key: toggle the selection of every entry the
     /// cursor leaves (see [`Step`]).
     ToggleTo(Step),
@@ -1132,6 +1136,11 @@ impl Commander {
                 panel.toggle_selection();
                 Ok(())
             }
+            Command::ToggleAndDown => {
+                panel.toggle_selection();
+                panel.move_cursor(1);
+                Ok(())
+            }
             Command::ToggleTo(step) => {
                 let (to, inclusive) = match step {
                     // A move cut short by the top or bottom toggles the
@@ -1490,7 +1499,7 @@ mod tests {
     fn selection_commands_act_on_the_active_panel() {
         let (_tmp, mut c) = commander();
         c.execute(Command::CursorDown);
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         assert_eq!(c.panel(Side::Left).summary().selected(), 1);
         assert_eq!(under_cursor(&c, Side::Left), "b");
 
@@ -1498,6 +1507,24 @@ mod tests {
         c.execute(Command::SelectAll);
         assert_eq!(c.panel(Side::Right).summary().selected(), 4);
         assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+    }
+
+    #[test]
+    fn space_toggles_in_place_and_insert_moves_on() {
+        let (_tmp, mut c) = commander();
+        c.execute(Command::CursorDown); // "a"
+        c.execute(Command::ToggleSelection);
+        assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+        assert_eq!(under_cursor(&c, Side::Left), "a", "Space: the cursor stays");
+        c.execute(Command::ToggleSelection);
+        assert_eq!(
+            c.panel(Side::Left).summary().selected(),
+            0,
+            "and toggles back"
+        );
+        c.execute(Command::ToggleAndDown);
+        assert_eq!(c.panel(Side::Left).summary().selected(), 1);
+        assert_eq!(under_cursor(&c, Side::Left), "b", "Insert: on to the next");
     }
 
     #[test]
@@ -2035,7 +2062,7 @@ mod tests {
     fn a_quiet_reload_keeps_the_selection() {
         let tmp = tree();
         let mut c = on_a(&tmp);
-        c.execute(Command::ToggleSelection); // selects "a"
+        c.execute(Command::ToggleAndDown); // selects "a"
         c.watch_reload(Side::Left);
         c.run_loads_now();
         let selected: Vec<_> = c
@@ -2381,7 +2408,7 @@ mod tests {
     fn new_tab_copies_the_front_tab_without_its_selection() {
         let tmp = tree();
         let mut c = on_a(&tmp);
-        c.execute(Command::ToggleSelection); // selects "a", cursor on "b"
+        c.execute(Command::ToggleAndDown); // selects "a", cursor on "b"
         c.execute(Command::NewTab);
         let tabs = c.tabs(Side::Left);
         assert_eq!((tabs.count(), tabs.index()), (2, 1));
@@ -2602,24 +2629,24 @@ mod tests {
     fn clear_selection_finds_its_tab_wherever_it_went() {
         let tmp = tree();
         let mut c = on_a(&tmp); // left active, in `tmp`
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         let source = c.panel(Side::Left).id();
         // A same-folder tab comes to the front, also with a selection.
         run(&mut c, Command::NewTab);
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         c.clear_selection(source, tmp.path());
         assert_eq!(c.panel(Side::Left).selection().count(), 1, "the new tab");
         let first = c.tabs(Side::Left).get(0).unwrap();
         assert_eq!(first.selection().count(), 0, "the copy's own tab");
         // Swapped to the other side, it is still found.
         c.execute(Command::PrevTab);
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         run(&mut c, Command::SwapPanels);
         c.clear_selection(source, tmp.path());
         assert_eq!(c.panel(Side::Right).selection().count(), 0);
         // Not when the folder differs.
         c.execute(Command::SwitchPanel);
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         c.clear_selection(source, &tmp.path().join("a"));
         assert_eq!(
             c.panel(Side::Right).selection().count(),
@@ -2815,14 +2842,14 @@ mod results_tests {
             .position(|l| l == "a.rs")
             .unwrap();
         c.execute(Command::CursorTo(Side::Left, a));
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         c.execute(Command::CursorEnd);
         c.feed(results(tmp.path(), "*.rs"));
         let panel = c.panel(Side::Left);
         assert_eq!(panel.cursor(), 0, "fed: cursor at the top");
         assert_eq!(panel.selection().count(), 0, "fed: nothing selected");
         c.execute(Command::CursorTo(Side::Left, 1));
-        c.execute(Command::ToggleSelection);
+        c.execute(Command::ToggleAndDown);
         c.execute(Command::CursorEnd);
         c.execute(Command::GoUp);
         c.run_loads_now();
@@ -3456,7 +3483,7 @@ mod toggle_to_tests {
     #[test]
     fn selected_entries_in_the_way_are_deselected() {
         let (_tmp, mut c) = five(2);
-        c.execute(Command::ToggleSelection); // f2 on, cursor on f3
+        c.execute(Command::ToggleAndDown); // f2 on, cursor on f3
         c.execute(Command::CursorTo(Side::Left, 1));
         for _ in 0..3 {
             c.execute(DOWN);
