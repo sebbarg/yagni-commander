@@ -29,7 +29,7 @@ use crate::zoom::{dialog_width, rems_from_px};
 /// Polls before the status line says "searching...": ~300 ms.
 const QUIET_POLLS: u32 = 3;
 /// Longest selection Ctrl-F starts with.
-const PREFILL_MAX: u64 = 256;
+pub(super) const PREFILL_MAX: u64 = 256;
 
 /// The last search asked for in any viewer (or handed over by Alt-F7): what
 /// the Find dialog starts with. For the session only.
@@ -93,7 +93,11 @@ impl ViewerView {
             .try_global::<LastSearch>()
             .map(|l| l.0.clone())
             .unwrap_or_default();
-        if let Some(text) = self.find_prefill() {
+        let prefill = match &self.markdown {
+            Some(markdown) => markdown.prefill(cx),
+            None => self.find_prefill(),
+        };
+        if let Some(text) = prefill {
             last.pattern = text;
         }
         let view = cx.new(|cx| FindView::new(&last, window, cx));
@@ -171,8 +175,13 @@ impl ViewerView {
             Ok(query) => {
                 cx.set_global(LastSearch(text.clone()));
                 self.search.query = Some((text, query));
-                self.search.current = None;
-                self.start_search(Direction::Forward, window, cx);
+                if let Some(markdown) = &mut self.markdown {
+                    markdown.restart(cx);
+                    self.find_markdown(Direction::Forward, window, cx);
+                } else {
+                    self.search.current = None;
+                    self.start_search(Direction::Forward, window, cx);
+                }
                 true
             }
             Err(e) => {
@@ -210,9 +219,24 @@ impl ViewerView {
     ) {
         if self.search.query.is_none() {
             self.open_find(window, cx);
+        } else if self.markdown.is_some() {
+            self.find_markdown(direction, window, cx);
         } else {
             self.start_search(direction, window, cx);
         }
+    }
+
+    /// A search in Markdown mode: in memory, so at once.
+    fn find_markdown(&mut self, direction: Direction, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some((text, query)), Some(markdown)) = (&self.search.query, &mut self.markdown) else {
+            return;
+        };
+        if markdown.find(query, direction, cx).is_none() {
+            let message = format!("\"{}\" not found.", text.pattern);
+            let back = Some(self.focus.clone());
+            show_message("Find", message, "OK", back, window, cx);
+        }
+        cx.notify();
     }
 
     /// Where the next search starts: around the current match while it is

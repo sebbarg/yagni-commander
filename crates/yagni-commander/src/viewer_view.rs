@@ -24,21 +24,25 @@ use yagni_commander_core::viewer::{
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, LineDown, LineUp,
-    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleWrap, ZoomIn,
-    ZoomOut, ZoomReset,
+    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleMarkdown,
+    ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
-use crate::file_manager::commands::{configured_editor, show_error};
+use crate::file_manager::commands::{configured_editor, show_error, show_message};
 use crate::rem_scope::RemScope;
 use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
 
+mod markdown;
 mod search;
 mod select;
 
+use markdown::{Markdown, Scroll};
 use select::{Run, Selection};
 
 const PADDING: f32 = 8.0;
+/// Markdown mode's side margins (reflowed text needs more air).
+const MARKDOWN_PADDING: f32 = 32.0;
 const LINE_HEIGHT: f32 = 18.0;
 const STATUS_HEIGHT: f32 = 22.0;
 const SCROLLBAR_WIDTH: f32 = 12.0;
@@ -99,6 +103,8 @@ pub struct ViewerView {
     wrap: bool,
     /// Hex mode (`H`); `wrap` is kept for the way back.
     hex: bool,
+    /// Markdown mode (`M`), over the text or hex mode kept below it.
+    markdown: Option<Markdown>,
     /// Byte position of the top row (always a row start).
     top: u64,
     /// Columns per row in wrap mode, from the last layout.
@@ -178,6 +184,7 @@ impl ViewerView {
             focus,
             wrap: true,
             hex: false,
+            markdown: None,
             top: 0,
             cols: 80,
             screen_rows: FALLBACK_ROWS,
@@ -246,14 +253,62 @@ impl ViewerView {
     }
 
     fn toggle_wrap(&mut self, cx: &mut Context<Self>) {
-        if self.hex {
+        if self.hex || self.markdown.is_some() {
             return;
         }
         self.wrap = !self.wrap;
         self.relayout(cx);
     }
 
+    /// `M`: Markdown mode, or back to the mode below it. A file too large
+    /// or with a paragraph too long stays in this mode, with a box saying
+    /// why.
+    fn toggle_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.markdown.take().is_none() {
+            let len = self.doc.len();
+            let mut bytes = Vec::new();
+            let refused = markdown::too_large(len).or_else(|| {
+                bytes = self.doc.bytes(0, len as usize);
+                markdown::too_long(&bytes)
+            });
+            if let Some(message) = refused {
+                let back = Some(self.focus.clone());
+                show_message("Markdown", message, "OK", back, window, cx);
+                return;
+            }
+            let dir = self.path.parent().unwrap_or(Path::new("/"));
+            self.markdown = Some(Markdown::new(&bytes, dir, cx));
+        }
+        cx.notify();
+    }
+
+    /// The keys that move the view, in either mode.
+    fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
+        if let Some(markdown) = &self.markdown {
+            markdown.scroll(scroll, cx);
+            cx.notify();
+            return;
+        }
+        match scroll {
+            Scroll::Lines(n) if n < 0.0 => self.up(1, cx),
+            Scroll::Lines(_) => self.down(1, cx),
+            Scroll::Pages(n) => {
+                let page = self.page();
+                if n < 0.0 {
+                    self.up(page, cx)
+                } else {
+                    self.down(page, cx)
+                }
+            }
+            Scroll::Start => self.set_top(0, cx),
+            Scroll::End => self.end(cx),
+        }
+    }
+
     fn toggle_hex(&mut self, cx: &mut Context<Self>) {
+        if self.markdown.is_some() {
+            return;
+        }
         self.hex = !self.hex;
         self.relayout(cx);
     }
@@ -266,7 +321,7 @@ impl ViewerView {
     }
 
     fn scroll_h(&mut self, right: bool, cx: &mut Context<Self>) {
-        if self.wraps_rows() {
+        if self.wraps_rows() || self.markdown.is_some() {
             return;
         }
         let max = self.widest.saturating_sub(self.cols);
@@ -337,7 +392,7 @@ impl ViewerView {
     }
 
     /// "file.txt · 1.2 MiB · 37% · wrap · line 120 of 5,000"
-    pub(crate) fn status_text(&mut self) -> String {
+    pub(crate) fn status_text(&mut self, cx: &App) -> String {
         let name = self
             .path
             .file_name()
@@ -349,6 +404,10 @@ impl ViewerView {
             .min(100);
         if let Some(searching) = self.searching_text() {
             return format!("{name} · {} · {searching}", format_size(len));
+        }
+        if let Some(markdown) = &self.markdown {
+            let percent = markdown.percent(cx);
+            return format!("{name} · {} · markdown · {percent}%", format_size(len));
         }
         if self.hex {
             return format!(
@@ -393,6 +452,10 @@ impl ViewerView {
     #[cfg(test)]
     pub(crate) fn hex(&self) -> bool {
         self.hex
+    }
+    #[cfg(test)]
+    fn markdown(&self) -> Option<&Markdown> {
+        self.markdown.as_ref()
     }
 
     #[cfg(test)]
@@ -503,6 +566,11 @@ impl ViewerView {
     }
 
     fn on_wheel(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
+        if self.markdown.is_some() {
+            // The view scrolled itself; the status line follows.
+            cx.notify();
+            return;
+        }
         let line = line_height(cx);
         let dy = f32::from(event.delta.pixel_delta(px(line)).y);
         self.wheel_rows += dy / line;
@@ -629,7 +697,7 @@ impl Render for ViewerView {
         }
         self.drawn = visible;
 
-        let status = self.status_text();
+        let status = self.status_text(cx);
         let error = self.doc.error().map(str::to_owned);
         let mono = cx.theme().mono_font_family.clone();
 
@@ -645,20 +713,19 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &FindPrevious, window, cx| {
                 this.find_again(Direction::Backward, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &LineDown, _, cx| this.down(1, cx)))
-            .on_action(cx.listener(|this, _: &LineUp, _, cx| this.up(1, cx)))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| {
-                let page = this.page();
-                this.down(page, cx)
-            }))
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| {
-                let page = this.page();
-                this.up(page, cx)
-            }))
-            .on_action(cx.listener(|this, _: &Start, _, cx| this.set_top(0, cx)))
-            .on_action(cx.listener(|this, _: &End, _, cx| this.end(cx)))
+            .on_action(cx.listener(|this, _: &LineDown, _, cx| this.scroll(Scroll::Lines(1.0), cx)))
+            .on_action(cx.listener(|this, _: &LineUp, _, cx| this.scroll(Scroll::Lines(-1.0), cx)))
+            .on_action(cx.listener(|this, _: &PageDown, _, cx| this.scroll(Scroll::Pages(1.0), cx)))
+            .on_action(cx.listener(|this, _: &PageUp, _, cx| this.scroll(Scroll::Pages(-1.0), cx)))
+            .on_action(cx.listener(|this, _: &Start, _, cx| this.scroll(Scroll::Start, cx)))
+            .on_action(cx.listener(|this, _: &End, _, cx| this.scroll(Scroll::End, cx)))
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
             .on_action(cx.listener(|this, _: &ToggleHex, _, cx| this.toggle_hex(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleMarkdown, window, cx| {
+                    this.toggle_markdown(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
@@ -669,6 +736,10 @@ impl Render for ViewerView {
             .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+                    if this.markdown.is_some() && event.pressed_button.is_some() {
+                        cx.notify(); // the view's own scrollbar may be dragged
+                        return;
+                    }
                     if !this.dragging_thumb {
                         return;
                     }
@@ -700,31 +771,46 @@ impl Render for ViewerView {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .min_h_0()
-                            .p(rems_from_px(PADDING))
-                            .child(
-                                div()
-                                    .id("viewer-text")
-                                    .on_mouse_down(
-                                        gpui_kit::MouseButton::Left,
-                                        cx.listener(|this, event, window, cx| {
-                                            this.on_text_mouse_down(event, window, cx)
-                                        }),
-                                    )
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .font_family(mono)
-                                    .text_size(rems_from_px(MONO_SIZE))
-                                    .line_height(rems_from_px(LINE_HEIGHT))
-                                    .children(row_elements),
-                            )
-                            .child(self.render_scrollbar(cx)),
-                    )
+                    .when_some(self.markdown.as_ref(), |this, markdown| {
+                        this.child(
+                            div()
+                                .debug_selector(|| "viewer-markdown".into())
+                                .flex_1()
+                                .min_h_0()
+                                .pl(rems_from_px(MARKDOWN_PADDING))
+                                .py(rems_from_px(PADDING))
+                                // Room for the view's own scrollbar, drawn
+                                // over its right edge.
+                                .child(markdown.element().pr(rems_from_px(MARKDOWN_PADDING))),
+                        )
+                    })
+                    .when(self.markdown.is_none(), |this| {
+                        this.child(
+                            div()
+                                .flex()
+                                .flex_1()
+                                .min_h_0()
+                                .p(rems_from_px(PADDING))
+                                .child(
+                                    div()
+                                        .id("viewer-text")
+                                        .on_mouse_down(
+                                            gpui_kit::MouseButton::Left,
+                                            cx.listener(|this, event, window, cx| {
+                                                this.on_text_mouse_down(event, window, cx)
+                                            }),
+                                        )
+                                        .flex_1()
+                                        .min_w_0()
+                                        .overflow_hidden()
+                                        .font_family(mono)
+                                        .text_size(rems_from_px(MONO_SIZE))
+                                        .line_height(rems_from_px(LINE_HEIGHT))
+                                        .children(row_elements),
+                                )
+                                .child(self.render_scrollbar(cx)),
+                        )
+                    })
                     .child(
                         div()
                             .debug_selector(|| "viewer-status".into())

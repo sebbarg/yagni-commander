@@ -63,6 +63,11 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = ["s
 # Help > Check for updates: one HTTPS request to GitHub. rustls (with ring and
 # the bundled Mozilla roots, webpki-roots), no gzip.
 ureq = { version = "3.4", default-features = false, features = ["rustls"] }
+# Markdown mode's images: the parser gpui-base's TextView uses (its version),
+# to find images by source position, and percent-decoding of image paths.
+# Already in the tree: same versions, no new crate.
+markdown = "1.0.0"
+percent-encoding = "2.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

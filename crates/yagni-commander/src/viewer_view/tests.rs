@@ -172,10 +172,10 @@ fn alt_f4_closes_only_the_viewer(cx: &mut TestAppContext) {
 fn status_line_counts_lines_in_the_background(cx: &mut TestAppContext) {
     let (_tmp, viewer, mut cx) = view(&numbered(500), cx);
     cx.run_until_parked();
-    let status = viewer.update(&mut cx, |v, _| v.status_text());
+    let status = viewer.update(&mut cx, |v, cx| v.status_text(cx));
     assert!(status.contains("line 1 of 500"), "{status}");
     cx.simulate_keystrokes("down down");
-    let status = viewer.update(&mut cx, |v, _| v.status_text());
+    let status = viewer.update(&mut cx, |v, cx| v.status_text(cx));
     assert!(status.contains("line 3 of 500"), "{status}");
     assert!(
         status.contains("file.txt") && status.contains("wrap"),
@@ -187,7 +187,7 @@ fn status_line_counts_lines_in_the_background(cx: &mut TestAppContext) {
 fn empty_file_shows_nothing(cx: &mut TestAppContext) {
     let (_tmp, viewer, mut cx) = view(b"", cx);
     assert!(shown(&viewer, &mut cx).is_empty());
-    let status = viewer.update(&mut cx, |v, _| v.status_text());
+    let status = viewer.update(&mut cx, |v, cx| v.status_text(cx));
     assert!(
         status.contains("0 lines") && !status.contains("line 1"),
         "{status}"
@@ -588,7 +588,7 @@ mod search {
         cx.simulate_input("line 900");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        let status = |cx: &mut VisualTestContext| viewer.update(cx, |v, _| v.status_text());
+        let status = |cx: &mut VisualTestContext| viewer.update(cx, |v, cx| v.status_text(cx));
         assert!(!status(&mut cx).contains("searching"), "quiet at first");
         for _ in 0..3 {
             cx.executor()
@@ -719,7 +719,7 @@ mod hex {
         let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
         cx.simulate_keystrokes("h down down");
         cx.run_until_parked();
-        let status = viewer.update(&mut cx, |v, _| v.status_text());
+        let status = viewer.update(&mut cx, |v, cx| v.status_text(cx));
         assert!(status.ends_with(" · hex · offset 20"), "{status}");
     }
 
@@ -1310,4 +1310,355 @@ fn the_find_dialog_goes_field_options_buttons(cx: &mut TestAppContext) {
         "Input",
     ];
     assert_order(&mut cx, "shift-tab", &back, &[]);
+}
+
+mod markdown_mode {
+    use super::*;
+    use crate::viewer_view::search::LastSearch;
+    use gpui_kit::component::WindowExt;
+    use yagni_commander_core::find::text::Text;
+
+    /// Lets the parse land and the list lay out its blocks.
+    fn settle(cx: &mut VisualTestContext) {
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+        cx.run_until_parked();
+    }
+
+    fn rendered(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Option<String> {
+        settle(cx);
+        viewer.read_with(cx, |v, cx| v.markdown().map(|m| m.rendered(cx)))
+    }
+
+    fn status(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> String {
+        settle(cx);
+        viewer.update(cx, |v, cx| v.status_text(cx))
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    fn copied(cx: &mut VisualTestContext) -> Option<String> {
+        cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()))
+    }
+
+    /// Paragraphs `para 1` to `para n`, far taller than the window.
+    fn paragraphs(n: usize) -> Vec<u8> {
+        (1..=n)
+            .map(|i| format!("para {i} with **bold**\n\n"))
+            .collect::<String>()
+            .into_bytes()
+    }
+
+    #[gpui_kit::test]
+    fn m_shows_the_file_as_markdown_and_back(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"# Title\n\nSome **bold** text\n", cx);
+        assert!(rendered(&viewer, &mut cx).is_none(), "never the start mode");
+        cx.simulate_keystrokes("m");
+        let text = rendered(&viewer, &mut cx).expect("markdown mode");
+        assert!(text.contains("Title"), "{text:?}");
+        assert!(text.contains("Some bold text"), "{text:?}");
+        assert!(!text.contains('*') && !text.contains('#'), "{text:?}");
+        cx.simulate_keystrokes("m");
+        assert!(rendered(&viewer, &mut cx).is_none());
+        assert_eq!(shown(&viewer, &mut cx)[0], "# Title");
+    }
+
+    #[gpui_kit::test]
+    fn a_md_file_still_opens_as_text(cx: &mut TestAppContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("README.md");
+        std::fs::write(&path, "# Title\n").unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        let mut vcx = VisualTestContext::from_window(window, cx);
+        assert!(rendered(&viewer, &mut vcx).is_none());
+        assert_eq!(shown(&viewer, &mut vcx)[0], "# Title");
+    }
+
+    #[gpui_kit::test]
+    fn a_file_over_the_cap_is_refused(cx: &mut TestAppContext) {
+        let big = vec![b'a'; super::super::markdown::CAP as usize + 1];
+        let (_tmp, viewer, mut cx) = view(&big, cx);
+        cx.simulate_keystrokes("m");
+        cx.run_until_parked();
+        assert!(dialog_open(&mut cx));
+        assert!(viewer.read_with(&cx, |v, _| v.markdown().is_none()));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(&mut cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_paragraph_over_the_cap_is_refused(cx: &mut TestAppContext) {
+        let long = vec![b'a'; super::super::markdown::PARAGRAPH_CAP as usize + 1];
+        let (_tmp, viewer, mut cx) = view(&long, cx);
+        cx.simulate_keystrokes("m");
+        cx.run_until_parked();
+        assert!(dialog_open(&mut cx));
+        assert!(viewer.read_with(&cx, |v, _| v.markdown().is_none()));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(&mut cx));
+        assert!(
+            shown(&viewer, &mut cx)[0].starts_with("aaa"),
+            "the text view stays"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn local_images_load_and_the_rest_show_their_alt_text(cx: &mut TestAppContext) {
+        let source = "![local pic](pic.png) ![remote badge](https://x/b.svg) \
+                      ![missing pic](gone.png) <img src=\"pic.png\" alt=\"tag pic\">\n";
+        let (tmp, viewer, mut cx) = view(source.as_bytes(), cx);
+        std::fs::write(tmp.path().join("pic.png"), b"png").unwrap();
+        cx.simulate_keystrokes("m");
+        let text = rendered(&viewer, &mut cx).unwrap();
+        assert!(text.contains("remote badge"), "{text:?}");
+        assert!(text.contains("missing pic"), "{text:?}");
+        assert!(!text.contains("https"), "{text:?}");
+        let images = viewer.read_with(&cx, |v, _| v.markdown().unwrap().image_files());
+        assert_eq!(
+            images,
+            vec![("pic.png".to_owned(), tmp.path().join("pic.png"))]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn invalid_utf8_is_shown_as_replacement_characters(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"a\xffb\n", cx);
+        cx.simulate_keystrokes("m");
+        assert_eq!(rendered(&viewer, &mut cx).unwrap().trim(), "a\u{fffd}b");
+    }
+
+    #[gpui_kit::test]
+    fn w_h_and_left_right_do_nothing_and_m_returns_to_hex(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"# Title\n", cx);
+        cx.simulate_keystrokes("h m");
+        assert!(rendered(&viewer, &mut cx).is_some());
+        cx.simulate_keystrokes("w h right");
+        let state = |cx: &mut VisualTestContext| {
+            viewer.read_with(cx, |v, _| (v.hex(), v.wraps(), v.h_offset()))
+        };
+        assert_eq!(state(&mut cx), (true, true, 0));
+        cx.simulate_keystrokes("m");
+        assert!(rendered(&viewer, &mut cx).is_none());
+        assert!(viewer.read_with(&cx, |v, _| v.hex()), "back in hex");
+    }
+
+    #[gpui_kit::test]
+    fn keys_scroll_and_the_status_line_follows(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&paragraphs(300), cx);
+        cx.simulate_keystrokes("m");
+        let start = status(&viewer, &mut cx);
+        assert!(
+            start.starts_with("file.txt · ") && start.ends_with(" · markdown · 0%"),
+            "{start}"
+        );
+        let percent = |cx: &mut VisualTestContext| {
+            settle(cx);
+            viewer.read_with(cx, |v, cx| v.markdown().unwrap().percent(cx))
+        };
+        cx.simulate_keystrokes("down");
+        let line = percent(&mut cx);
+        cx.simulate_keystrokes("pagedown");
+        let page = percent(&mut cx);
+        assert!(page > line, "{line} then {page}");
+        cx.simulate_keystrokes("up pageup");
+        assert_eq!(percent(&mut cx), 0);
+        cx.simulate_keystrokes("end");
+        assert_eq!(percent(&mut cx), 100);
+        assert!(status(&viewer, &mut cx).ends_with("markdown · 100%"));
+        cx.simulate_keystrokes("home");
+        assert_eq!(percent(&mut cx), 0);
+        // The text mode below didn't move.
+        assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 0);
+    }
+
+    #[gpui_kit::test]
+    fn a_short_file_is_all_shown(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"one line\n", cx);
+        cx.simulate_keystrokes("m");
+        assert!(status(&viewer, &mut cx).ends_with("markdown · 100%"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_a_ctrl_c_copies_the_text_as_shown(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut cx) = view(b"# Title\n\n- **one**\n- two\n", cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(
+            copied(&mut cx).as_deref(),
+            Some("before"),
+            "nothing selected"
+        );
+        cx.simulate_keystrokes("ctrl-a ctrl-c");
+        let text = copied(&mut cx).unwrap();
+        assert!(text.contains("Title") && text.contains("one") && text.contains("two"));
+        assert!(!text.contains("**") && !text.contains('#'), "{text:?}");
+    }
+
+    /// Ctrl-F, `text` typed over the prefill, Enter.
+    fn find(text: &str, cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_input(text);
+        cx.simulate_keystrokes("enter");
+        settle(cx);
+    }
+
+    fn current(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Option<String> {
+        settle(cx);
+        viewer.read_with(cx, |v, cx| {
+            let markdown = v.markdown()?;
+            let text = markdown.rendered(cx);
+            Some(text[markdown.current.clone()?].to_owned())
+        })
+    }
+
+    /// The paragraph holding the current match.
+    fn current_para(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> usize {
+        settle(cx);
+        viewer.read_with(cx, |v, cx| {
+            let markdown = v.markdown().unwrap();
+            let text = markdown.rendered(cx);
+            let start = markdown.current.clone().unwrap().start;
+            let line_start = text[..start].rfind('\n').map_or(0, |i| i + 1);
+            let line = text[line_start..].lines().next().unwrap();
+            line.split(' ').nth(1).unwrap().parse().unwrap()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn f3_and_shift_f3_walk_the_matches_in_the_shown_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&paragraphs(300), cx);
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        find("with bold", &mut cx);
+        assert!(!dialog_open(&mut cx));
+        assert_eq!(current(&viewer, &mut cx).as_deref(), Some("with bold"));
+        assert_eq!(current_para(&viewer, &mut cx), 1);
+        cx.simulate_keystrokes("f3 f3");
+        assert_eq!(current_para(&viewer, &mut cx), 3);
+        cx.simulate_keystrokes("shift-f3");
+        assert_eq!(current_para(&viewer, &mut cx), 2);
+        // The match is scrolled to.
+        cx.simulate_keystrokes("end");
+        find("para 150 ", &mut cx);
+        assert_eq!(current_para(&viewer, &mut cx), 150);
+        let percent = viewer.read_with(&cx, |v, cx| v.markdown().unwrap().percent(cx));
+        assert!((20..80).contains(&percent), "{percent}");
+        // A new search starts at the top, whatever is on screen.
+        find("para 2 ", &mut cx);
+        assert_eq!(current_para(&viewer, &mut cx), 2);
+        assert_eq!(
+            cx.update(|_, cx| cx.global::<LastSearch>().0.pattern.clone()),
+            "para 2 "
+        );
+    }
+
+    #[gpui_kit::test]
+    fn without_a_match_f3_starts_at_the_top_and_shift_f3_at_the_end(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&paragraphs(5), cx);
+        cx.update(|_, cx| {
+            cx.set_global(LastSearch(Text {
+                pattern: "para".into(),
+                ..Default::default()
+            }))
+        });
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        find("", &mut cx); // keeps the last search's "para"
+        assert_eq!(current_para(&viewer, &mut cx), 1);
+        // Back to text and in again: a new view, no current match.
+        cx.simulate_keystrokes("m m");
+        settle(&mut cx);
+        cx.simulate_keystrokes("shift-f3");
+        assert_eq!(current_para(&viewer, &mut cx), 5);
+    }
+
+    #[gpui_kit::test]
+    fn no_match_shows_a_box_and_keeps_the_current_one(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&paragraphs(3), cx);
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        find("para 3", &mut cx);
+        cx.simulate_keystrokes("f3");
+        cx.run_until_parked();
+        assert!(dialog_open(&mut cx));
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(&mut cx));
+        assert_eq!(current_para(&viewer, &mut cx), 3);
+        // Markdown marks aren't in the shown text.
+        find("**", &mut cx);
+        assert!(dialog_open(&mut cx));
+    }
+
+    #[gpui_kit::test]
+    fn text_and_markdown_keep_their_own_match(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&paragraphs(5), cx);
+        find("para 4", &mut cx);
+        for _ in 0..400 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+            if !viewer.read_with(&cx, |v, _| v.searching()) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        let in_text = viewer.read_with(&cx, |v, _| v.current_match());
+        assert!(in_text.is_some());
+        cx.simulate_keystrokes("m f3");
+        assert_eq!(current_para(&viewer, &mut cx), 4, "the query carries over");
+        cx.simulate_keystrokes("m");
+        assert_eq!(viewer.read_with(&cx, |v, _| v.current_match()), in_text);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_f_starts_with_a_one_line_selection(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"word\n", cx);
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        let prefill = |cx: &mut VisualTestContext| {
+            viewer.read_with(cx, |v, cx| v.markdown().unwrap().prefill(cx))
+        };
+        assert_eq!(prefill(&mut cx), None, "nothing selected");
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(prefill(&mut cx).as_deref(), Some("word"));
+        // Not the match last found.
+        find("word", &mut cx);
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(prefill(&mut cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_f_ignores_a_selection_of_two_lines(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"one\n\ntwo\n", cx);
+        cx.simulate_keystrokes("m");
+        settle(&mut cx);
+        cx.simulate_keystrokes("ctrl-a");
+        let two_lines = viewer.read_with(&cx, |v, cx| v.markdown().unwrap().prefill(cx));
+        assert_eq!(two_lines, None);
+    }
+
+    #[gpui_kit::test]
+    fn escape_still_closes_the_viewer(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut vcx) = view(b"# Title\n", cx);
+        vcx.simulate_keystrokes("m");
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(cx.windows().is_empty());
+    }
 }

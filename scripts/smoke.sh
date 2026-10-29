@@ -88,6 +88,9 @@ printf move >"$left/movable.txt"
 printf '#!/bin/sh\necho ran >"%s/ran"\n' "$work" >"$left/run.sh"
 chmod +x "$left/run.sh"
 seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
+mkdir -p "$left/yc-pics"
+cp "$root/packaging/icons/hicolor/48x48/apps/yagni-commander.png" "$left/yc-pics/logo.png"
+printf '# Guide\n\nSome **bold** text and a [link](https://example.com).\n\nLogo: ![logo](yc-pics/logo.png) Badge: ![remote badge](https://example.com/b.svg)\n\n## Second heading\n\n- one\n- two\n\n| Key | Action |\n|-----|--------|\n| F3  | View   |\n\n```\ncode block\n```\n' >"$left/guide.md"
 head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
 mkdir -p "$left/many"
 (cd "$left/many" && seq 1 150000 | xargs touch)
@@ -626,6 +629,30 @@ check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commande
 xdotool windowfocus "$window"
 sleep 0.5
 
+echo "M: Markdown mode, search and copy there"
+typed guide
+keys F3
+xdotool windowfocus "$(xdotool search --name "guide.md - yagni-commander" | head -1)"
+sleep 0.5
+keys m
+sleep 1
+shot 10d-viewer-markdown
+keys ctrl+f
+typed "second"
+keys Return
+sleep 0.5
+shot 10e-viewer-markdown-found
+keys ctrl+a ctrl+c
+check "markdown copy is the shown text" bash -c "xclip -o -selection clipboard | grep -qx 'Second heading'"
+check "markdown copy has no marks" bash -c "! xclip -o -selection clipboard | grep -q '[#*|]'"
+check "a remote image is its alt text" bash -c "xclip -o -selection clipboard | grep -q 'Badge: remote badge'"
+keys m
+shot 10f-viewer-markdown-off
+keys Escape
+check "markdown viewer closed" bash -c '! xdotool search --name "guide.md - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+
 echo "Enter opens a zip; F3 views an entry; F5 copies entries out"
 mkdir -p "$work/browse/docs"
 printf one >"$work/browse/docs/readme.txt"
@@ -676,6 +703,12 @@ xdotool windowfocus "$(xdotool search --name "oneline.txt - yagni-commander" | h
 sleep 0.5
 keys ctrl+End
 shot 11-viewer-oneline-end
+echo "M on a 300 KB paragraph: a box, the text view stays"
+keys m
+sleep 0.5
+shot 11a-viewer-markdown-refused
+keys Return
+check "the box closed, the viewer stays" xdotool search --name "oneline.txt - yagni-commander"
 keys q
 check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-commander"'
 xdotool windowfocus "$window"

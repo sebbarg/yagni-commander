@@ -304,6 +304,10 @@ impl ViewerView {
     }
 
     pub(super) fn select_all(&mut self, cx: &mut Context<Self>) {
+        if let Some(markdown) = &self.markdown {
+            markdown.select_all(cx);
+            return;
+        }
         let column = self.hex.then_some(HexColumn::Codes);
         self.selection = Some(Selection::new(0..self.doc.len(), column));
         cx.notify();
@@ -317,6 +321,13 @@ impl ViewerView {
 
     /// Ctrl-C: the selection to the clipboard; nothing without one.
     pub(super) fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(markdown) = &self.markdown {
+            let text = markdown.selected_text(cx);
+            if !text.is_empty() {
+                cx.write_to_clipboard(ClipboardItem::new_string(text));
+            }
+            return;
+        }
         let Some(sel) = self.selection.as_ref().filter(|s| s.anchor != s.head) else {
             return;
         };

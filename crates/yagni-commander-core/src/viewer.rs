@@ -4,6 +4,7 @@
 mod copy;
 mod document;
 mod hex;
+mod images;
 mod layout;
 mod lines;
 mod search;
@@ -12,6 +13,7 @@ mod source;
 pub use copy::{COPY_CAP, Copy, TooLarge};
 pub use document::Document;
 pub use hex::{HEX_ROW, offset_digits};
+pub use images::{IMAGE_CAP, Images, has_scheme, local_image};
 pub use layout::{BLOCK, HexColumn, Highlight, MAX_ROW_CHARS, ROW_WINDOW, Row, Visible, Wrap};
 pub use lines::{LineIndex, count_lines};
 pub use search::{Direction, find};

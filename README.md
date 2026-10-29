@@ -29,7 +29,7 @@ A personal project. Bug reports are welcome; feature requests will mostly get a 
 - A mounts dropdown per panel (Alt-F1, Alt-F2, or the folder button before the path): Root, USB drives and network mounts (and Home, if it is a filesystem of its own), without the system's own mounts.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
-- A viewer (F3) that opens multi-GB files instantly.
+- A viewer (F3) that opens multi-GB files instantly, with hex (H) and formatted Markdown (M) modes.
 - Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
 - Panels follow changes made by other programs.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
