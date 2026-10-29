@@ -1385,7 +1385,7 @@ fn zip_listing(zip: &Path) -> Vec<(String, &'static str, u32, String)> {
         let mut text = String::new();
         entry.read_to_string(&mut text).unwrap();
         let mode = entry.unix_mode().unwrap_or(0) & 0o777;
-        out.push((entry.name().to_owned(), kind, mode, text));
+        out.push((entry.name().unwrap().into_owned(), kind, mode, text));
     }
     out.sort();
     out

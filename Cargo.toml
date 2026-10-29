@@ -40,7 +40,7 @@ tempfile = "3"
 # Archives (Alt-F5, Alt-F6). zip without its default codecs: Deflate (zlib-rs
 # through flate2) and Deflate64, which Windows uses for big zips;
 # aes-crypto reads AES-encrypted zips (7-Zip's and WinRAR's default).
-zip = { version = "8.6", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "jiff-02", "aes-crypto"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64", "jiff-02", "aes-crypto"] }
 tar = "0.4"
 flate2 = "1"
 bzip2 = "0.6"

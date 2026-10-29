@@ -4752,7 +4752,7 @@ mod archives {
     fn zip_names(path: &std::path::Path) -> Vec<String> {
         let mut zip = zip::ZipArchive::new(std::fs::File::open(path).unwrap()).unwrap();
         let mut names: Vec<String> = (0..zip.len())
-            .map(|i| zip.by_index(i).unwrap().name().to_owned())
+            .map(|i| zip.by_index(i).unwrap().name().unwrap().into_owned())
             .collect();
         names.sort();
         names

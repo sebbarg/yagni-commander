@@ -806,7 +806,7 @@ pub(crate) fn list_zip<R: Read + io::Seek>(
         if !each() {
             return Err(io::Error::from(io::ErrorKind::Interrupted).into());
         }
-        let name = entry.name().as_bytes().to_vec();
+        let name = entry.name()?.as_bytes().to_vec();
         let what = if entry.is_dir() {
             What::Dir
         } else if entry.is_symlink() {
