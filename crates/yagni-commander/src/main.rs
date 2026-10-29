@@ -129,8 +129,9 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
-            // No dialog slide-in or other decorative motion (owner, 2026-10-29).
-            // Set after init, so gpui-base's system reading never overrides it.
+            // No dialog slide-in (owner, 2026-10-29). Set after init, so
+            // gpui-base's system reading never overrides it. Repeating
+            // animations freeze too: see ARCHITECTURE, Gotchas.
             cx.set_reduce_motion(true);
             fonts::register(cx);
             theme.install(cx);
