@@ -781,7 +781,7 @@ impl Render for ViewerView {
                                 .py(rems_from_px(PADDING))
                                 // Room for the view's own scrollbar, drawn
                                 // over its right edge.
-                                .child(markdown.element().pr(rems_from_px(MARKDOWN_PADDING))),
+                                .child(markdown.element(cx).pr(rems_from_px(MARKDOWN_PADDING))),
                         )
                     })
                     .when(self.markdown.is_none(), |this| {

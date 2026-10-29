@@ -14,12 +14,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 
+use gpui_kit::base::TextViewStyle;
 use gpui_kit::base::text::TextView;
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::text::{RangeHighlight, TextViewState};
 use gpui_kit::{
-    App, AppContext, Entity, ImageCacheError, ImageSource, ListOffset, Resource, SharedString,
-    SharedUri, Styled, px,
+    App, AppContext, Entity, HighlightStyle, ImageCacheError, ImageSource, ListOffset, Resource,
+    SharedString, SharedUri, StyleRefinement, Styled, px, rems,
 };
 use yagni_commander_core::find::text::TextQuery;
 use yagni_commander_core::format_size;
@@ -107,9 +108,10 @@ impl Markdown {
         }
     }
 
-    pub(super) fn element(&self) -> TextView {
+    pub(super) fn element(&self, cx: &App) -> TextView {
         let images = self.images.clone();
         TextView::new(&self.state)
+            .style(text_style(cx))
             .image_source(move |url| image_source(&images, url))
             .selectable(true)
             .scrollable(true)
@@ -224,6 +226,49 @@ impl Markdown {
     }
 }
 
+/// Headings as multiples of the body text, which follows the viewer's zoom
+/// (GitHub's sizes). gpui-base's own are fixed: the same multiples of 14 px.
+const HEADING_SCALE: [f32; 6] = [2.0, 1.5, 1.25, 1.0, 0.875, 0.85];
+
+fn heading_scale(level: u8) -> f32 {
+    HEADING_SCALE[usize::from(level.clamp(1, 6)) - 1]
+}
+
+/// The view's style: gpui-component's (`base_text_view_style`, private
+/// there; a style given to the view replaces it), plus heading sizes.
+fn text_style(cx: &App) -> TextViewStyle {
+    let theme = cx.theme();
+    let radius = theme.semantic_tokens().radius.md;
+    let mut table = StyleRefinement::default();
+    table.corner_radii.top_left = Some(radius.into());
+    table.corner_radii.top_right = Some(radius.into());
+    table.corner_radii.bottom_left = Some(radius.into());
+    table.corner_radii.bottom_right = Some(radius.into());
+    let code_block = StyleRefinement {
+        corner_radii: table.corner_radii.clone(),
+        ..Default::default()
+    };
+    let table_head = StyleRefinement::default()
+        .bg(theme.table_head)
+        .text_color(theme.table_head_foreground);
+    TextViewStyle::default()
+        .with_foreground(theme.foreground)
+        .with_muted_foreground(theme.muted_foreground)
+        .with_link(theme.link)
+        .with_selection(theme.selection)
+        .with_code_background(theme.muted)
+        .with_border(theme.border)
+        .with_code_block(code_block)
+        .with_table(table)
+        .with_table_head(table_head)
+        .with_inline_code(HighlightStyle {
+            background_color: Some(theme.accent),
+            ..Default::default()
+        })
+        .with_dark(theme.is_dark())
+        .with_heading(|level| StyleRefinement::default().text_size(rems(heading_scale(level))))
+}
+
 /// An image's file, checked by `Images`. Anything else (only an image the
 /// view finds that we didn't) fails to load: never a network fetch, which
 /// the view's default source would try for a URL.
@@ -324,6 +369,16 @@ mod tests {
             });
             assert!(failed, "{url}");
         }
+    }
+
+    #[test]
+    fn headings_follow_the_body_text() {
+        assert_eq!(heading_scale(1), 2.0);
+        assert_eq!(heading_scale(2), 1.5);
+        assert_eq!(heading_scale(4), 1.0);
+        assert_eq!(heading_scale(6), 0.85);
+        assert_eq!(heading_scale(0), 2.0, "clamped");
+        assert_eq!(heading_scale(9), 0.85, "clamped");
     }
 
     #[test]
