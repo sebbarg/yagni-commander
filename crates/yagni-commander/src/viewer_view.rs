@@ -23,8 +23,8 @@ use yagni_commander_core::viewer::{
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
-    Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, LineDown, LineUp,
-    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, Start, ToggleHex, ToggleMarkdown,
+    Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, Help, LineDown, LineUp,
+    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowMarkdown, ShowText, Start,
     ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
@@ -33,6 +33,7 @@ use crate::rem_scope::RemScope;
 use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
 
+mod help;
 mod markdown;
 mod search;
 mod select;
@@ -123,6 +124,8 @@ pub struct ViewerView {
     /// Tests: what the rows last drawn showed.
     #[cfg(test)]
     shown: Shown,
+    /// The key overlay (`?`) shows.
+    help: bool,
     /// The mouse selection (a byte range), and whether a drag is extending
     /// it.
     selection: Option<Selection>,
@@ -196,6 +199,7 @@ impl ViewerView {
             search: search::SearchState::default(),
             #[cfg(test)]
             shown: Shown::default(),
+            help: false,
             selection: None,
             selecting: false,
             autoscrolling: false,
@@ -260,24 +264,36 @@ impl ViewerView {
         self.relayout(cx);
     }
 
-    /// `M`: Markdown mode, or back to the mode below it. A file too large
-    /// or with a paragraph too long stays in this mode, with a box saying
-    /// why.
-    fn toggle_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.markdown.take().is_none() {
-            let len = self.doc.len();
-            let mut bytes = Vec::new();
-            let refused = markdown::too_large(len).or_else(|| {
-                bytes = self.doc.bytes(0, len as usize);
-                markdown::too_long(&bytes)
-            });
-            if let Some(message) = refused {
-                let back = Some(self.focus.clone());
-                show_message("Markdown", message, "OK", back, window, cx);
-                return;
-            }
-            let dir = self.path.parent().unwrap_or(Path::new("/"));
-            self.markdown = Some(Markdown::new(&bytes, dir, cx));
+    /// `M`: Markdown mode, over the text or hex mode, which stays below it.
+    /// A file too large or with a paragraph too long stays in its mode,
+    /// with a box saying why.
+    fn show_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.markdown.is_some() {
+            return;
+        }
+        let len = self.doc.len();
+        let mut bytes = Vec::new();
+        let refused = markdown::too_large(len).or_else(|| {
+            bytes = self.doc.bytes(0, len as usize);
+            markdown::too_long(&bytes)
+        });
+        if let Some(message) = refused {
+            let back = Some(self.focus.clone());
+            show_message("Markdown", message, "OK", back, window, cx);
+            return;
+        }
+        let dir = self.path.parent().unwrap_or(Path::new("/"));
+        self.markdown = Some(Markdown::new(&bytes, dir, cx));
+        cx.notify();
+    }
+
+    /// `T` (`hex` false) and `H` (true): the text or hex view, also out of
+    /// Markdown mode. Text comes back in the wrap mode it had.
+    fn show_bytes(&mut self, hex: bool, cx: &mut Context<Self>) {
+        self.markdown = None;
+        if self.hex != hex {
+            self.hex = hex;
+            self.relayout(cx);
         }
         cx.notify();
     }
@@ -305,14 +321,6 @@ impl ViewerView {
         }
     }
 
-    fn toggle_hex(&mut self, cx: &mut Context<Self>) {
-        if self.markdown.is_some() {
-            return;
-        }
-        self.hex = !self.hex;
-        self.relayout(cx);
-    }
-
     /// After a mode change: the row holding the top byte goes on top.
     fn relayout(&mut self, cx: &mut Context<Self>) {
         self.h_offset = 0;
@@ -333,9 +341,12 @@ impl ViewerView {
         cx.notify();
     }
 
-    /// Escape: stops a running search, else closes the window.
+    /// Escape: closes the key overlay, else stops a running search, else
+    /// closes the window.
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.stop_search(cx) {
+        if self.help {
+            self.toggle_help(cx);
+        } else if !self.stop_search(cx) {
             window.remove_window();
         }
     }
@@ -720,12 +731,12 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &Start, _, cx| this.scroll(Scroll::Start, cx)))
             .on_action(cx.listener(|this, _: &End, _, cx| this.scroll(Scroll::End, cx)))
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
-            .on_action(cx.listener(|this, _: &ToggleHex, _, cx| this.toggle_hex(cx)))
+            .on_action(cx.listener(|this, _: &ShowText, _, cx| this.show_bytes(false, cx)))
+            .on_action(cx.listener(|this, _: &ShowHex, _, cx| this.show_bytes(true, cx)))
             .on_action(
-                cx.listener(|this, _: &ToggleMarkdown, window, cx| {
-                    this.toggle_markdown(window, cx)
-                }),
+                cx.listener(|this, _: &ShowMarkdown, window, cx| this.show_markdown(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &Help, _, cx| this.toggle_help(cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
@@ -769,6 +780,7 @@ impl Render for ViewerView {
                 // The viewer's own level: everything below sizes in rems of it.
                 RemScope::new(px(Zoom::get(cx).viewer))
                     .size_full()
+                    .relative()
                     .flex()
                     .flex_col()
                     .when_some(self.markdown.as_ref(), |this, markdown| {
@@ -822,13 +834,22 @@ impl Render for ViewerView {
                             .bg(colors.header_bg)
                             .text_size(rems_from_px(STATUS_TEXT))
                             .text_color(colors.text_secondary)
-                            .child(match error {
-                                Some(e) => div()
-                                    .text_color(colors.error)
-                                    .child(format!("Read error: {e}")),
-                                None => div().child(status),
-                            }),
-                    ),
+                            .child(
+                                match error {
+                                    Some(e) => div()
+                                        .text_color(colors.error)
+                                        .child(format!("Read error: {e}")),
+                                    None => div().child(status),
+                                }
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis(),
+                            )
+                            .child(self.help_button(cx)),
+                    )
+                    .when(self.help, |this| this.child(self.render_help(cx))),
             )
     }
 }

@@ -125,14 +125,16 @@ pub mod viewer {
             Find,
             FindNext,
             FindPrevious,
-            ToggleHex,
-            ToggleMarkdown,
+            ShowText,
+            ShowHex,
+            ShowMarkdown,
             SelectAll,
             Copy,
             ZoomIn,
             ZoomOut,
             ZoomReset,
-            Edit
+            Edit,
+            Help
         ]
     );
 }
@@ -523,8 +525,9 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("end", viewer::End, ctx),
         KeyBinding::new("ctrl-end", viewer::End, ctx),
         KeyBinding::new("w", viewer::ToggleWrap, ctx),
-        KeyBinding::new("h", viewer::ToggleHex, ctx),
-        KeyBinding::new("m", viewer::ToggleMarkdown, ctx),
+        KeyBinding::new("t", viewer::ShowText, ctx),
+        KeyBinding::new("h", viewer::ShowHex, ctx),
+        KeyBinding::new("m", viewer::ShowMarkdown, ctx),
         KeyBinding::new("left", viewer::ScrollLeft, ctx),
         KeyBinding::new("right", viewer::ScrollRight, ctx),
         KeyBinding::new("ctrl-f", viewer::Find, ctx),
@@ -543,6 +546,8 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-subtract", viewer::ZoomOut, ctx),
         KeyBinding::new("ctrl--", viewer::ZoomOut, ctx),
         KeyBinding::new("ctrl-0", viewer::ZoomReset, ctx),
+        // The typed character, so it works on every layout.
+        KeyBinding::new("?", viewer::Help, ctx),
     ]);
     if cfg!(target_os = "macos") {
         cx.bind_keys([

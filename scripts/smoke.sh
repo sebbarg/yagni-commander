@@ -623,7 +623,13 @@ check "Escape closed only the not-found box" xdotool search --name "big.txt - ya
 echo "H: hex mode, the match marked in both columns"
 keys h
 shot 10c-viewer-hex
-keys h
+echo "?: the key overlay (W dimmed in hex), Escape closes only it"
+keys question
+sleep 0.3
+shot 10c1-viewer-keys
+keys Escape
+check "Escape closed only the key overlay" xdotool search --name "big.txt - yagni-commander"
+keys t
 keys Escape
 check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
 xdotool windowfocus "$window"
@@ -637,6 +643,10 @@ sleep 0.5
 keys m
 sleep 1
 shot 10d-viewer-markdown
+keys question
+sleep 0.3
+shot 10d1-viewer-markdown-keys
+keys question
 keys ctrl+f
 typed "second"
 keys Return
@@ -646,7 +656,7 @@ keys ctrl+a ctrl+c
 check "markdown copy is the shown text" bash -c "xclip -o -selection clipboard | grep -qx 'Second heading'"
 check "markdown copy has no marks" bash -c "! xclip -o -selection clipboard | grep -q '[#*|]'"
 check "a remote image is its alt text" bash -c "xclip -o -selection clipboard | grep -q 'Badge: remote badge'"
-keys m
+keys t
 shot 10f-viewer-markdown-off
 keys Escape
 check "markdown viewer closed" bash -c '! xdotool search --name "guide.md - yagni-commander"'

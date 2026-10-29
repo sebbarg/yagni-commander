@@ -319,7 +319,7 @@ mod search {
         panic!("the search never ended");
     }
 
-    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+    pub(super) fn dialog_open(cx: &mut VisualTestContext) -> bool {
         cx.update(|window, cx| window.has_active_dialog(cx))
     }
 
@@ -679,7 +679,7 @@ mod hex {
     use super::*;
 
     #[gpui_kit::test]
-    fn h_toggles_hex_and_keeps_the_top_byte(cx: &mut TestAppContext) {
+    fn h_shows_hex_and_t_text_keeping_the_top_byte(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
         cx.simulate_keystrokes("down down down down down"); // "line 6" at 35
         let top = viewer.read_with(&cx, |v, _| v.top());
@@ -696,8 +696,14 @@ mod hex {
         assert!(rows[0].ends_with("   5.line 6.line 7"), "{}", rows[0]);
         cx.simulate_keystrokes("down");
         assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 48);
-        // Back to text: the line holding byte 48 ("line 7" starts at 42).
         cx.simulate_keystrokes("h");
+        assert_eq!(
+            viewer.read_with(&cx, |v, _| v.top()),
+            48,
+            "H again does nothing"
+        );
+        // Back to text: the line holding byte 48 ("line 7" starts at 42).
+        cx.simulate_keystrokes("t");
         assert_eq!(viewer.read_with(&cx, |v, _| v.top()), 42);
         assert_eq!(shown(&viewer, &mut cx)[0], "line 7");
     }
@@ -707,10 +713,15 @@ mod hex {
         let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
         cx.simulate_keystrokes("w h w");
         assert!(viewer.read_with(&cx, |v, _| v.hex() && !v.wraps()));
-        cx.simulate_keystrokes("h");
+        cx.simulate_keystrokes("t");
         assert!(
             viewer.read_with(&cx, |v, _| !v.hex() && !v.wraps()),
             "still no wrap"
+        );
+        cx.simulate_keystrokes("t");
+        assert!(
+            viewer.read_with(&cx, |v, _| !v.hex() && !v.wraps()),
+            "T in text does nothing"
         );
     }
 
@@ -934,7 +945,7 @@ mod select {
         drag(from, to, &mut cx);
         let before = selection(&viewer, &mut cx);
         assert!(before.is_some());
-        cx.simulate_keystrokes("w h down down pagedown pageup h w");
+        cx.simulate_keystrokes("w h down down pagedown pageup t w");
         assert_eq!(selection(&viewer, &mut cx), before);
     }
 
@@ -1363,6 +1374,8 @@ mod markdown_mode {
         assert!(text.contains("Some bold text"), "{text:?}");
         assert!(!text.contains('*') && !text.contains('#'), "{text:?}");
         cx.simulate_keystrokes("m");
+        assert!(rendered(&viewer, &mut cx).is_some(), "M again does nothing");
+        cx.simulate_keystrokes("t");
         assert!(rendered(&viewer, &mut cx).is_none());
         assert_eq!(shown(&viewer, &mut cx)[0], "# Title");
     }
@@ -1438,18 +1451,22 @@ mod markdown_mode {
     }
 
     #[gpui_kit::test]
-    fn w_h_and_left_right_do_nothing_and_m_returns_to_hex(cx: &mut TestAppContext) {
+    fn w_and_left_right_do_nothing_and_t_h_leave(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(b"# Title\n", cx);
         cx.simulate_keystrokes("h m");
         assert!(rendered(&viewer, &mut cx).is_some());
-        cx.simulate_keystrokes("w h right");
+        cx.simulate_keystrokes("w right");
         let state = |cx: &mut VisualTestContext| {
             viewer.read_with(cx, |v, _| (v.hex(), v.wraps(), v.h_offset()))
         };
         assert_eq!(state(&mut cx), (true, true, 0));
-        cx.simulate_keystrokes("m");
+        assert!(rendered(&viewer, &mut cx).is_some());
+        cx.simulate_keystrokes("t");
         assert!(rendered(&viewer, &mut cx).is_none());
-        assert!(viewer.read_with(&cx, |v, _| v.hex()), "back in hex");
+        assert_eq!(state(&mut cx), (false, true, 0), "text, from hex below");
+        cx.simulate_keystrokes("m h");
+        assert!(rendered(&viewer, &mut cx).is_none());
+        assert!(viewer.read_with(&cx, |v, _| v.hex()), "straight to hex");
     }
 
     #[gpui_kit::test]
@@ -1580,7 +1597,7 @@ mod markdown_mode {
         find("", &mut cx); // keeps the last search's "para"
         assert_eq!(current_para(&viewer, &mut cx), 1);
         // Back to text and in again: a new view, no current match.
-        cx.simulate_keystrokes("m m");
+        cx.simulate_keystrokes("t m");
         settle(&mut cx);
         cx.simulate_keystrokes("shift-f3");
         assert_eq!(current_para(&viewer, &mut cx), 5);
@@ -1621,7 +1638,7 @@ mod markdown_mode {
         assert!(in_text.is_some());
         cx.simulate_keystrokes("m f3");
         assert_eq!(current_para(&viewer, &mut cx), 4, "the query carries over");
-        cx.simulate_keystrokes("m");
+        cx.simulate_keystrokes("t");
         assert_eq!(viewer.read_with(&cx, |v, _| v.current_match()), in_text);
     }
 
@@ -1660,5 +1677,197 @@ mod markdown_mode {
         vcx.simulate_keystrokes("escape");
         vcx.run_until_parked();
         assert!(cx.windows().is_empty());
+    }
+}
+
+mod help {
+    use super::*;
+    use crate::viewer_view::help::{COLUMNS, Modes, Needs, key_label};
+
+    fn click(selector: &'static str, cx: &mut VisualTestContext) {
+        let at = bounds_of(cx, selector).center();
+        cx.simulate_click(at, gpui_kit::Modifiers::default());
+        cx.run_until_parked();
+    }
+
+    fn shows(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> bool {
+        cx.run_until_parked();
+        let state = viewer.read_with(cx, |v, _| v.shows_help());
+        assert_eq!(state, cx.debug_bounds("viewer-help").is_some(), "drawn");
+        state
+    }
+
+    #[gpui_kit::test]
+    fn question_mark_toggles_the_keys(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(&numbered(100), cx);
+        assert!(!shows(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("?");
+        assert!(shows(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("?");
+        assert!(!shows(&viewer, &mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_the_keys_before_the_window(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(&numbered(100), cx);
+        vcx.simulate_keystrokes("? escape");
+        assert!(!shows(&viewer, &mut vcx));
+        assert_eq!(cx.windows().len(), 1, "the viewer stays");
+        vcx.simulate_keystrokes("escape");
+        vcx.run_until_parked();
+        assert!(cx.windows().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn keys_work_while_the_keys_show(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(&numbered(100), cx);
+        vcx.simulate_keystrokes("? down h");
+        assert!(shows(&viewer, &mut vcx));
+        assert!(viewer.read_with(&vcx, |v, _| v.hex()));
+        assert_eq!(
+            viewer.read_with(&vcx, |v, _| v.top()),
+            0,
+            "hex row of line 2"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn question_mark_in_the_find_field_is_typed(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(&numbered(100), cx);
+        vcx.simulate_keystrokes("ctrl-f");
+        vcx.run_until_parked();
+        vcx.simulate_keystrokes("?");
+        assert!(!shows(&viewer, &mut vcx), "the field took it");
+        assert!(search::dialog_open(&mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn the_status_button_toggles_and_a_click_closes(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view(&numbered(100), cx);
+        click("viewer-help-button", &mut vcx);
+        assert!(shows(&viewer, &mut vcx));
+        click("viewer-help-button", &mut vcx);
+        assert!(!shows(&viewer, &mut vcx));
+        click("viewer-help-button", &mut vcx);
+        click("viewer-help", &mut vcx);
+        assert!(
+            !shows(&viewer, &mut vcx),
+            "a click on the overlay closes it"
+        );
+        assert_eq!(
+            viewer.read_with(&vcx, |v, _| v.selection_range()),
+            None,
+            "and selects nothing"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_button_stays_beside_a_long_status(cx: &mut TestAppContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("n".repeat(200));
+        std::fs::write(&path, b"x\n").unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let mut vcx = VisualTestContext::from_window(window, cx);
+        let status = bounds_of(&mut vcx, "viewer-status");
+        let button = bounds_of(&mut vcx, "viewer-help-button");
+        assert!(button.right() <= status.right(), "{button:?} in {status:?}");
+    }
+
+    /// Every key listed is bound in the viewer, and every viewer action has
+    /// a listed key, so the list can't drift from the keymap.
+    #[gpui_kit::test]
+    fn the_list_matches_the_keymap(cx: &mut TestAppContext) {
+        setup(cx);
+        let listed: Vec<&str> = COLUMNS
+            .iter()
+            .flat_map(|groups| groups.iter())
+            .flat_map(|(_, entries)| entries.iter())
+            .flat_map(|e| e.keys.iter().copied())
+            .collect();
+        cx.update(|cx| {
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let viewer: Vec<_> = keymap
+                .bindings()
+                .filter(|b| {
+                    b.predicate()
+                        .is_some_and(|p| p.to_string() == crate::actions::VIEWER_CONTEXT)
+                })
+                .collect();
+            let bound = |key: &str| {
+                viewer
+                    .iter()
+                    .filter(|b| matches!(b.keystrokes(), [k] if k.inner().unparse() == key))
+                    .map(|b| b.action().name())
+                    .next()
+            };
+            let mut covered = Vec::new();
+            for key in &listed {
+                let action = bound(key).unwrap_or_else(|| panic!("{key} is not bound"));
+                covered.push(action);
+            }
+            for name in cx.all_action_names() {
+                if name.starts_with("viewer::") {
+                    assert!(covered.contains(name), "{name} is not listed");
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn keys_read_like_the_menus() {
+        assert_eq!(key_label("ctrl-f"), "Ctrl-F");
+        assert_eq!(key_label("shift-f3"), "Shift-F3");
+        assert_eq!(key_label("ctrl--"), "Ctrl--");
+        assert_eq!(key_label("ctrl-="), "Ctrl-=");
+        assert_eq!(key_label("ctrl-insert"), "Ctrl-Ins");
+        assert_eq!(key_label("pagedown"), "PageDown");
+        assert_eq!(key_label("escape"), "Esc");
+        assert_eq!(key_label("w"), "W");
+        assert_eq!(key_label("?"), "?");
+        assert_eq!(key_label("up"), "Up");
+    }
+
+    #[test]
+    fn keys_that_do_nothing_now_are_dimmed() {
+        let text = Modes::default();
+        let no_wrap = Modes {
+            sideways: true,
+            ..text
+        };
+        let hex = Modes {
+            hex: true,
+            sideways: true,
+            ..text
+        };
+        let markdown = Modes {
+            markdown: true,
+            ..text
+        };
+        let archive = Modes {
+            archive: true,
+            ..text
+        };
+        assert!(!Needs::Sideways.met(text));
+        assert!(Needs::Sideways.met(no_wrap) && Needs::Sideways.met(hex));
+        assert!(!Needs::Sideways.met(Modes {
+            sideways: true,
+            ..markdown
+        }));
+        assert!(Needs::Text.met(text) && !Needs::Text.met(hex) && !Needs::Text.met(markdown));
+        assert!(Needs::NotMarkdown.met(hex) && !Needs::NotMarkdown.met(markdown));
+        assert!(!Needs::NotText.met(text) && Needs::NotText.met(hex));
+        assert!(Needs::NotText.met(markdown));
+        assert!(Needs::NotHex.met(text) && !Needs::NotHex.met(hex));
+        let markdown_over_hex = Modes {
+            markdown: true,
+            ..hex
+        };
+        assert!(Needs::NotHex.met(markdown_over_hex), "H leaves Markdown");
+        assert!(Needs::File.met(text) && !Needs::File.met(archive));
+        assert!(Needs::Always.met(markdown));
     }
 }
