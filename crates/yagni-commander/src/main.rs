@@ -129,6 +129,9 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
+            // No dialog slide-in or other decorative motion (owner, 2026-10-29).
+            // Set after init, so gpui-base's system reading never overrides it.
+            cx.set_reduce_motion(true);
             fonts::register(cx);
             theme.install(cx);
             cx.set_global(app_state.state.zoom());
