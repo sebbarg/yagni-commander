@@ -734,11 +734,25 @@ pub(crate) fn header_parts(panel: &yagni_commander_core::Panel) -> (Option<Strin
 }
 
 /// A tab's label: the folder's name, `sftp:` before it on a remote folder
-/// (the host at its root).
+/// (the host at its root), the archive's extension (`zip:`) inside an
+/// archive (the archive's name without it at its root).
 pub(crate) fn tab_label(panel: &yagni_commander_core::Panel) -> String {
     use yagni_commander_core::remote;
     if panel.in_results() {
         return "Results".into();
+    }
+    if let Some(index) = panel.archive()
+        && let Some((prefix, stem)) = index
+            .file()
+            .file_name()
+            .and_then(yagni_commander_core::file_ops::tab_prefix)
+    {
+        let name = if panel.path() == index.file() {
+            stem
+        } else {
+            label(panel.path())
+        };
+        return format!("{prefix}:{name}");
     }
     match remote::parse(panel.path()) {
         Some(location) => {

@@ -4450,7 +4450,7 @@ mod open_file {
     use super::*;
 
     /// A stand-in for xdg-open that writes its argument to `out`.
-    fn use_recording_opener(
+    pub(super) fn use_recording_opener(
         dir: &std::path::Path,
         cx: &mut VisualTestContext,
     ) -> std::path::PathBuf {
@@ -4483,7 +4483,7 @@ mod open_file {
         file_manager(cx).update(cx, |this, _| this.opener = opener.into());
     }
 
-    fn opened(out: &std::path::Path, cx: &mut VisualTestContext) -> String {
+    pub(super) fn opened(out: &std::path::Path, cx: &mut VisualTestContext) -> String {
         wait_until(cx, |_| {
             std::fs::read_to_string(out).is_ok_and(|s| s.ends_with('\n'))
         });
@@ -5524,6 +5524,77 @@ mod archive_browsing {
         );
         assert_eq!(viewers(cx), 0);
         assert_eq!(copies(&temp), 0);
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_file_inside_opens_a_read_only_copy(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+        let (_tmp, _commander, cx) = inside_zip(cx);
+        let temp = use_temp_dir(cx);
+        let scratch = tempfile::tempdir().unwrap();
+        let out = super::open_file::use_recording_opener(scratch.path(), cx);
+        cx.simulate_keystrokes("end enter"); // README
+        let opened = std::path::PathBuf::from(super::open_file::opened(&out, cx));
+        assert!(
+            opened.starts_with(temp.path().join("viewer-tmp")),
+            "{opened:?}"
+        );
+        assert_eq!(opened.file_name().unwrap(), "README");
+        assert_eq!(std::fs::read_to_string(&opened).unwrap(), "r");
+        let mode = std::fs::metadata(&opened).unwrap().permissions().mode();
+        assert_eq!(mode & 0o222, 0, "read-only: {mode:o}");
+        assert!(!dialog_open(cx));
+        assert_eq!(viewers(cx), 0, "the opener, not the viewer");
+        assert_eq!(copies(&temp), 1, "kept for the application");
+    }
+
+    #[gpui_kit::test]
+    fn enter_on_a_link_inside_explains(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        let temp = use_temp_dir(cx);
+        let file = std::fs::File::create(tmp.path().join("links.tar")).unwrap();
+        let mut builder = tar::Builder::new(file);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        builder.append_link(&mut header, "zlink", "target").unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        let ix = labels(&commander, Side::Left, cx)
+            .iter()
+            .position(|l| l == "links.tar")
+            .unwrap();
+        commander.update(cx, |c, _| {
+            c.execute(Command::CursorTo(Side::Left, ix));
+        });
+        cx.simulate_keystrokes("enter end enter");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot open file\nOnly files can be opened inside an archive."
+        );
+        assert_eq!(copies(&temp), 0);
+    }
+
+    #[gpui_kit::test]
+    fn the_tab_says_which_archive_format(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = inside_zip(cx);
+        let label = |cx: &mut VisualTestContext| {
+            commander.read_with(cx, |c, _| crate::panel_view::tab_label(c.panel(Side::Left)))
+        };
+        assert_eq!(label(cx), "zip:pkg", "the root: the archive's name");
+        cx.simulate_keystrokes("down enter"); // src
+        cx.run_until_parked();
+        assert_eq!(label(cx), "zip:src");
+        cx.simulate_keystrokes("backspace backspace");
+        cx.run_until_parked();
+        assert!(
+            !label(cx).contains(':'),
+            "out of the archive: {}",
+            label(cx)
+        );
     }
 
     #[gpui_kit::test]

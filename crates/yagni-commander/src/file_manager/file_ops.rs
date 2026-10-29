@@ -128,11 +128,13 @@ pub(crate) struct RunningJob {
     pub(super) then_edit: Option<PathBuf>,
 }
 
-/// A private copy of an archive entry for the viewer. Dropping it (Cancel,
-/// a failure, the viewer window closing) deletes the folder.
+/// A private copy of an archive entry for the viewer, or (`open`, Enter) for
+/// the system's opener. Dropping it (Cancel, a failure, the viewer window
+/// closing) deletes the folder; an opened copy is kept until the app quits.
 struct Viewing {
     dir: tempfile::TempDir,
     file: PathBuf,
+    open: bool,
 }
 
 #[cfg(test)]
@@ -423,10 +425,12 @@ impl FileManager {
         }
     }
 
-    /// F3 inside an archive: extracts the entry under the cursor into a
-    /// fresh private folder; `finish_job` opens the viewer on it.
+    /// F3 (or Enter, `open`) inside an archive: extracts the entry under the
+    /// cursor into a fresh private folder; `finish_job` opens the viewer, or
+    /// the system's opener, on it.
     pub(super) fn view_in_archive(
         &mut self,
+        open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> io::Result<()> {
@@ -440,7 +444,7 @@ impl FileManager {
                 entry.name.clone(),
             )
         };
-        self.view_copy(&name, window, cx, |file| Operation::ExtractEntries {
+        self.view_copy(&name, open, window, cx, |file| Operation::ExtractEntries {
             archive,
             inner,
             names: vec![name.clone()],
@@ -460,17 +464,19 @@ impl FileManager {
             let entry = panel.cursor_entry().expect("view_file checked");
             (panel.cursor_path(), entry.name.clone())
         };
-        self.view_copy(&name, window, cx, |file| Operation::Copy {
+        self.view_copy(&name, false, window, cx, |file| Operation::Copy {
             sources: vec![source],
             to: Destination::As(file),
         })
     }
 
     /// Runs `operation`, which copies a file to the path it is given (named
-    /// `name`, in a fresh private folder), as a View job.
+    /// `name`, in a fresh private folder), as a View job; `open`: for the
+    /// opener, not the viewer.
     fn view_copy(
         &mut self,
         name: &std::ffi::OsStr,
+        open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
         operation: impl FnOnce(PathBuf) -> Operation,
@@ -487,9 +493,28 @@ impl FileManager {
         let file = dir.path().join(name);
         self.start_job(Kind::View, operation(file.clone()), window, cx)?;
         if let Some(running) = &mut self.job {
-            running.viewing = Some(Viewing { dir, file });
+            running.viewing = Some(Viewing { dir, file, open });
         }
         Ok(())
+    }
+
+    /// Enter inside an archive, once the copy is made: read-only (changes
+    /// can't go back into the archive), kept until the app quits (the
+    /// application may read it any time), handed to the opener.
+    fn open_copy(
+        &mut self,
+        dir: tempfile::TempDir,
+        file: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = dir.keep();
+        if let Ok(meta) = std::fs::metadata(file) {
+            let mode = meta.permissions().mode() & !0o222;
+            let _ = std::fs::set_permissions(file, std::fs::Permissions::from_mode(mode));
+        }
+        self.open_with_opener(file, window, cx);
     }
 
     pub(super) fn trash(&mut self, kind: Kind, window: &mut Window, cx: &mut Context<Self>) {
@@ -994,6 +1019,10 @@ impl FileManager {
                     cx,
                 );
             } else if let (Some(viewing), false) = (running.viewing, report.cancelled) {
+                if viewing.open {
+                    self.open_copy(viewing.dir, &viewing.file, window, cx);
+                    return;
+                }
                 let main = window.window_bounds();
                 if let Err(e) =
                     crate::viewer_view::open(viewing.file, main, Some(viewing.dir), None, cx)

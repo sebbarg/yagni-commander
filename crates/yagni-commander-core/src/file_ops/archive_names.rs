@@ -44,6 +44,16 @@ impl Format {
     }
 }
 
+/// What a tab says before a folder inside an archive: the archive's own
+/// extension, lower case, without the dot (`zip`, `tar.gz`, `tgz`), and the
+/// archive's name without it (the tab's name at the archive's root).
+pub fn tab_prefix(name: &OsStr) -> Option<(String, String)> {
+    let (len, _) = extension(name)?;
+    let lower = name.to_string_lossy().to_lowercase();
+    let prefix = lower[lower.len() - len + 1..].to_owned();
+    Some((prefix, stem(name).to_string_lossy().into_owned()))
+}
+
 pub fn is_archive(path: &Path) -> bool {
     path.file_name()
         .is_some_and(|name| Format::from_name(name).is_some())
@@ -110,6 +120,18 @@ mod tests {
 
     fn os(s: &str) -> &OsStr {
         OsStr::new(s)
+    }
+
+    #[test]
+    fn tab_prefix_is_the_extension_and_the_rest_of_the_name() {
+        let prefix = |name: &str| tab_prefix(OsStr::new(name));
+        let pair = |a: &str, b: &str| Some((a.to_owned(), b.to_owned()));
+        assert_eq!(prefix("foobar.zip"), pair("zip", "foobar"));
+        assert_eq!(prefix("Src.Tar.GZ"), pair("tar.gz", "Src"));
+        assert_eq!(prefix("x.tgz"), pair("tgz", "x"));
+        assert_eq!(prefix("a.b.tar.zst"), pair("tar.zst", "a.b"));
+        assert_eq!(prefix(".zip"), pair("zip", "archive"));
+        assert_eq!(prefix("notes.txt"), None);
     }
 
     #[test]

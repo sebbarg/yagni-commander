@@ -116,6 +116,8 @@ pub(crate) enum Enter {
     File(PathBuf),
     /// A file on a remote folder: it can't be run or opened.
     Remote,
+    /// A file inside an archive: the UI extracts a copy to open.
+    InArchive,
     None,
 }
 
@@ -172,6 +174,8 @@ pub(crate) enum Activation {
     File(PathBuf),
     /// The cursor is on a file of a remote folder.
     Remote,
+    /// The cursor is on a file inside an archive.
+    InArchive,
     /// Nothing to activate (empty listing).
     None,
 }
@@ -307,7 +311,7 @@ impl Panel {
             // No archives in archives, nothing runs from one or a remote
             // folder.
             EntryKind::File if self.is_remote() => Enter::Remote,
-            EntryKind::File if self.in_archive() => Enter::None,
+            EntryKind::File if self.in_archive() => Enter::InArchive,
             EntryKind::File if Format::from_name(&entry.name).is_some() => {
                 let file = self.path.join(&entry.name);
                 Enter::Dir(Navigation {
@@ -757,6 +761,7 @@ impl Panel {
             Enter::Dir(nav) => self.follow(nav).map(|()| Activation::Navigated),
             Enter::File(path) => Ok(Activation::File(path)),
             Enter::Remote => Ok(Activation::Remote),
+            Enter::InArchive => Ok(Activation::InArchive),
             Enter::None => Ok(Activation::None),
         }
     }

@@ -31,7 +31,7 @@ pub(crate) mod extract;
 mod pack;
 mod safe_dir;
 mod vfs;
-pub use archive_names::{Format, is_archive};
+pub use archive_names::{Format, is_archive, tab_prefix};
 pub use compare::{Comparison, Difference};
 pub use edit::{RemoteStamp, Uploaded, copy_stamp, remote_stamp, upload_edit};
 

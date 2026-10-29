@@ -333,6 +333,7 @@ impl FileManager {
         });
         match outcome {
             Outcome::OpenFile(path) => self.open_file(&path, window, cx),
+            Outcome::ArchiveFile => self.copy_out_of_archive(true, window, cx),
             Outcome::RemoteFile => show_error(
                 "On a remote folder",
                 yagni_commander_core::remote::OPEN_ON_REMOTE,
@@ -342,6 +343,29 @@ impl FileManager {
             ),
             Outcome::Done => {}
         }
+    }
+
+    /// A file for the system's opener only, never run (a copy taken out of
+    /// an archive).
+    pub(super) fn open_with_opener(
+        &mut self,
+        path: &std::path::Path,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let refocus = Some(self.focus.clone());
+        let (failed, failure) = std::sync::mpsc::channel::<String>();
+        let (path, opener) = (path.to_path_buf(), self.opener.clone());
+        std::thread::spawn(move || {
+            let report = failed.clone();
+            let started = launch::open_with(&opener, &path, move |message| {
+                let _ = report.send(message);
+            });
+            if let Err(e) = started {
+                let _ = failed.send(e.to_string());
+            }
+        });
+        report_failure(failure, "Cannot open file", refocus, window, cx);
     }
 
     /// A program (see `launch::is_program`) runs in its folder; anything
@@ -448,6 +472,35 @@ impl FileManager {
         );
     }
 
+    /// F3 (or Enter, `open`) on a file inside an archive: a private copy for
+    /// the viewer or the system's opener. Only files: a symlink entry is
+    /// refused.
+    fn copy_out_of_archive(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let (title, refusal) = if open {
+            (
+                "Cannot open file",
+                "Only files can be opened inside an archive.",
+            )
+        } else {
+            (
+                "Cannot view file",
+                "Only files can be viewed inside an archive.",
+            )
+        };
+        let refused = self
+            .active_panel(cx)
+            .cursor_entry()
+            .is_some_and(|e| e.is_symlink);
+        let result = if refused {
+            Err(std::io::Error::other(refusal))
+        } else {
+            self.view_in_archive(open, window, cx)
+        };
+        if let Err(e) = result {
+            show_error(title, e.to_string(), Some(self.focus.clone()), window, cx);
+        }
+    }
+
     /// F3: view the file under the cursor in a new window. Directories and
     /// ".." do nothing; files that can't be viewed (FIFOs, devices,
     /// unreadable files) show an error.
@@ -463,17 +516,18 @@ impl FileManager {
         {
             return;
         }
-        if panel.in_archive() || panel.is_remote() {
+        if panel.in_archive() {
+            self.copy_out_of_archive(false, window, cx);
+            return;
+        }
+        if panel.is_remote() {
             let refused = panel.cursor_entry().is_some_and(|e| e.is_symlink);
-            let result = match (refused, panel.is_remote()) {
-                (true, false) => Err(std::io::Error::other(
-                    "Only files can be viewed inside an archive.",
-                )),
-                (true, true) => Err(std::io::Error::other(
+            let result = if refused {
+                Err(std::io::Error::other(
                     "Symlinks can't be viewed on a remote folder yet.",
-                )),
-                (false, false) => self.view_in_archive(window, cx),
-                (false, true) => self.view_remote(window, cx),
+                ))
+            } else {
+                self.view_remote(window, cx)
             };
             if let Err(e) = result {
                 show_error(

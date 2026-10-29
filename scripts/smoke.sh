@@ -678,6 +678,11 @@ check "one temp folder for the run" bash -c '[[ $(compgen -G "$1/yagni-commander
 check "its private copy deleted" bash -c '[[ -z $(find "$1"/yagni-commander-* -mindepth 1) ]]' _ "$work/tmp"
 xdotool windowfocus "$window"
 sleep 0.5
+echo "Enter on an entry: a read-only copy for xdg-open"
+typed readme
+keys Escape Return
+sleep 0.5
+check "xdg-open got a read-only copy of readme.txt" bash -c 'f=$(tail -1 "$1"); [[ $f == "$2"/yagni-commander-*/view-*/readme.txt && $(cat "$f") == one && ! -w $f ]]' _ "$work/opened" "$work/tmp"
 keys ctrl+a F5
 sleep 0.5
 keys Return

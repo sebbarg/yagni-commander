@@ -96,6 +96,8 @@ pub enum Outcome {
     OpenFile(PathBuf),
     /// Enter was pressed on a file of a remote folder.
     RemoteFile,
+    /// Enter was pressed on a file inside an archive.
+    ArchiveFile,
 }
 
 /// One side's folders at startup and which one is in front.
@@ -1230,6 +1232,7 @@ impl Commander {
                 }
                 Enter::File(path) => return Outcome::OpenFile(path),
                 Enter::Remote => return Outcome::RemoteFile,
+                Enter::InArchive => return Outcome::ArchiveFile,
                 Enter::None => Ok(()),
             },
         };
@@ -3142,10 +3145,10 @@ mod archive_tests {
     }
 
     #[test]
-    fn enter_on_a_file_inside_does_nothing() {
+    fn enter_on_a_file_inside_asks_the_ui_to_open_a_copy() {
         let (_tmp, _zip, mut c) = inside();
         put_cursor(&mut c, "README");
-        assert_eq!(c.execute(Command::Activate), Outcome::Done);
+        assert_eq!(c.execute(Command::Activate), Outcome::ArchiveFile);
         assert!(c.take_requests().is_empty());
     }
 
