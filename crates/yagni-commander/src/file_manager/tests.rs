@@ -7691,6 +7691,23 @@ mod remote_folders {
     }
 
     #[gpui_kit::test]
+    fn an_upload_refreshes_the_panels_showing_the_folder(cx: &mut TestAppContext) {
+        let (tmp, _temp, commander, cx) = editing(cx);
+        cx.simulate_keystrokes("f4");
+        wait_until(cx, |cx| !job_running(cx));
+        save(cx, "a longer text");
+        let f = |cx: &mut VisualTestContext| {
+            commander.read_with(cx, |c, _| {
+                let entry = c.panel(Side::Left).entries().iter().find(|e| e.name == "f");
+                entry.map(|e| (e.size, e.modified)).unwrap()
+            })
+        };
+        watch_until(cx, |cx| f(cx).0 == Some(13));
+        let on_host = std::fs::metadata(tmp.path().join("f")).unwrap();
+        assert_eq!(f(cx).1, Some(on_host.modified().unwrap()));
+    }
+
+    #[gpui_kit::test]
     fn a_remote_file_changed_meanwhile_asks_before_uploading(cx: &mut TestAppContext) {
         let (tmp, _temp, _commander, cx) = editing(cx);
         cx.simulate_keystrokes("f4");

@@ -16,7 +16,7 @@ use gpui_kit::{Context, Focusable, InteractiveElement, ParentElement, Window, di
 use yagni_commander_core::file_ops::{
     Destination, Operation, RemoteStamp, Report, Uploaded, copy_stamp, upload_edit,
 };
-use yagni_commander_core::launch;
+use yagni_commander_core::{launch, remote};
 
 use super::FileManager;
 use super::commands::{
@@ -109,8 +109,7 @@ impl FileManager {
                 .ok_or_else(|| io::Error::other("no folder for temporary files"))?;
             yagni_commander_core::storage::private_dir(&root)?;
             let dir = tempfile::Builder::new().prefix("edit-").tempdir_in(&root)?;
-            let name = yagni_commander_core::remote::file_name(&remote)
-                .ok_or_else(|| io::Error::other("not a file"))?;
+            let name = remote::file_name(&remote).ok_or_else(|| io::Error::other("not a file"))?;
             let file = dir.path().join(name);
             let operation = Operation::Copy {
                 sources: vec![remote.clone()],
@@ -234,7 +233,17 @@ impl FileManager {
                 };
                 edited.uploading = None;
                 match result {
-                    Ok(Uploaded::Done(stamp)) => edited.stamp = Some(stamp),
+                    Ok(Uploaded::Done(stamp)) => {
+                        edited.stamp = Some(stamp);
+                        // Remote folders aren't watched: show the new size
+                        // and time in each side on the file's folder.
+                        if let Some(folder) = remote::parent(&edited.remote) {
+                            self.commander.update(cx, |c, cx| {
+                                c.watch_changed(&folder);
+                                cx.notify();
+                            });
+                        }
+                    }
                     Ok(Uploaded::Changed) => {
                         let remote = edited.remote.clone();
                         self.ask_overwrite(remote, window, cx);
@@ -278,7 +287,7 @@ impl FileManager {
     fn ask_overwrite(&mut self, remote: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // The save happened in the editor, another window.
         ask_for_attention(window);
-        let name = yagni_commander_core::remote::file_name(&remote)
+        let name = remote::file_name(&remote)
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
