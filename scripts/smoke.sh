@@ -781,7 +781,7 @@ check "zoomed viewer closed" bash -c '! xdotool search --name "big.txt - yagni-c
 xdotool windowfocus "$window"
 sleep 0.5
 
-echo "remote folder: Ctrl-F (a tab of its own), F7, F5 down, F4 with an upload, F8"
+echo "remote folder: Ctrl-F (a tab of its own), F7, F5 down, F4 with an upload, F8, Ctrl-Shift-T"
 keys ctrl+f
 shot 13a-connect
 typed smokehost
@@ -807,6 +807,12 @@ keys Escape F8
 shot 13c-remote-delete
 keys Return
 check "F8 deleted on the host" test ! -e "$remote/made-remotely"
+rm -f "$work/terminal-ran-in"
+keys ctrl+shift+t
+shot 13d-remote-terminal
+keys Return
+check "Ctrl-Shift-T copied the ssh command" clipboard "ssh -t smokehost 'cd $remote; exec \"\$SHELL\" -l'"
+check "and started the terminal in home" has "$work/terminal-ran-in" "$HOME"
 # Closing it brings its right neighbor (docs) to the front; back one.
 keys ctrl+w ctrl+shift+Tab
 check "the local tab it was opened from, in front again" title_is "$left"

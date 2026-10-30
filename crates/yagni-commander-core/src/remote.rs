@@ -62,6 +62,25 @@ pub fn parse(path: &Path) -> Option<Location<'_>> {
     })
 }
 
+/// The command that opens a shell in the remote folder `path`, for the
+/// user to paste into a terminal (Ctrl-Shift-T on a host): `ssh -t host`
+/// running `cd` and then a login shell; plain `ssh host` for the login
+/// folder. A folder that is gone leaves the shell in the login folder, under
+/// the `cd` error. `None` for a local path or one that is not UTF-8 (the
+/// clipboard takes text) or holds a NUL.
+pub fn shell_command(path: &Path) -> Option<String> {
+    let location = parse(path)?;
+    let host = shlex::try_quote(location.host).ok()?;
+    if location.path.is_empty() {
+        return Some(format!("ssh {host}"));
+    }
+    let dir = shlex::try_quote(std::str::from_utf8(location.path).ok()?).ok()?;
+    let remote = shlex::try_quote(&format!("cd {dir}; exec \"$SHELL\" -l"))
+        .ok()?
+        .into_owned();
+    Some(format!("ssh -t {host} {remote}"))
+}
+
 pub fn is_remote(path: &Path) -> bool {
     path.as_os_str().as_bytes().starts_with(SCHEME.as_bytes())
 }
@@ -609,6 +628,50 @@ fn owner_of(long_name: &[u8], attrs: Attrs) -> Option<String> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn shell_command_opens_a_shell_in_the_folder() {
+        assert_eq!(
+            shell_command(Path::new("sftp://web/srv/www")).as_deref(),
+            Some("ssh -t web 'cd /srv/www; exec \"$SHELL\" -l'")
+        );
+        assert_eq!(
+            shell_command(Path::new("sftp://me@web")).as_deref(),
+            Some("ssh me@web")
+        );
+        assert_eq!(shell_command(Path::new("/srv/www")), None);
+        assert_eq!(
+            shell_command(Path::new(std::ffi::OsStr::from_bytes(b"sftp://web/\xff"))),
+            None
+        );
+    }
+
+    #[test]
+    fn shell_command_quotes_survive_both_shells() {
+        // The local shell splits the pasted line, the remote one runs the
+        // last word: here `sh` stands in for the host, with a `$SHELL`
+        // that prints the folder it starts in.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("it's a \"$HOME\" `x` folder");
+        std::fs::create_dir(&dir).unwrap();
+        let shell = tmp.path().join("shell");
+        std::fs::write(&shell, "#!/bin/sh\npwd\n").unwrap();
+        std::fs::set_permissions(&shell, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let remote = format!("sftp://web{}", dir.display());
+        let words = shlex::split(&shell_command(Path::new(&remote)).unwrap()).unwrap();
+        assert_eq!(words[..3], ["ssh", "-t", "web"]);
+        let out = Command::new("sh")
+            .arg("-c")
+            .arg(&words[3])
+            .env("SHELL", &shell)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim_end(),
+            dir.to_str().unwrap()
+        );
+    }
 
     /// Every remote host is this machine, through a local `sftp-server`;
     /// on host `dies-soon` the server ends after 0.3 s.

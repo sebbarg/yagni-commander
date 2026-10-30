@@ -6696,6 +6696,73 @@ mod open_terminal {
         assert!(text.starts_with("Cannot open a terminal"), "{text}");
         assert!(text.contains("no-such-terminal-here"), "{text}");
     }
+
+    /// The left panel on a host, a recording terminal, and the command the
+    /// box offers for that folder.
+    fn on_host(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        Entity<Commander>,
+        std::path::PathBuf,
+        String,
+        &mut VisualTestContext,
+    ) {
+        let (tmp, commander, cx) = super::remote_folders::on_remote(cx);
+        let out = use_recording_terminal(tmp.path(), cx);
+        let remote = path(&commander, Side::Left, cx);
+        let command = yagni_commander_core::remote::shell_command(&remote).unwrap();
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.simulate_keystrokes("ctrl-shift-t");
+        assert!(dialog_open(cx));
+        (tmp, commander, out, command, cx)
+    }
+
+    #[gpui_kit::test]
+    fn on_a_host_enter_copies_the_ssh_command_and_starts_a_terminal_in_home(
+        cx: &mut TestAppContext,
+    ) {
+        let (_tmp, _commander, out, command, cx) = on_host(cx);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(clipboard_text(cx).as_deref(), Some(command.as_str()));
+        let home = yagni_commander_core::storage::home_dir();
+        assert_eq!(started_in(&out, cx), home.display().to_string());
+    }
+
+    #[gpui_kit::test]
+    fn copy_only_starts_no_terminal(cx: &mut TestAppContext) {
+        let (_tmp, _commander, out, command, cx) = on_host(cx);
+        cx.simulate_keystrokes("left enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(clipboard_text(cx).as_deref(), Some(command.as_str()));
+        for _ in 0..10 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        assert!(!out.exists());
+    }
+
+    #[gpui_kit::test]
+    fn cancel_and_escape_copy_nothing(cx: &mut TestAppContext) {
+        let (_tmp, commander, out, _command, cx) = on_host(cx);
+        cx.simulate_keystrokes("right enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        cx.simulate_keystrokes("ctrl-shift-t");
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(clipboard_text(cx).as_deref(), Some("before"));
+        assert!(!out.exists());
+        // Focus is back on the panels: the keys move the cursor again.
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
 }
 
 mod zoom {
@@ -7494,7 +7561,7 @@ mod remote_folders {
 
     /// `open_with_target` (the right panel on `a`), with the left panel on
     /// the same folder as a remote one, its cursor on `f`.
-    fn on_remote(
+    pub(super) fn on_remote(
         cx: &mut TestAppContext,
     ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
         use_local_server();
@@ -8620,6 +8687,26 @@ pub(crate) mod tab_order {
         assert_focus(cx, "button:Dismiss", &named);
         assert_order(cx, "tab", &["button:Dismiss"; 2], &named);
         assert_order(cx, "shift-tab", &["button:Dismiss"; 2], &named);
+    }
+
+    #[gpui_kit::test]
+    fn the_remote_terminal_box_goes_round_its_buttons(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = super::remote_folders::on_remote(cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-shift-t");
+        assert_focus(cx, "button:Copy and start terminal", &[]);
+        let order = [
+            "button:Cancel",
+            "button:Copy only",
+            "button:Copy and start terminal",
+        ];
+        assert_order(cx, "tab", &order, &[]);
+        let back = [
+            "button:Copy only",
+            "button:Cancel",
+            "button:Copy and start terminal",
+        ];
+        assert_order(cx, "shift-tab", &back, &[]);
     }
 
     #[gpui_kit::test]

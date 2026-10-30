@@ -395,17 +395,96 @@ impl FileManager {
     }
 
     /// Ctrl-Shift-T: a terminal in the active panel's real folder (an
-    /// archive's folder inside one). Started on a thread: finding the
-    /// terminal stats files, which could hang on a dead mount.
+    /// archive's folder inside one). On a host, a box offers the ssh command
+    /// for the folder, to paste into a terminal started in home: telling a
+    /// terminal to run a command takes each emulator's own syntax.
     pub(super) fn open_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.active_loading(cx) {
             return;
         }
         self.end_search(cx);
-        if self.active_panel(cx).is_remote() && self.refuse_read_only(window, cx) {
+        if self.active_panel(cx).is_remote() {
+            self.offer_ssh_command(window, cx);
             return;
         }
         let dir = self.active_panel(cx).real_dir().to_path_buf();
+        self.start_terminal(dir, window, cx);
+    }
+
+    /// The box for Ctrl-Shift-T on a host: Copy only, Copy and start
+    /// terminal (the default), Cancel.
+    fn offer_ssh_command(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let focus = self.focus.clone();
+        let Some(command) = remote::shell_command(self.active_panel(cx).path()) else {
+            let text = "The folder's name is not valid UTF-8, so it can't go into a command.";
+            show_error("Cannot open a terminal", text, Some(focus), window, cx);
+            return;
+        };
+        let copy_and_close = {
+            let (command, focus) = (command.clone(), focus.clone());
+            move |window: &mut Window, cx: &mut App| {
+                cx.write_to_clipboard(ClipboardItem::new_string(command.clone()));
+                window.close_dialog(cx);
+                focus.focus(window, cx);
+            }
+        };
+        let copy_only: OnPress = Rc::new(copy_and_close.clone());
+        let this = cx.entity().downgrade();
+        let copy_and_start: OnPress = Rc::new(move |window, cx| {
+            copy_and_close(window, cx);
+            let home = yagni_commander_core::storage::home_dir();
+            let _ = this.update(cx, |fm, cx| fm.start_terminal(home, window, cx));
+        });
+        let cancel: OnPress = Rc::new({
+            let focus = focus.clone();
+            move |window, cx| {
+                window.close_dialog(cx);
+                focus.focus(window, cx);
+            }
+        });
+        let buttons = ButtonRow::build(
+            [
+                ("Copy only", copy_only),
+                ("Copy and start terminal", copy_and_start),
+                ("Cancel", cancel),
+            ],
+            1,
+            cx,
+        );
+        focus_when_open(buttons.focus_handle(cx), window, cx);
+        let command = SharedString::from(command);
+        use gpui_kit::InteractiveElement;
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let focus = focus.clone();
+            themed_dialog(dialog, cx)
+                .title("Open terminal here")
+                .w(crate::zoom::dialog_width(520.0, cx))
+                .close_button(false)
+                .child(
+                    gpui_kit::div()
+                        .debug_selector(|| "ssh-command".into())
+                        .flex()
+                        .flex_col()
+                        .gap(crate::zoom::rems_from_px(8.0))
+                        .child("Copy the ssh command for this folder to the clipboard, and start a new terminal to paste it into?")
+                        .child(
+                            gpui_kit::div()
+                                .font_family(crate::fonts::MONO_FAMILY)
+                                .child(command.clone()),
+                        ),
+                )
+                .footer(buttons.clone())
+                .on_cancel(move |_, window, cx| {
+                    let focus = focus.clone();
+                    window.defer(cx, move |window, cx| focus.focus(window, cx));
+                    true
+                })
+        });
+    }
+
+    /// Starts the terminal in `dir`, on a thread: finding the terminal stats
+    /// files, which could hang on a dead mount.
+    fn start_terminal(&self, dir: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let command = self.terminal.clone();
         let (failed, failure) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
