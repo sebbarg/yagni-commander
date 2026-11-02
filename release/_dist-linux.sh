@@ -37,10 +37,10 @@ if (( ${#foreign[@]} )); then
     printf '%s\n' "${foreign[@]}" >&2
     exit 1
 fi
-install -m755 "$root/scripts/install-linux.sh" "$stage/install.sh"
-cp "$root/packaging/icons/$app.svg" "$stage/icons/"
-cp -R "$root/packaging/icons/hicolor" "$stage/icons/"
-"$root/scripts/copy-licenses.sh" "$stage"
+install -m755 "$root/install/install-linux.sh" "$stage/install.sh"
+cp "$root/app-icon/$app.svg" "$stage/icons/"
+cp -R "$root/app-icon/hicolor" "$stage/icons/"
+"$root/packaging/copy-licenses.sh" "$stage"
 tar -czf "$stage.tar.gz" -C "$(dirname "$stage")" "$name"
 rm -rf "$stage"
 echo "$stage.tar.gz"

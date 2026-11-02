@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Installs yagni-commander for the current user, with a launcher entry and
-# the app icon, so the desktop's app menu finds it. In the repository it
-# builds a release binary first; in a release tarball (as `install.sh`,
-# next to the binary and `icons/`, see dist-linux.sh) it installs those.
+# the app icon, so the desktop's app menu finds it. It builds nothing: in
+# the repository it installs the release build (./build.sh first),
+# in a release tarball (as `install.sh`, next to the binary and `icons/`,
+# see release/_dist-linux.sh) the files next to it.
 #
-#   scripts/install-linux.sh             install into ~/.local
-#   scripts/install-linux.sh uninstall   remove what install put there
+#   install/install-linux.sh             install into ~/.local
+#   install/install-linux.sh uninstall   remove what install put there
 #
-# PREFIX (default ~/.local) moves the whole install; it must be writable
-# by you, since the build never runs as root.
+# PREFIX (default ~/.local) moves the whole install.
 set -euo pipefail
 
 app=yagni-commander
@@ -45,10 +45,9 @@ if [[ -x $here/$app && -d $here/icons ]]; then
     art=$here/icons
 else
     root=$(cd "$here/.." && pwd)
-    cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-    "$cargo" build --release --manifest-path "$root/Cargo.toml" -p $app
     built=$root/target/release/$app
-    art=$root/packaging/icons
+    art=$root/app-icon
+    [[ -x $built ]] || { echo "$0: no release build; run ./build.sh first" >&2; exit 1; }
 fi
 
 install -Dm755 "$built" "$bin"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes the app icon, everything in packaging/icons/.
+"""Writes the app icon, everything in app-icon/.
 
 Drawn from scratch by construction (no fonts, no traced artwork), so the
 icon is the project's own and MIT like the rest:
@@ -38,7 +38,7 @@ import cairosvg
 from shapely import affinity, unary_union
 from shapely.geometry import LineString, MultiPolygon, Polygon, box
 
-OUT = Path(__file__).resolve().parent.parent / "packaging" / "icons"
+OUT = Path(__file__).resolve().parent.parent / "app-icon"
 
 PINK = "#FF1F8E"
 ORANGE = "#FF8A00"

@@ -1,5 +1,5 @@
 # Pushing a tag `v<version>` (the version in crates/yagni-commander/Cargo.toml)
-# builds the macOS zip and the Linux tarball with the scripts in `scripts/`
+# builds the macOS zip and the Linux tarball with the scripts in `release/`
 # and uploads them as a draft GitHub Release, published by hand once tried.
 # Actions are pinned to commit SHAs.
 name: Release
@@ -21,7 +21,7 @@ jobs:
         run: |
           version=$(cargo pkgid -p yagni-commander | sed 's/.*[#@]//')
           [[ "v$version" == "$GITHUB_REF_NAME" ]] || { echo "tag $GITHUB_REF_NAME, crate $version"; exit 1; }
-      - run: scripts/bundle-mac.sh --dist
+      - run: release/_dist-mac.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: macos
@@ -40,7 +40,7 @@ jobs:
             libxkbcommon-x11-dev libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev
       - run: rustup update stable && rustup default stable
-      - run: scripts/dist-linux.sh
+      - run: release/_dist-linux.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: linux
@@ -63,7 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           # The curl installer, set to install this release.
-          sed "s/@VERSION@/${GITHUB_REF_NAME#v}/" scripts/install.sh > dist/install.sh
+          sed "s/@VERSION@/${GITHUB_REF_NAME#v}/" install/install.sh > dist/install.sh
           (cd dist && sha256sum -- * > SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --draft

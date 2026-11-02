@@ -4,7 +4,7 @@
 # origin, which starts the release workflow. It asks once, before the slow
 # part, so nothing waits for an answer at the end.
 #
-#   scripts/release.sh 0.2.0
+#   release/release.sh 0.2.0
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)

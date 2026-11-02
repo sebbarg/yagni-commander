@@ -98,15 +98,15 @@ Install Rust with [rustup](https://rustup.rs/) (1.95 or newer; an older one stop
 Then:
 
 ```sh
-cargo run --release -- [left-folder] [right-folder]
+./run.sh [left-folder] [right-folder]
 ```
 
 Without folders it reopens the ones from the last run.
 
 To install your build as an app with its icon:
 
-- **Linux:** `scripts/install-linux.sh` puts the binary in `~/.local/bin`, plus a launcher entry and icons under `~/.local/share`, so it shows in the app menu. `scripts/install-linux.sh uninstall` removes them.
-- **macOS:** `scripts/bundle-mac.sh` builds `yagni-commander.app` and copies it to `~/Applications`, where Finder, Launchpad and Spotlight find it.
+- **Linux:** `./build.sh && install/install-linux.sh` puts the binary in `~/.local/bin`, plus a launcher entry and icons under `~/.local/share`, so it shows in the app menu. `install/install-linux.sh uninstall` removes them.
+- **macOS:** `./build.sh && install/install-mac.sh` builds `yagni-commander.app` and copies it to `~/Applications`, where Finder, Launchpad and Spotlight find it.
 
 ## Configuration
 
@@ -121,7 +121,9 @@ Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `
 
 ## Development
 
-`cargo test --workspace`, `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. The remote-folder tests run OpenSSH's `sftp-server` locally in place of a host (no server is started): `sudo apt install openssh-sftp-server` on Kubuntu; Arch's `openssh` and macOS have it already; elsewhere point `YAGNI_SFTP_SERVER` at it. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
+`./build.sh` and `./run.sh` build (and run) a release build (on macOS `build.sh` also makes the `.app`), `--debug` for a debug one; `./clean.sh` removes the build output.
+
+`./test.sh` (`cargo test --workspace`), `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. The remote-folder tests run OpenSSH's `sftp-server` locally in place of a host (no server is started): `sudo apt install openssh-sftp-server` on Kubuntu; Arch's `openssh` and macOS have it already; elsewhere point `YAGNI_SFTP_SERVER` at it. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
 
 - [SPEC.md](SPEC.md): what the app does, and why.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the code is organized, technical decisions, known issues.
@@ -134,7 +136,7 @@ The version lives in one place, `version` under `[workspace.package]` in the roo
 
 ```sh
 git push
-scripts/release.sh 1.1.0    # asks once, then sets the version, updates Cargo.lock, runs the tests, commits, tags v1.1.0 and pushes
+release/release.sh 1.1.0    # asks once, then sets the version, updates Cargo.lock, runs the tests, commits, tags v1.1.0 and pushes
 ```
 
 The script asks for confirmation before the slow part, then runs to the end on its own. It pushes the release commit and the tag with `git push --atomic origin main v1.1.0`: both or neither, so a release is never built from a commit that isn't on `main`. The tag starts the release workflow. If the push fails, the commit and tag stay local and the script prints that command to retry.
