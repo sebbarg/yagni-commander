@@ -9,9 +9,9 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")" && pwd)
 cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-profile=(--release)
-[[ ${1:-} == --debug ]] && { profile=(); shift; }
-"$cargo" build "${profile[@]}" --manifest-path "$root/Cargo.toml" -p yagni-commander "$@"
-if [[ ${#profile[@]} -gt 0 && $(uname) == Darwin ]]; then
+profile=--release
+[[ ${1:-} == --debug ]] && { profile=; shift; }
+"$cargo" build ${profile:+"$profile"} --manifest-path "$root/Cargo.toml" -p yagni-commander "$@"
+if [[ $profile && $(uname) == Darwin ]]; then
     "$root/packaging/bundle-mac.sh"
 fi

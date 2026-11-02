@@ -7,6 +7,6 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")" && pwd)
 cargo=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-profile=(--release)
-[[ ${1:-} == --debug ]] && { profile=(); shift; }
-exec "$cargo" run "${profile[@]}" --manifest-path "$root/Cargo.toml" -p yagni-commander -- "$@"
+profile=--release
+[[ ${1:-} == --debug ]] && { profile=; shift; }
+exec "$cargo" run ${profile:+"$profile"} --manifest-path "$root/Cargo.toml" -p yagni-commander -- "$@"
