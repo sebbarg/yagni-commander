@@ -635,13 +635,11 @@ check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commande
 xdotool windowfocus "$window"
 sleep 0.5
 
-echo "M: Markdown mode, search and copy there"
+echo "a .md file opens in Markdown mode; search and copy there"
 typed guide
 keys F3
 xdotool windowfocus "$(xdotool search --name "guide.md - yagni-commander" | head -1)"
-sleep 0.5
-keys m
-sleep 1
+sleep 1.5
 shot 10d-viewer-markdown
 keys question
 sleep 0.3

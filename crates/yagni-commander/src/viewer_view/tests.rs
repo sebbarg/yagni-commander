@@ -1380,19 +1380,48 @@ mod markdown_mode {
         assert_eq!(shown(&viewer, &mut cx)[0], "# Title");
     }
 
-    #[gpui_kit::test]
-    fn a_md_file_still_opens_as_text(cx: &mut TestAppContext) {
+    /// A viewer on a file named `name` holding `bytes`, opened as F3 does.
+    fn view_named(
+        name: &str,
+        bytes: &[u8],
+        search: Option<Text>,
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<ViewerView>, VisualTestContext) {
         setup(cx);
         let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("README.md");
-        std::fs::write(&path, "# Title\n").unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        let path = tmp.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, search, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
-        let mut vcx = VisualTestContext::from_window(window, cx);
-        assert!(rendered(&viewer, &mut vcx).is_none());
+        (tmp, viewer, VisualTestContext::from_window(window, cx))
+    }
+
+    #[gpui_kit::test]
+    fn a_md_file_opens_as_markdown(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("README.md", b"# Title\n", None, cx);
+        assert_eq!(rendered(&viewer, &mut vcx).as_deref(), Some("Title\n"));
+        vcx.simulate_keystrokes("t");
         assert_eq!(shown(&viewer, &mut vcx)[0], "# Title");
+    }
+
+    #[gpui_kit::test]
+    fn a_md_file_over_the_cap_opens_as_text_without_a_box(cx: &mut TestAppContext) {
+        let long = vec![b'a'; super::super::markdown::PARAGRAPH_CAP as usize + 1];
+        let (_tmp, viewer, mut vcx) = view_named("long.markdown", &long, None, cx);
+        assert!(rendered(&viewer, &mut vcx).is_none());
+        assert!(!dialog_open(&mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn a_md_file_opened_for_a_search_opens_as_text(cx: &mut TestAppContext) {
+        let text = Text {
+            pattern: "Title".into(),
+            ..Text::default()
+        };
+        let (_tmp, viewer, mut vcx) = view_named("README.md", b"# Title\n", Some(text), cx);
+        assert!(rendered(&viewer, &mut vcx).is_none());
     }
 
     #[gpui_kit::test]

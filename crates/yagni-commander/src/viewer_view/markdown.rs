@@ -37,6 +37,12 @@ pub(super) const CAP: u64 = 1 << 20;
 /// 4 MiB ~65 s).
 pub(super) const PARAGRAPH_CAP: u64 = 64 << 10;
 
+/// A name F3 opens in Markdown mode: `.md` or `.markdown`, any case.
+pub(super) fn is_markdown_name(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
 /// Why a file of `len` bytes can't be shown, before it is read.
 pub(super) fn too_large(len: u64) -> Option<String> {
     (len > CAP).then(|| {
@@ -312,6 +318,16 @@ mod tests {
         }
         .compile()
         .unwrap()
+    }
+
+    #[test]
+    fn md_and_markdown_names_start_in_markdown_mode() {
+        for name in ["README.md", "a.MD", "notes.markdown", "x.Markdown"] {
+            assert!(is_markdown_name(Path::new(name)), "{name}");
+        }
+        for name in ["md", ".md", "a.mdx", "a.md.txt", "a"] {
+            assert!(!is_markdown_name(Path::new(name)), "{name}");
+        }
     }
 
     #[test]

@@ -69,6 +69,8 @@ pub fn window_title(path: &Path) -> String {
 /// `temp`: the private copy of an archive entry that `path` is in, deleted
 /// with the window.
 /// `search`: Alt-F7's text, searched for from the start of the file.
+/// A Markdown file (by its extension) opens in Markdown mode, unless it is
+/// opened for a search, whose match is in the file's text.
 pub fn open(
     path: PathBuf,
     main: WindowBounds,
@@ -85,9 +87,13 @@ pub fn open(
     };
     let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| {
+            let markdown = search.is_none() && markdown::is_markdown_name(&path);
             let mut view = ViewerView::new(path, source, temp, window, cx);
             if let Some(text) = search {
                 view.search_from_start(text, window, cx);
+            } else if markdown {
+                // Over the limits it stays text, quietly: nobody asked.
+                let _ = view.try_markdown(cx);
             }
             view
         })
@@ -268,8 +274,16 @@ impl ViewerView {
     /// A file too large or with a paragraph too long stays in its mode,
     /// with a box saying why.
     fn show_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(message) = self.try_markdown(cx) {
+            let back = Some(self.focus.clone());
+            show_message("Markdown", message, "OK", back, window, cx);
+        }
+    }
+
+    /// Markdown mode, or why the file can't be shown so.
+    fn try_markdown(&mut self, cx: &mut Context<Self>) -> Result<(), String> {
         if self.markdown.is_some() {
-            return;
+            return Ok(());
         }
         let len = self.doc.len();
         let mut bytes = Vec::new();
@@ -278,13 +292,12 @@ impl ViewerView {
             markdown::too_long(&bytes)
         });
         if let Some(message) = refused {
-            let back = Some(self.focus.clone());
-            show_message("Markdown", message, "OK", back, window, cx);
-            return;
+            return Err(message);
         }
         let dir = self.path.parent().unwrap_or(Path::new("/"));
         self.markdown = Some(Markdown::new(&bytes, dir, cx));
         cx.notify();
+        Ok(())
     }
 
     /// `T` (`hex` false) and `H` (true): the text or hex view, also out of
