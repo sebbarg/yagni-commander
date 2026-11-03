@@ -13,6 +13,7 @@ pub mod file_ops;
 pub mod find;
 mod format;
 mod fs_ops;
+pub mod git;
 pub mod hotlist;
 pub mod icons;
 pub mod info;

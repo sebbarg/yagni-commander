@@ -18,6 +18,7 @@ pub(crate) mod commands;
 mod connect;
 mod file_ops;
 mod find;
+mod git;
 mod loads;
 mod open_with;
 mod properties;
@@ -124,6 +125,8 @@ pub struct FileManager {
     /// The folder each watcher was last pointed at. Watchers aren't tied
     /// to a side: their reports name the folder.
     watched: [Option<PathBuf>; 2],
+    /// The Git branch in the path headers.
+    git: git::Heads,
     /// Where the watchers report changes; tests report through it by hand.
     #[cfg(test)]
     changes: futures::channel::mpsc::UnboundedSender<yagni_commander_core::watch::Report>,
@@ -202,6 +205,7 @@ impl FileManager {
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
                 this.watch_panels(cx);
+                this.sync_git(cx);
                 AppState::remember_panels(&commander, cx);
                 this.update_title(window, cx);
                 this.update_menus(cx);
@@ -214,7 +218,10 @@ impl FileManager {
             // not open the menu; an open menu closes.
             cx.observe_window_activation(window, |this, window, cx| {
                 this.activated_at = Some(cx.background_executor().now());
-                if !window.is_window_active() {
+                // A commit in a terminal changes no file the watcher sees.
+                if window.is_window_active() {
+                    this.refresh_git(None, cx);
+                } else {
                     this.alt_armed = false;
                     // Like the menu, the hotlist popup closes.
                     this.close_hotlist(window, cx);
@@ -288,6 +295,7 @@ impl FileManager {
             // its own thread would upset gpui's test scheduler.
             watchers: (!cfg!(test)).then(|| watch::spawn_watchers(&changes)),
             watched: [None, None],
+            git: git::Heads::new(!cfg!(test)),
             #[cfg(test)]
             changes,
             settings: None,
@@ -672,7 +680,11 @@ impl FileManager {
                 self.notice = Some(problem.into());
             }
         }
+        let git_changed = config.git != old.git;
         cx.global_mut::<CurrentConfig>().config = config;
+        if git_changed {
+            self.sync_git(cx);
+        }
         cx.notify();
     }
 
@@ -952,6 +964,7 @@ impl Render for FileManager {
                 this.watched = [None, None];
                 this.execute(Command::Reload, cx);
                 this.reload_config(cx);
+                this.reload_git(cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))

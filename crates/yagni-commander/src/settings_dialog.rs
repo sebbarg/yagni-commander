@@ -328,12 +328,18 @@ impl Render for SettingsView {
                     .flex()
                     .flex_col()
                     .gap(crate::zoom::rems_from_px(8.0))
-                    .child("Columns")
+                    .child("Panels")
                     .child(switch(
                         "settings-icons",
                         "Icons",
                         config.icons,
                         Setting::Icons,
+                    ))
+                    .child(switch(
+                        "settings-git",
+                        "Git branch in the path header",
+                        config.git,
+                        Setting::Git,
                     ))
                     .child(switch(
                         "settings-modified",

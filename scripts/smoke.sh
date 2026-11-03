@@ -84,6 +84,11 @@ mkdir -p "$left/docs" "$left/.config" "$right"
 printf hello >"$left/notes.txt"
 printf secret >"$left/.hidden"
 printf old >"$right/notes.txt"
+# The right folder is a Git repository: its path header shows "main"
+# (01-start), and "main •" once files are copied there.
+git -C "$right" -c init.defaultBranch=main init -q
+git -C "$right" add notes.txt
+git -C "$right" -c user.name=smoke -c user.email=smoke@example.com commit -qm smoke
 printf move >"$left/movable.txt"
 printf '#!/bin/sh\necho ran >"%s/ran"\n' "$work" >"$left/run.sh"
 chmod +x "$left/run.sh"
@@ -515,7 +520,7 @@ keys ctrl+comma Tab Tab Tab space Escape
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab Tab space
 shot 07g-owner-hidden
 keys Escape
 check "show_owner saved" grep -q "^show_owner = false" "$cfg"
@@ -526,6 +531,13 @@ check "icons = false saved" grep -q "^icons = false" "$cfg"
 shot 07h-icons-off
 keys ctrl+comma Tab Tab Tab Tab Tab Tab space Escape
 check "icons = true saved" grep -q "^icons = true" "$cfg"
+
+echo "settings: the Git switch hides the branch in the right panel's header"
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Escape
+check "git = false saved" grep -q "^git = false" "$cfg"
+shot 07h1-git-off
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Escape
+check "git = true saved" grep -q "^git = true" "$cfg"
 
 echo "a big folder loads in the background"
 typed many

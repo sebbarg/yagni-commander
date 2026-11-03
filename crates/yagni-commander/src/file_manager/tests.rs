@@ -8785,6 +8785,8 @@ pub(crate) mod tab_order {
             "Dialog",
             "Dialog",
             "days",
+            // Icons, Git branch, Modified, Owner, Permissions.
+            "Dialog",
             "Dialog",
             "Dialog",
             "Dialog",
@@ -8847,5 +8849,174 @@ pub(crate) mod tab_order {
             "Input",
         ];
         assert_order(cx, "shift-tab", &back, &[]);
+    }
+}
+
+mod git_branch {
+    use super::*;
+
+    /// Runs git in `dir` for test setup, with a fixed identity and branch.
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let ok = std::process::Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(["-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "git {args:?}");
+    }
+
+    /// Makes `a` (with a folder `sub`) a repository with one commit.
+    fn make_repo(tmp: &tempfile::TempDir) -> std::path::PathBuf {
+        let repo = tmp.path().join("a");
+        std::fs::create_dir(repo.join("sub")).unwrap();
+        std::fs::write(repo.join("sub/x"), "x").unwrap();
+        git(&repo, &["init", "-q"]);
+        git(&repo, &["add", "."]);
+        git(&repo, &["commit", "-qm", "x"]);
+        repo
+    }
+
+    fn label(cx: &mut VisualTestContext, side: Side) -> Option<String> {
+        file_manager(cx).read_with(cx, |this, _| this.git_label(side))
+    }
+
+    /// Left panel into `a` (the repository), right stays outside.
+    fn open_repo(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        &mut VisualTestContext,
+    ) {
+        let (tmp, _commander, cx) = open(cx);
+        let repo = make_repo(&tmp);
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        (tmp, repo, cx)
+    }
+
+    #[gpui_kit::test]
+    fn the_header_shows_the_branch_inside_a_repository(cx: &mut TestAppContext) {
+        let (_tmp, _repo, cx) = open_repo(cx);
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"));
+        assert!(cx.debug_bounds("git-left").is_some());
+        assert_eq!(label(cx, Side::Right), None, "not a repository");
+        assert!(cx.debug_bounds("git-right").is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_branch_follows_the_folder_in_and_out(cx: &mut TestAppContext) {
+        let (_tmp, _repo, cx) = open_repo(cx);
+        // Into `sub` (".." first, then `sub`, then `.git` is hidden).
+        cx.simulate_keystrokes("down enter");
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"));
+        cx.simulate_keystrokes("backspace backspace");
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left), None, "left the repository");
+    }
+
+    #[gpui_kit::test]
+    fn a_watcher_report_shows_a_change(cx: &mut TestAppContext) {
+        let (_tmp, repo, cx) = open_repo(cx);
+        std::fs::write(repo.join("new"), "n").unwrap();
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"), "not yet");
+        assert!(cx.debug_bounds("git-dirty-left").is_none());
+        changed(cx, Side::Left);
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main •"));
+        assert!(
+            cx.debug_bounds("git-dirty-left").is_some(),
+            "the dot is drawn"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn activating_the_window_shows_a_commit_made_elsewhere(cx: &mut TestAppContext) {
+        let (_tmp, repo, cx) = open_repo(cx);
+        std::fs::write(repo.join("new"), "n").unwrap();
+        activate(cx);
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main •"));
+        git(&repo, &["add", "new"]);
+        git(&repo, &["commit", "-qm", "new"]);
+        git(&repo, &["checkout", "-qb", "topic"]);
+        cx.deactivate_window();
+        cx.run_until_parked();
+        activate(cx);
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("topic"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_shows_a_new_repository(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        assert_eq!(label(cx, Side::Left), None);
+        git(tmp.path(), &["init", "-q"]);
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main •"));
+        assert_eq!(label(cx, Side::Right).as_deref(), Some("main •"));
+    }
+
+    #[gpui_kit::test]
+    fn not_inside_an_archive(cx: &mut TestAppContext) {
+        let (_tmp, repo, cx) = open_repo(cx);
+        make_zip(&repo.join("z.zip"), &[("in.txt", "x")]);
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        // "..", "sub", "z.zip".
+        cx.simulate_keystrokes("end enter");
+        cx.run_until_parked();
+        let commander = commander_of(cx);
+        assert!(commander.read_with(cx, |c, _| c.panel(Side::Left).in_archive()));
+        assert_eq!(label(cx, Side::Left), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_setting_turns_it_off_and_on(cx: &mut TestAppContext) {
+        let (_tmp, _repo, cx) = open_repo(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        click(cx, "settings-git", 1);
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left), None);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "git = false"), "{text}");
+        click(cx, "settings-git", 1);
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_applies_a_hand_edited_git_key(cx: &mut TestAppContext) {
+        let (_tmp, _repo, cx) = open_repo(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        std::fs::write(&path, "git = false\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        cx.run_until_parked();
+        assert_eq!(label(cx, Side::Left), None);
+    }
+
+    #[gpui_kit::test]
+    fn on_threads_the_branch_arrives_after_the_listing(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        make_repo(&tmp);
+        file_manager(cx).update(cx, |this, _| this.git = super::super::git::Heads::new(true));
+        cx.simulate_keystrokes("down enter");
+        wait_until(cx, |cx| label(cx, Side::Left).is_some());
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"));
+        // Within the repository nothing blinks: the label stays while the
+        // new folder is looked up.
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(label(cx, Side::Left).as_deref(), Some("main"));
+        cx.simulate_keystrokes("backspace backspace");
+        wait_until(cx, |cx| label(cx, Side::Left).is_none());
     }
 }

@@ -61,7 +61,7 @@ enum State {
 /// folder about once a second; if reading it takes longer, the re-reads
 /// would run back to back. So after a slow quiet read, the next one waits
 /// as long as that one took: at most half the time is spent reading.
-fn rest(last: Option<(Instant, Duration)>, now: Instant) -> Instant {
+pub(super) fn rest(last: Option<(Instant, Duration)>, now: Instant) -> Instant {
     match last {
         Some((ended, took)) if took >= SLOW_READ => (ended + took).max(now),
         _ => now,

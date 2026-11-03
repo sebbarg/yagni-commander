@@ -32,6 +32,7 @@ A personal project. Bug reports are welcome; feature requests will mostly get a 
 - A viewer (F3) that opens multi-GB files instantly, with text (T), hex (H) and formatted Markdown (M) modes.
 - Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
 - Panels follow changes made by other programs.
+- The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
 - Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
 

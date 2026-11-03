@@ -29,6 +29,8 @@ pub struct Config {
     pub show_permissions: bool,
     /// A Nerd Font icon in front of every name (see [`crate::icons`]).
     pub icons: bool,
+    /// The Git branch in the path header (see [`crate::git`]).
+    pub git: bool,
     /// The theme's id (`tokyo-night`, `gruvbox-dark`, `everforest-dark`,
     /// `catppuccin-latte`, `classic`); none
     /// means the default. Not checked here: the app knows the themes.
@@ -48,6 +50,7 @@ impl Default for Config {
             show_owner: true,
             show_permissions: true,
             icons: true,
+            git: true,
             theme: None,
             hotlist: Vec::new(),
         }
@@ -78,6 +81,10 @@ show_permissions = true
 # An icon in front of every name.
 icons = true
 
+# The Git branch in the path header, with commits ahead and behind its
+# upstream and a dot when something changed.
+git = true
+
 # Color theme: "tokyo-night" (the default), "gruvbox-dark", "everforest-dark",
 # "catppuccin-latte" or "classic".
 # theme = "tokyo-night"
@@ -105,6 +112,7 @@ pub enum Setting {
     ShowOwner(bool),
     ShowPermissions(bool),
     Icons(bool),
+    Git(bool),
     Theme(String),
 }
 
@@ -139,6 +147,7 @@ impl Config {
             Setting::ShowOwner(on) => self.show_owner = *on,
             Setting::ShowPermissions(on) => self.show_permissions = *on,
             Setting::Icons(on) => self.icons = *on,
+            Setting::Git(on) => self.git = *on,
             Setting::Theme(id) => self.theme = Some(id.clone()),
         }
     }
@@ -184,6 +193,7 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
         Setting::ShowOwner(on) => doc["show_owner"] = toml_edit::value(*on),
         Setting::ShowPermissions(on) => doc["show_permissions"] = toml_edit::value(*on),
         Setting::Icons(on) => doc["icons"] = toml_edit::value(*on),
+        Setting::Git(on) => doc["git"] = toml_edit::value(*on),
         Setting::Theme(id) => doc["theme"] = toml_edit::value(id.as_str()),
     }
     let text = doc.to_string();
@@ -431,6 +441,7 @@ mod tests {
             show_owner: true,
             show_permissions: false,
             icons: false,
+            git: false,
             theme: Some("classic".into()),
             hotlist: vec![entry("&Src", "~/src")],
         };
@@ -619,6 +630,21 @@ case_sensitive_sort = false
         assert!(!config.icons);
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.lines().any(|l| l == "icons = false"), "{text}");
+        assert!(text.starts_with("# my settings"));
+    }
+
+    #[test]
+    fn the_git_setting_is_on_by_default_saved_and_set() {
+        let config: Config = toml::from_str("editor = \"vim\"").unwrap();
+        assert!(config.git);
+        assert!(TEMPLATE.lines().any(|l| l == "git = true"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, HAND_WRITTEN).unwrap();
+        let config = save_setting(&path, &Setting::Git(false)).unwrap();
+        assert!(!config.git);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "git = false"), "{text}");
         assert!(text.starts_with("# my settings"));
     }
 

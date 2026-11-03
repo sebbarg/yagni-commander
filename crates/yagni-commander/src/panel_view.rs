@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     App, Context, Div, Entity, FocusHandle, MouseButton, MouseDownEvent, Rgba, ScrollStrategy,
-    Subscription, UniformListScrollHandle, Window, div, prelude::*, px, relative, uniform_list,
+    SharedString, Subscription, UniformListScrollHandle, Window, div, prelude::*, px, relative,
+    uniform_list,
 };
 use yagni_commander_core::{
     Command, Commander, Entry, EntryKind, PanelId, Side, SortKey, Summary, format_size,
@@ -66,6 +67,9 @@ pub struct PanelView {
     /// focus in the active window, so an open popup or dialog, a menu, or
     /// another app in front mutes it.
     focus: FocusHandle,
+    /// The Git branch shown at the right of the path header
+    /// (`file_manager/git.rs`).
+    git: Option<(SharedString, bool)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -100,6 +104,7 @@ impl PanelView {
             level: Zoom::get(cx).ui,
             split: crate::file_manager::START_SPLIT,
             focus,
+            git: None,
             _subscriptions: vec![subscription, zoom],
         }
     }
@@ -454,6 +459,72 @@ impl PanelView {
     }
 }
 
+/// The Git dot's diameter: between `•` and `●` in the UI font.
+const DIRTY_DOT: f32 = 7.0;
+
+impl PanelView {
+    /// The Git branch for the path header and whether anything changed,
+    /// `None` for none.
+    pub(crate) fn set_git(&mut self, git: Option<(SharedString, bool)>, cx: &mut Context<Self>) {
+        if self.git != git {
+            self.git = git;
+            cx.notify();
+        }
+    }
+
+    /// The branch at the right of the path header, after a branch glyph
+    /// while icons are on, and a dot when anything changed: drawn, not a
+    /// character, since `•` is tiny and `●` large in the UI font. A long
+    /// branch name is cut before the path is.
+    fn git_part(&self, icons: bool, is_active: bool, colors: &Colors) -> Option<Div> {
+        let (label, dirty) = self.git.clone()?;
+        let color = if is_active {
+            colors.text_secondary
+        } else {
+            colors.text_dim
+        };
+        Some(
+            div()
+                .debug_selector(|| format!("git-{}", side_name(self.side)))
+                .ml_auto()
+                .flex()
+                .flex_shrink(1.0)
+                .min_w(rems_from_px(40.0))
+                .max_w(relative(0.5))
+                .items_center()
+                .gap(rems_from_px(4.0))
+                .whitespace_nowrap()
+                .text_color(color)
+                .when(icons, |d| {
+                    d.child(
+                        div()
+                            .flex_none()
+                            .font_family(icons::FONT_FAMILY)
+                            .child(icons::GIT_BRANCH.to_string()),
+                    )
+                })
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(label),
+                )
+                .when(dirty, |d| {
+                    d.child(
+                        div()
+                            .debug_selector(|| format!("git-dirty-{}", side_name(self.side)))
+                            .flex_none()
+                            .ml(rems_from_px(2.0))
+                            .size(rems_from_px(DIRTY_DOT))
+                            .rounded_full()
+                            .bg(color),
+                    )
+                }),
+        )
+    }
+}
+
 impl Render for PanelView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tabs = self.render_tabs(cx);
@@ -520,7 +591,8 @@ impl Render for PanelView {
                                 .child(path),
                         )
                 }
-            });
+            })
+            .children(self.git_part(commander.shows_icons(), is_active, colors));
 
         // The quick search box sits in the active panel's footer while open.
         let search = commander.search().filter(|_| is_active).map(|prefix| {

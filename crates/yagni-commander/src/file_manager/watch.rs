@@ -2,7 +2,8 @@
 //! (see core `watch`, `Commander::watch_changed` and
 //! `Commander::watch_started`). The watchers call back on their own
 //! threads; a channel brings each report to one task on the UI thread,
-//! which waits without polling.
+//! which waits without polling. A change also runs the folder's `git
+//! status` again (`file_manager/git.rs`).
 
 use std::path::PathBuf;
 
@@ -35,6 +36,9 @@ impl FileManager {
         cx.spawn_in(window, async move |this, cx| {
             while let Some(report) = received.next().await {
                 let alive = this.update(cx, |this, cx| {
+                    if let Report::Changed(dir) = &report {
+                        this.refresh_git(Some(dir), cx);
+                    }
                     this.commander.update(cx, |c, cx| {
                         match report {
                             Report::Changed(dir) => c.watch_changed(&dir),

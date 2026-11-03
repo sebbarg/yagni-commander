@@ -19,6 +19,8 @@ const EXECUTABLE: char = '\u{f489}';
 pub(crate) const HOME: char = '\u{f10b5}';
 /// nf-fa-folder_open: before the path in a panel's path header.
 pub const CURRENT_FOLDER: char = '\u{f07c}';
+/// nf-oct-git_branch: before the branch in a panel's path header.
+pub const GIT_BRANCH: char = '\u{f418}';
 
 /// Folders with their own icon, matched by exact name. Sorted by name.
 const SPECIAL_FOLDERS: &[(&str, char)] = &[
@@ -131,6 +133,7 @@ mod tests {
             ("EXECUTABLE", EXECUTABLE),
             ("HOME", HOME),
             ("CURRENT_FOLDER", CURRENT_FOLDER),
+            ("GIT_BRANCH", GIT_BRANCH),
         ];
         let all = table::FILE_NAMES
             .iter()
