@@ -61,6 +61,7 @@ main() {
     esac
 
     need curl
+    [ $uninstall = 1 ] || echo "installing $APP $VERSION"
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
 
