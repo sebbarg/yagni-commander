@@ -213,12 +213,35 @@ impl SettingsView {
     }
 }
 
+/// The dialog's width at 100%: two columns, or one in a narrow window.
+const TWO_COLUMNS_WIDTH: f32 = 640.0;
+const ONE_COLUMN_WIDTH: f32 = 480.0;
+/// Room the window keeps beside the two-column dialog (px, not zoomed).
+const WINDOW_MARGIN: f32 = 32.0;
+
+/// Two columns (general settings left, Panels right) while the window has
+/// room for them at the current zoom, else one; checked on every render.
+fn two_columns(window: &Window, cx: &App) -> bool {
+    window.viewport_size().width
+        >= crate::zoom::dialog_width(TWO_COLUMNS_WIDTH, cx) + gpui_kit::px(WINDOW_MARGIN)
+}
+
+fn dialog_width(window: &Window, cx: &App) -> gpui_kit::Pixels {
+    let width = if two_columns(window, cx) {
+        TWO_COLUMNS_WIDTH
+    } else {
+        ONE_COLUMN_WIDTH
+    };
+    crate::zoom::dialog_width(width, cx)
+}
+
 impl Render for SettingsView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = Theme::get(cx).colors.clone();
         let current = cx.global::<CurrentConfig>();
         let (config, problem) = (current.config.clone(), current.problem.clone());
         let disabled = problem.is_some();
+        let two = two_columns(window, cx);
         let this = cx.entity().downgrade();
         let switch =
             |id: &'static str, label: &'static str, on: bool, make: fn(bool) -> Setting| {
@@ -234,18 +257,32 @@ impl Render for SettingsView {
                         }),
                 )
             };
-        div()
-            .flex()
-            .flex_col()
-            .gap(crate::zoom::rems_from_px(12.0))
-            .when_some(problem, |d, problem| {
-                d.child(
-                    div()
-                        .debug_selector(|| "settings-problem".into())
-                        .text_color(colors.error)
-                        .child(format!("{problem}. Fix the file, then press Ctrl-R.")),
-                )
-            })
+        let column = || div().flex().flex_col().gap(crate::zoom::rems_from_px(12.0));
+        let hint = |text: SharedString| {
+            div()
+                .text_color(colors.text_secondary)
+                .text_size(crate::zoom::rems_from_px(12.0))
+                .child(text)
+        };
+        // Under both columns when there are two, so the long path wraps less.
+        let log_dir = self.log_dir_text().map(|text| {
+            div()
+                .id("settings-log-dir")
+                .debug_selector(|| "settings-log-dir".into())
+                .text_color(colors.text_secondary)
+                .text_size(crate::zoom::rems_from_px(12.0))
+                .cursor_pointer()
+                .hover(|style| style.text_color(colors.text))
+                .on_click(cx.listener(|this, _, _, cx| this.copy_log_dir(cx)))
+                .child(text)
+        });
+        let (log_dir_inside, log_dir_below) = if two {
+            (None, log_dir)
+        } else {
+            (log_dir, None)
+        };
+
+        let general = column()
             .child(
                 div()
                     .flex()
@@ -295,25 +332,8 @@ impl Render for SettingsView {
                             .w(crate::zoom::rems_from_px(120.0))
                             .child(text_field(&self.days)),
                     )
-                    .child(
-                        div()
-                            .text_color(colors.text_secondary)
-                            .text_size(crate::zoom::rems_from_px(12.0))
-                            .child("Older log files are deleted at startup."),
-                    )
-                    .when_some(self.log_dir_text(), |d, text| {
-                        d.child(
-                            div()
-                                .id("settings-log-dir")
-                                .debug_selector(|| "settings-log-dir".into())
-                                .text_color(colors.text_secondary)
-                                .text_size(crate::zoom::rems_from_px(12.0))
-                                .cursor_pointer()
-                                .hover(|style| style.text_color(colors.text))
-                                .on_click(cx.listener(|this, _, _, cx| this.copy_log_dir(cx)))
-                                .child(text),
-                        )
-                    })
+                    .child(hint("Older log files are deleted at startup.".into()))
+                    .children(log_dir_inside)
                     .when_some(self.days_error, |d, message| {
                         d.child(
                             div()
@@ -322,50 +342,62 @@ impl Render for SettingsView {
                                 .child(message),
                         )
                     }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(crate::zoom::rems_from_px(8.0))
-                    .child("Panels")
-                    .child(switch(
-                        "settings-icons",
-                        "Icons",
-                        config.icons,
-                        Setting::Icons,
-                    ))
-                    .child(switch(
-                        "settings-git",
-                        "Git branch in the path header",
-                        config.git,
-                        Setting::Git,
-                    ))
-                    .child(switch(
-                        "settings-modified",
-                        "Modified",
-                        config.show_modified,
-                        Setting::ShowModified,
-                    ))
-                    .child(switch(
-                        "settings-owner",
-                        "Owner",
-                        config.show_owner,
-                        Setting::ShowOwner,
-                    ))
-                    .child(switch(
-                        "settings-permissions",
-                        "Permissions",
-                        config.show_permissions,
-                        Setting::ShowPermissions,
-                    ))
-                    .child(
+            );
+        let panels = div()
+            .flex()
+            .flex_col()
+            .gap(crate::zoom::rems_from_px(8.0))
+            .child("Panels")
+            .child(switch(
+                "settings-icons",
+                "Icons",
+                config.icons,
+                Setting::Icons,
+            ))
+            .child(switch("settings-git", "Git", config.git, Setting::Git))
+            .child(switch(
+                "settings-modified",
+                "Modified",
+                config.show_modified,
+                Setting::ShowModified,
+            ))
+            .child(switch(
+                "settings-owner",
+                "Owner",
+                config.show_owner,
+                Setting::ShowOwner,
+            ))
+            .child(switch(
+                "settings-permissions",
+                "Permissions",
+                config.show_permissions,
+                Setting::ShowPermissions,
+            ))
+            .child(hint("Name and Size are always shown.".into()));
+
+        column()
+            .when_some(problem, |d, problem| {
+                d.child(
+                    div()
+                        .debug_selector(|| "settings-problem".into())
+                        .text_color(colors.error)
+                        .child(format!("{problem}. Fix the file, then press Ctrl-R.")),
+                )
+            })
+            .map(|d| {
+                if two {
+                    d.child(
                         div()
-                            .text_color(colors.text_secondary)
-                            .text_size(crate::zoom::rems_from_px(12.0))
-                            .child("Name and Size are always shown."),
-                    ),
-            )
+                            .flex()
+                            .gap(crate::zoom::rems_from_px(24.0))
+                            .child(general.flex_1().min_w_0())
+                            .child(panels.flex_1().min_w_0()),
+                    )
+                } else {
+                    d.child(general).child(panels)
+                }
+            })
+            .children(log_dir_below)
     }
 }
 
@@ -406,12 +438,12 @@ impl FileManager {
         // Close has focus, so Enter or Space closes at once (owner,
         // 2026-10-04); Tab reaches the controls.
         focus_when_open(buttons.read(cx).focus_handle(cx), window, cx);
-        window.open_dialog(cx, move |dialog, _, cx| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let (commit_ok, closed_ok) = (commit.clone(), closed.clone());
             let (commit_cancel, closed_cancel) = (commit.clone(), closed.clone());
             themed_dialog(dialog, cx)
                 .title("Settings")
-                .w(crate::zoom::dialog_width(480.0, cx))
+                .w(dialog_width(window, cx))
                 .close_button(false)
                 .child(view.clone())
                 .footer(buttons.clone())

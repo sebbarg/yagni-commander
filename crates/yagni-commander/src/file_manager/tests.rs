@@ -3510,6 +3510,44 @@ fn ctrl_r_applies_a_hand_edited_icons_key(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_settings_use_two_columns_while_the_window_has_room(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    activate(cx);
+    let x = |cx: &mut VisualTestContext, id: &'static str| cx.debug_bounds(id).unwrap().origin.x;
+    // 640 px of dialog and 32 of margin fit in 1000 at 100% (and 150%).
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.0), gpui_kit::px(800.0)));
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    assert!(
+        x(cx, "settings-icons") > x(cx, "settings-editor"),
+        "side by side"
+    );
+    // A narrow window: one column, checked while the dialog is open.
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(600.0), gpui_kit::px(800.0)));
+    cx.run_until_parked();
+    assert_eq!(
+        x(cx, "settings-icons"),
+        x(cx, "settings-editor"),
+        "one column"
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.0), gpui_kit::px(800.0)));
+    // 26 px: 1040 px of dialog no longer fit.
+    for _ in 0..10 {
+        cx.simulate_keystrokes("ctrl-=");
+    }
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    assert_eq!(
+        x(cx, "settings-icons"),
+        x(cx, "settings-editor"),
+        "zoomed in"
+    );
+}
+
+#[gpui_kit::test]
 fn the_icons_switch_turns_icons_off_at_once_and_saves(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
@@ -7231,7 +7269,14 @@ mod themes {
         let cfg = tempfile::tempdir().unwrap();
         use_config(cfg.path(), "", cx);
         open_theme_dropdown(cx);
-        click(cx, "settings-editor", 1);
+        // Right of the open list, which covers the field's left part (the
+        // field's last ~15 px take no clicks: gpui-component's input).
+        let field = cx.debug_bounds("settings-editor").unwrap();
+        let beside = gpui_kit::point(
+            field.origin.x + gpui_kit::px(250.0),
+            field.origin.y + field.size.height / 2.0,
+        );
+        click_at(cx, beside, 1);
         cx.run_until_parked();
         assert!(!dropdown_open(cx));
         assert!(settings_open(cx));
