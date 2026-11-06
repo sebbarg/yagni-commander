@@ -37,7 +37,7 @@ Verified by the owner: on macOS (2026-10-04), `cargo test`, the build, the nativ
   - The diff of a modified file in the F3 viewer (`git diff` for that file, as text), from a key in the viewer or Shift-F3.
   - A key (Ctrl-Shift-G?) that starts `lazygit`, or a configured Git tool, in the terminal at the panel's folder (core `terminal`).
   - Left out on purpose: staging, committing, branches, stashes, a log view. That is a Git client; the terminal tool covers it.
-- **Markdown mode in the viewer** (owner, 2026-10-29): `M` in F3 (SPEC, F3 viewer), merged into `main`. Images done (local files only, the rest as alt text; owner, 2026-10-29). Waiting (owner): relative links (whether a `.md` link opens in the same viewer).
+- **Markdown mode in the viewer** (owner, 2026-10-29): `M` in F3 (SPEC, F3 viewer), merged into `main`. Images done (local files only, the rest as alt text; owner, 2026-10-29). Waiting (owner): relative links (whether a `.md` link opens in the same viewer). Mermaid diagrams: tried and dropped (owner, 2026-11-06). A spike with `merman` 0.9.3 (pure Rust, as in Zed) rendered fences fast, but added 13 MB (seven common diagram types) to 19 MB (all) to the stripped binary, drew in Mermaid's light theme on our dark ones (needs our roles mapped onto its theme variables) and didn't follow the viewer's zoom. F4 opens the file in an editor that shows them.
 
 ## v3
 
