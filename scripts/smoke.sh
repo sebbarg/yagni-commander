@@ -605,9 +605,10 @@ check "the editor got big.txt" last_line "$work/edited" "$left/big.txt"
 check "the viewer stays open" xdotool search --name "big.txt - yagni-commander"
 keys ctrl+End
 shot 09-viewer-end
-keys w Right Right
+# No wrap at the first start: Right scrolls sideways.
+keys Right Right
 shot 10-viewer-nowrap
-echo "Selection and copy in the viewer"
+echo "Selection and copy in the viewer (W: wrap, kept for the next viewers)"
 keys w ctrl+Home
 viewer=$(xdotool search --name "big.txt - yagni-commander" | head -1)
 # Drag from the start of row 0 to far right on row 1 (rows are 18 px, 8 px padding).

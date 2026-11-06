@@ -110,6 +110,9 @@ fn end_and_home_jump(cx: &mut TestAppContext) {
 fn w_toggles_wrap_and_keeps_the_top_line(cx: &mut TestAppContext) {
     let long = format!("{}\nnext\n", "word ".repeat(400));
     let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
+    assert!(!viewer.read_with(&cx, |v, _| v.wraps()), "no wrap at start");
+    assert_eq!(shown(&viewer, &mut cx)[1], "next");
+    cx.simulate_keystrokes("w");
     assert!(viewer.read_with(&cx, |v, _| v.wraps()));
     assert!(shown(&viewer, &mut cx).len() > 2, "the long line wraps");
     cx.simulate_keystrokes("down w");
@@ -117,15 +120,40 @@ fn w_toggles_wrap_and_keeps_the_top_line(cx: &mut TestAppContext) {
     // The top row was inside line 1, so line 1 stays on top.
     assert!(shown(&viewer, &mut cx)[0].starts_with("word word"));
     assert_eq!(shown(&viewer, &mut cx)[1], "next");
-    cx.simulate_keystrokes("w");
-    assert!(viewer.read_with(&cx, |v, _| v.wraps()));
+}
+
+#[gpui_kit::test]
+fn the_next_viewer_opens_in_the_last_wrap_mode(cx: &mut TestAppContext) {
+    let (tmp, first, mut first_cx) = view(b"x\n", cx);
+    first_cx.simulate_keystrokes("w");
+    assert!(first.read_with(&first_cx, |v, _| v.wraps()));
+    let open_one = |cx: &mut TestAppContext| {
+        let path = tmp.path().join("file.txt");
+        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        (viewer, VisualTestContext::from_window(window, cx))
+    };
+    let (second, mut second_cx) = open_one(cx);
+    assert!(second.read_with(&second_cx, |v, _| v.wraps()), "wrap kept");
+    second_cx.simulate_keystrokes("w");
+    assert!(
+        first.read_with(&first_cx, |v, _| v.wraps()),
+        "an open viewer keeps its mode"
+    );
+    let (third, third_cx) = open_one(cx);
+    assert!(
+        !third.read_with(&third_cx, |v, _| v.wraps()),
+        "no wrap kept"
+    );
 }
 
 #[gpui_kit::test]
 fn left_and_right_scroll_only_without_wrap(cx: &mut TestAppContext) {
     let long = format!("{}\n", "0123456789".repeat(100));
     let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
-    cx.simulate_keystrokes("right");
+    cx.simulate_keystrokes("w right");
     assert_eq!(
         viewer.read_with(&cx, |v, _| v.h_offset()),
         0,
@@ -627,7 +655,6 @@ mod search {
     fn without_wrap_the_columns_follow_the_match(cx: &mut TestAppContext) {
         let line = format!("{}needle\n", "x".repeat(500));
         let (_tmp, viewer, mut cx) = view(line.as_bytes(), cx);
-        cx.simulate_keystrokes("w");
         find(&viewer, "needle", &mut cx);
         assert!(viewer.read_with(&cx, |v, _| v.h_offset()) > 0);
         assert_eq!(marks(&viewer, &mut cx), [(0, "needle".into())]);
@@ -635,7 +662,8 @@ mod search {
 
     #[gpui_kit::test]
     fn a_wrapped_match_is_marked_on_each_row(cx: &mut TestAppContext) {
-        let (tmp, first, vcx) = view(b"y", cx);
+        let (tmp, first, mut vcx) = view(b"y", cx);
+        vcx.simulate_keystrokes("w");
         let cols = first.read_with(&vcx, |v, _| v.cols) as usize;
         let path = tmp.path().join("wide.txt");
         std::fs::write(&path, format!("{}abcdef\n", "x".repeat(cols - 3))).unwrap();
@@ -711,7 +739,7 @@ mod hex {
     #[gpui_kit::test]
     fn w_does_nothing_in_hex_and_the_wrap_mode_comes_back(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(&numbered(100), cx);
-        cx.simulate_keystrokes("w h w");
+        cx.simulate_keystrokes("h w");
         assert!(viewer.read_with(&cx, |v, _| v.hex() && !v.wraps()));
         cx.simulate_keystrokes("t");
         assert!(
@@ -1045,7 +1073,6 @@ mod select {
     fn dragging_past_the_right_edge_scrolls_sideways_without_wrap(cx: &mut TestAppContext) {
         let long = format!("{}\n", "0123456789".repeat(100));
         let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
-        cx.simulate_keystrokes("w");
         let m = Modifiers::default();
         let track = bounds_of(&mut cx, "viewer-scrollbar");
         let start = at(&viewer, 0, 0.1, &mut cx);
@@ -1062,6 +1089,7 @@ mod select {
     fn wrap_mode_never_scrolls_sideways(cx: &mut TestAppContext) {
         let long = format!("{}\n", "0123456789".repeat(100));
         let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
+        cx.simulate_keystrokes("w");
         let m = Modifiers::default();
         let track = bounds_of(&mut cx, "viewer-scrollbar");
         let start = at(&viewer, 0, 0.1, &mut cx);
@@ -1488,11 +1516,11 @@ mod markdown_mode {
         let state = |cx: &mut VisualTestContext| {
             viewer.read_with(cx, |v, _| (v.hex(), v.wraps(), v.h_offset()))
         };
-        assert_eq!(state(&mut cx), (true, true, 0));
+        assert_eq!(state(&mut cx), (true, false, 0));
         assert!(rendered(&viewer, &mut cx).is_some());
         cx.simulate_keystrokes("t");
         assert!(rendered(&viewer, &mut cx).is_none());
-        assert_eq!(state(&mut cx), (false, true, 0), "text, from hex below");
+        assert_eq!(state(&mut cx), (false, false, 0), "text, from hex below");
         cx.simulate_keystrokes("m h");
         assert!(rendered(&viewer, &mut cx).is_none());
         assert!(viewer.read_with(&cx, |v, _| v.hex()), "straight to hex");

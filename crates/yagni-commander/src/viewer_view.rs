@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::{
-    App, AppContext, Context, FocusHandle, HighlightStyle, SharedString, StyledText, Subscription,
-    Window, WindowBounds, WindowOptions, div, font, prelude::*, px,
+    App, AppContext, Context, FocusHandle, Global, HighlightStyle, SharedString, StyledText,
+    Subscription, Window, WindowBounds, WindowOptions, div, font, prelude::*, px,
 };
 use yagni_commander_core::archive::IN_ARCHIVE;
 use yagni_commander_core::find::text::Text;
@@ -103,6 +103,13 @@ pub fn open(
     Ok(())
 }
 
+/// The wrap mode the last `W` chose, which every viewer opens in: off at
+/// start, for the session only (owner, 2026-11-06).
+#[derive(Default, Clone, Copy)]
+pub struct Wrapping(pub bool);
+
+impl Global for Wrapping {}
+
 pub struct ViewerView {
     path: PathBuf,
     doc: Document<FileSource>,
@@ -191,7 +198,7 @@ impl ViewerView {
             path,
             doc: Document::new(source),
             focus,
-            wrap: true,
+            wrap: cx.try_global::<Wrapping>().is_some_and(|w| w.0),
             hex: false,
             markdown: None,
             top: 0,
@@ -267,6 +274,7 @@ impl ViewerView {
             return;
         }
         self.wrap = !self.wrap;
+        cx.set_global(Wrapping(self.wrap));
         self.relayout(cx);
     }
 
