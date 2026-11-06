@@ -5,7 +5,9 @@
   <em>yagni-commander on Omarchy</em>
 </p>
 
-An opinionated, keyboard-first, dual-pane file manager for macOS and Linux. It does the part of a classic commander that I actually use, not all of it. Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), Zed's UI framework.
+An opinionated, keyboard-first, dual-pane file manager for macOS and Linux. The everyday parts of Total Commander, and nothing you won't need. Written in Rust with [gpui](https://github.com/zed-industries/zed/tree/main/crates/gpui), Zed's UI framework.
+
+Website: [commander.yagni.dk](https://commander.yagni.dk)
 
 Strongly inspired by these classics:
 
@@ -15,9 +17,9 @@ Strongly inspired by these classics:
 
 and of course the original, [Norton Commander](https://en.wikipedia.org/wiki/Norton_Commander).
 
-Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and Wayland) and Omarchy (Hyprland). Early days.
+Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and Wayland) and Omarchy (Hyprland).
 
-A personal project. Bug reports are welcome; feature requests will mostly get a YAGNI.
+Bug reports are welcome; feature requests might get a YAGNI.
 
 ## Features
 

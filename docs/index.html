@@ -1,0 +1,715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>yagni-commander</title>
+<meta name="description" content="A keyboard-first, dual-pane file manager for macOS and Linux, in the spirit of Total Commander. Written in Rust.">
+<meta property="og:title" content="yagni-commander">
+<meta property="og:description" content="A keyboard-first, dual-pane file manager for macOS and Linux, in the spirit of Total Commander.">
+<meta property="og:image" content="https://commander.yagni.dk/yc-omarchy.png">
+<meta property="og:url" content="https://commander.yagni.dk/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="preload" href="fonts/jetbrains-mono-nl.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face {
+  font-family: "JetBrains Mono NL";
+  src: url("fonts/jetbrains-mono-nl.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "yc icons";
+  src: url("fonts/icons.woff2") format("woff2");
+  font-display: block;
+}
+
+/* Colors are the app's theme roles (crates/yagni-commander/assets/themes).
+   Tokyo Night is the default; the script swaps in the others. */
+:root {
+  color-scheme: dark;
+  --window-bg: #16161e; --panel-bg: #1a1b26; --dialog-bg: #292e42;
+  --header-bg: #1f2335; --header-active-bg: #2f3549; --popup-bg: #292e42;
+  --raised-border: #545c7e; --border: #292e42;
+  --text: #c0caf5; --text-secondary: #a9b1d6; --text-dim: #8b94bb;
+  --directory: #7aa2f7; --symlink: #7dcfff; --hidden: #8c94ba;
+  --accent: #7aa2f7; --text-on-accent: #1a1b26; --cursor-inactive-bg: #292e42;
+  --selected: #ff9e64; --text-on-selected: #1a1b26;
+  --success: #9ece6a; --info: #7dcfff; --warning: #e0af68;
+
+  --ui: system-ui, -apple-system, "Segoe UI", "Noto Sans", Ubuntu, Cantarell, sans-serif;
+  --mono: "JetBrains Mono NL", ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", monospace;
+  --icons: "yc icons";
+  --measure: 68ch;
+  --gutter: clamp(16px, 4vw, 40px);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    color-scheme: light;
+    --window-bg: #dce0e8; --panel-bg: #eff1f5; --dialog-bg: #e6e9ef;
+    --header-bg: #e6e9ef; --header-active-bg: #ccd0da; --popup-bg: #ffffff;
+    --raised-border: #bcc0cc; --border: #bcc0cc;
+    --text: #4c4f69; --text-secondary: #5c5f77; --text-dim: #63667a;
+    --directory: #094bcf; --symlink: #116c71; --hidden: #5f6173;
+    --accent: #094bcf; --text-on-accent: #eff1f5; --cursor-inactive-bg: #dce0e8;
+    --selected: #7c2fe6; --text-on-selected: #eff1f5;
+    --success: #2f7620; --info: #177181; --warning: #905c13;
+  }
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--window-bg);
+  color: var(--text);
+  font: 17px/1.6 var(--ui);
+  transition: background-color .25s, color .25s;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 3px; }
+code, kbd, pre { font-family: var(--mono); font-size: .88em; }
+code { color: var(--text); background: var(--header-bg); padding: .1em .35em; border-radius: 4px; }
+
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 var(--gutter); }
+
+/* Hero */
+.hero { padding-top: clamp(32px, 6vw, 64px); }
+.title { display: flex; align-items: center; gap: 18px; margin: 0 0 20px; }
+.title img { width: 64px; height: 64px; flex: none; }
+h1 {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: clamp(2rem, 6.4vw, 4.2rem);
+  line-height: 1;
+  letter-spacing: -.03em;
+  margin: 0;
+}
+.lede { font-size: clamp(1.1rem, 2.2vw, 1.35rem); line-height: 1.5; max-width: 40ch; margin: 0 0 28px; color: var(--text); }
+.lede span { color: var(--text-secondary); }
+
+.install-line {
+  display: flex; align-items: stretch; max-width: 100%;
+  background: var(--panel-bg); border: 1px solid var(--raised-border); border-radius: 6px;
+  overflow: hidden;
+}
+.install-line pre {
+  margin: 0; padding: 12px 14px; overflow-x: auto; flex: 1; min-width: 0;
+  font-size: 14px; line-height: 1.5; color: var(--text);
+}
+.install-line pre::before { content: "$ "; color: var(--text-dim); }
+.copy {
+  flex: none; font: 14px var(--ui); padding: 0 16px; cursor: pointer;
+  border: 0; border-left: 1px solid var(--raised-border);
+  background: var(--header-active-bg); color: var(--text);
+}
+.copy:hover { background: var(--accent); color: var(--text-on-accent); }
+.copy:focus-visible { outline-offset: -3px; }
+.hero-links { margin: 14px 0 0; color: var(--text-secondary); font-size: 15px; }
+.hero-links a { margin-right: 18px; }
+
+/* The live demo */
+.demo { margin: 24px 0 0; }
+.themes {
+  display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center;
+  margin: 0 0 12px; padding: 0; border: 0;
+}
+.themes legend { float: left; margin-right: 6px; font-size: 15px; color: var(--text-secondary); padding: 0; }
+.themes label {
+  display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+  font-size: 14px; padding: 5px 11px 5px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-secondary); background: var(--panel-bg);
+}
+.themes input { position: absolute; opacity: 0; pointer-events: none; }
+.themes .sw { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--raised-border); flex: none; }
+.themes input:checked + label { border-color: var(--accent); color: var(--text); background: var(--header-active-bg); }
+.themes input:focus-visible + label { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.app {
+  container-type: inline-size;
+  background: var(--window-bg);
+  border: 1px solid var(--raised-border);
+  border-radius: 8px;
+  overflow: hidden;
+  font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1;
+  user-select: none;
+  -webkit-user-select: none;
+  box-shadow: 0 18px 50px -20px rgb(0 0 0 / .55);
+}
+.app:focus { outline: none; }
+.app:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.menubar { display: flex; gap: 2px; padding: 6px 8px 2px; color: var(--text); font-size: 13px; }
+.menubar span { padding: 4px 8px; }
+.sides { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px 6px 0; }
+.side { min-width: 0; display: flex; flex-direction: column; }
+.tabs { display: flex; height: 24px; align-items: flex-end; }
+.tab {
+  width: 160px; max-width: 100%; padding: 6px 10px; font-size: 12px;
+  background: var(--header-bg); color: var(--text-dim);
+  border: 1px solid var(--border); border-bottom: 0; border-radius: 5px 5px 0 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.side.active .tab { background: var(--header-active-bg); color: var(--text); }
+.pathbar {
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 10px;
+  background: var(--header-bg); color: var(--text-dim);
+  border: 1px solid var(--border); border-top: 0;
+  white-space: nowrap; overflow: hidden;
+}
+.side.active .pathbar { background: var(--header-active-bg); color: var(--text); }
+.pathbar .path { overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.pathbar .git { color: inherit; flex: none; }
+.side.active .pwd { color: var(--accent); }
+.i { font-family: var(--icons); font-style: normal; display: inline-block; width: 1.25em; margin-right: 3px; text-align: center; line-height: 1; }
+.listing {
+  background: var(--panel-bg); border: 1px solid var(--border); border-top: 0;
+  height: 372px; display: flex; flex-direction: column;
+}
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 9ch 16ch 8ch 11ch;
+  gap: 0 12px; align-items: center;
+  height: 20px; padding: 0 8px; margin: 0 2px;
+  white-space: nowrap;
+  cursor: default;
+}
+.row > span { overflow: hidden; text-overflow: ellipsis; }
+.row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.row .mod { font-variant-numeric: tabular-nums; }
+.row.head { color: var(--text-secondary); font-size: 12px; height: 26px; }
+.rows { flex: 1; overflow: hidden; }
+.row.dir .name { color: var(--directory); }
+.row .meta { color: var(--text-secondary); }
+.row.sel, .row.sel .name, .row.sel .meta { color: var(--selected); }
+.row.cur { background: var(--cursor-inactive-bg); border-radius: 2px; }
+.app:focus .side.active .row.cur { background: var(--accent); }
+.app:focus .side.active .row.cur > span { color: var(--text-on-accent); }
+.app:focus .side.active .row.cur.sel { background: var(--selected); }
+.app:focus .side.active .row.cur.sel > span { color: var(--text-on-selected); }
+.footer {
+  padding: 8px 10px; font-size: 12px; color: var(--text-secondary);
+  border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status {
+  display: flex; justify-content: space-between; gap: 16px;
+  padding: 9px 12px; font-size: 12px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden;
+}
+.status .msg { overflow: hidden; text-overflow: ellipsis; }
+.status .msg.note { color: var(--info); }
+
+/* A narrow panel drops optional columns from the right, as the app does. */
+@container (max-width: 1300px) { .row { grid-template-columns: minmax(0, 1fr) 9ch 16ch 8ch; } .row .perm { display: none; } }
+@container (max-width: 940px)  { .row { grid-template-columns: minmax(0, 1fr) 9ch 16ch; } .row .own { display: none; } }
+@container (max-width: 700px)  { .row { grid-template-columns: minmax(0, 1fr) 9ch; } .row .mod { display: none; } }
+@container (max-width: 520px)  {
+  .menubar { display: none; }
+  .row { gap: 0 6px; padding: 0 4px; font-size: 13px; }
+  .pathbar { padding: 0 6px; gap: 4px; font-size: 13px; }
+  .pathbar .git { display: none; }
+  .tab { width: 110px; }
+}
+
+.demo-hint { font-size: 14px; color: var(--text-secondary); margin: 12px 0 0; max-width: var(--measure); }
+kbd {
+  display: inline-block; min-width: 1.6em; padding: .12em .45em; text-align: center;
+  font-size: .82em; line-height: 1.4; color: var(--text);
+  background: var(--header-active-bg); border: 1px solid var(--raised-border);
+  border-bottom-width: 2px; border-radius: 4px; white-space: nowrap;
+}
+
+/* Sections */
+section.part { padding-top: clamp(48px, 8vw, 88px); }
+h2 {
+  font-size: clamp(1.45rem, 3vw, 1.9rem); line-height: 1.2; font-weight: 650;
+  letter-spacing: -.01em; margin: 0 0 14px;
+}
+h3 { font-size: 1.05rem; margin: 0 0 4px; font-weight: 650; }
+p { margin: 0 0 14px; max-width: var(--measure); }
+.sub { color: var(--text-secondary); }
+
+.keymap {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 0 40px; margin: 26px 0 0; padding: 0;
+}
+.keymap div {
+  display: grid; grid-template-columns: 8.5em 1fr; gap: 14px; align-items: baseline;
+  padding: 9px 0; border-top: 1px solid var(--border);
+}
+.keymap dt { margin: 0; }
+.keymap dd { margin: 0; color: var(--text-secondary); font-size: 15.5px; line-height: 1.45; }
+.keymap kbd + kbd { margin-left: 3px; }
+
+.features {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 30px 40px; margin: 28px 0 0;
+}
+.features p { color: var(--text-secondary); font-size: 15.5px; line-height: 1.55; margin: 0; }
+.features h3 .i { color: var(--accent); margin-right: 4px; }
+
+figure.shot { margin: 0; }
+figure.shot img {
+  display: block; width: 100%; height: auto;
+  border-radius: 8px; border: 1px solid var(--raised-border);
+}
+figure.shot figcaption { font-size: 14px; color: var(--text-secondary); margin-top: 10px; }
+
+.install-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 24px 40px; margin-top: 22px; }
+.install-grid p, .install-grid li { font-size: 15.5px; color: var(--text-secondary); }
+.install-grid ul { margin: 0; padding-left: 1.1em; }
+.install-grid li { margin: 0 0 6px; }
+
+.lineage { list-style: none; padding: 0; margin: 18px 0 0; display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 15.5px; }
+.lineage li span { color: var(--text-dim); font-variant-numeric: tabular-nums; margin-left: 6px; }
+
+footer.wrap { margin-top: clamp(56px, 9vw, 104px); padding-bottom: 40px; color: var(--text-secondary); font-size: 14px; }
+footer .rule { padding-top: 26px; border-top: 1px solid var(--border); }
+footer p { max-width: none; margin: 0 0 6px; }
+
+@media (prefers-reduced-motion: reduce) { body { transition: none; } }
+@media (max-width: 560px) {
+  body { font-size: 16px; }
+  .title img { width: 48px; height: 48px; }
+  .keymap div { grid-template-columns: 7.5em 1fr; }
+  .listing { height: 312px; }
+}
+</style>
+</head>
+<body>
+
+<header class="wrap hero">
+  <div class="title">
+    <img src="icon.svg" alt="" width="64" height="64">
+    <h1>yagni-commander</h1>
+  </div>
+  <p class="lede">An opinionated, keyboard-first, dual-pane file manager for macOS and Linux. <span>The everyday parts of Total Commander, and nothing you won't need.</span></p>
+
+  <div class="install-line">
+    <pre id="install-cmd">curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh</pre>
+    <button class="copy" type="button" data-copy="install-cmd">Copy</button>
+  </div>
+  <p class="hero-links">
+    <a href="https://github.com/sebbarg/yagni-commander">Source on GitHub</a>
+    <a href="https://github.com/sebbarg/yagni-commander/releases/latest">Latest release</a>
+    <a href="#install">Other ways to install</a>
+  </p>
+
+  <div class="demo">
+    <fieldset class="themes" id="themes">
+      <legend>Theme</legend>
+    </fieldset>
+
+    <div class="app" id="app" tabindex="0" role="application" aria-label="Interactive demo of the two file panels. Arrow keys move, Tab switches panels, Enter opens a folder, Backspace goes up, Space selects, Escape leaves the demo.">
+      <div class="menubar" aria-hidden="true"><span>Files</span><span>Commands</span><span>Show</span><span>Help</span></div>
+      <div class="sides">
+        <div class="side" data-side="0"></div>
+        <div class="side" data-side="1"></div>
+      </div>
+      <div class="status"><span class="msg" id="status">Tab switch · ↑↓ move · Enter open · Backspace up</span></div>
+    </div>
+    <p class="demo-hint">Click the panels and use the keys: <kbd>↑</kbd> <kbd>↓</kbd>, <kbd>Tab</kbd>, <kbd>Enter</kbd>, <kbd>Backspace</kbd>, <kbd>Space</kbd>, <kbd>Insert</kbd>, or type the start of a name. <kbd>Esc</kbd> leaves the demo. The theme buttons switch this whole page between the app's five built-in themes.</p>
+  </div>
+</header>
+
+<main>
+  <section class="wrap part" id="keys">
+    <h2>The keys your fingers already know</h2>
+    <p class="sub">Total Commander's keymap, on every platform. Ctrl, not Cmd, on the Mac, so the same muscle memory works on both.</p>
+    <dl class="keymap">
+      <div><dt><kbd>F3</kbd></dt><dd>View. Multi-GB files open instantly, as text, hex or formatted Markdown.</dd></div>
+      <div><dt><kbd>F4</kbd></dt><dd>Edit in your own editor, such as <code>code --wait</code>.</dd></div>
+      <div><dt><kbd>F5</kbd> <kbd>F6</kbd></dt><dd>Copy or move to the other panel, in the background, with a prompt per conflict.</dd></div>
+      <div><dt><kbd>F7</kbd></dt><dd>New folder. <code>a/b/c</code> makes all three.</dd></div>
+      <div><dt><kbd>F8</kbd></dt><dd>Move to the trash. <kbd>Shift-F8</kbd> deletes for good.</dd></div>
+      <div><dt><kbd>F2</kbd></dt><dd>Rename, with the name selected up to its extension.</dd></div>
+      <div><dt><kbd>Shift-F4</kbd></dt><dd>New file, opened in your editor.</dd></div>
+      <div><dt><kbd>Alt-F7</kbd></dt><dd>Find files by name and content, then feed the results to a panel.</dd></div>
+      <div><dt><kbd>Alt-F5</kbd> <kbd>Alt-F9</kbd></dt><dd>Pack into a zip, or unpack zip and tar archives.</dd></div>
+      <div><dt><kbd>Ctrl-D</kbd></dt><dd>Your folder hotlist, each entry on its own letter.</dd></div>
+      <div><dt><kbd>Ctrl-F</kbd></dt><dd>Connect to a host from your <code>~/.ssh/config</code>.</dd></div>
+      <div><dt><kbd>Alt-F1</kbd> <kbd>Alt-F2</kbd></dt><dd>Drives and mounts for the left or right panel.</dd></div>
+      <div><dt><kbd>Ctrl-T</kbd> <kbd>Ctrl-W</kbd></dt><dd>Open and close tabs on either side.</dd></div>
+      <div><dt><kbd>Alt-Z</kbd> <kbd>Ctrl-U</kbd></dt><dd>Show this folder on the other side, or swap the sides.</dd></div>
+      <div><dt><kbd>Shift-Enter</kbd></dt><dd>Open with any application your desktop registers for the file.</dd></div>
+      <div><dt><kbd>Ctrl-Shift-T</kbd></dt><dd>Open a terminal in the current folder.</dd></div>
+    </dl>
+    <p class="sub" style="margin-top:22px">The full keymap is in the <a href="https://github.com/sebbarg/yagni-commander/blob/main/SPEC.md#keyboard">spec</a>.</p>
+  </section>
+
+  <section class="wrap part" id="features">
+    <h2>What else it does</h2>
+    <div class="features">
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xf08ac;</i> Remote folders over SFTP</h3>
+        <p>Browse, copy and move between machines through your own <code>ssh</code>. Aliases, keys, the agent and jump hosts work as they do in a terminal, and password prompts come up in the app.</p>
+      </div>
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xf48a;</i> A viewer for big files</h3>
+        <p>F3 reads by byte position, never the whole file, so a 10 GB log opens at once. Search, select and copy, switch to hex, or read Markdown formatted with its local images.</p>
+      </div>
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xf410;</i> Archives as folders</h3>
+        <p>Enter on a zip or tarball opens it like a folder. View or copy entries out; encrypted zips ask for the password. Extraction never writes outside its folder.</p>
+      </div>
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xf418;</i> The Git branch, without the wait</h3>
+        <p>Inside a repository the path header shows <code>main ↑2 ↓1 •</code>: commits ahead and behind, and a dot when something changed. It arrives after the listing, so no folder waits for git.</p>
+      </div>
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xf07c;</i> Never frozen by a folder</h3>
+        <p>Folders load in the background, so a huge directory or a dead network mount never locks up the window. Panels follow changes other programs make.</p>
+      </div>
+      <div>
+        <h3><i class="i" aria-hidden="true">&#xe6b2;</i> Plain settings</h3>
+        <p>Five themes, two zoom levels and a TOML config file you can edit by hand. An optional log records every file operation. Nothing phones home: updates are checked only when you ask.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap part" id="screenshot">
+    <figure class="shot">
+      <img src="yc-omarchy.png" alt="yagni-commander showing a home folder on the left and /etc on the right, in the Tokyo Night theme" width="1280" height="720" loading="lazy">
+      <figcaption>On Omarchy (Hyprland), with the Tokyo Night theme.</figcaption>
+    </figure>
+  </section>
+
+  <section class="wrap part" id="install">
+    <h2>Install</h2>
+    <p class="sub">For macOS (Apple Silicon and Intel) and Linux (x86_64, glibc 2.35 or newer). It installs for you alone, no root needed, and the same line updates it.</p>
+    <div class="install-line">
+      <pre id="install-cmd-2">curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh</pre>
+      <button class="copy" type="button" data-copy="install-cmd-2">Copy</button>
+    </div>
+    <div class="install-grid">
+      <div>
+        <h3>What the script does</h3>
+        <ul>
+          <li>Downloads the latest release and checks it against its <code>SHA256SUMS</code>.</li>
+          <li>macOS: puts <code>yagni-commander.app</code> in <code>~/Applications</code>.</li>
+          <li>Linux: puts the binary, a launcher entry and the icons in <code>~/.local</code>.</li>
+          <li>Add <code>-s -- --uninstall</code> after <code>sh</code> to remove it.</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Prefer to do it yourself</h3>
+        <ul>
+          <li>Read <a href="https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh">the script</a> first. It is short.</li>
+          <li>Download the zip or tarball from <a href="https://github.com/sebbarg/yagni-commander/releases">Releases</a>.</li>
+          <li>Or <a href="https://github.com/sebbarg/yagni-commander#building">build it from source</a> with Rust.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap part" id="yagni">
+    <h2>You ain't gonna need it</h2>
+    <p>yagni-commander does the fifth of a classic commander you reach for every day, and leaves the rest out on purpose, so it stays small and fast. It is tested on macOS, KDE Plasma (X11 and Wayland) and Omarchy. Bug reports are welcome. Feature requests might get a YAGNI.</p>
+    <p class="sub">It stands on the shoulders of:</p>
+    <ul class="lineage">
+      <li><a href="https://en.wikipedia.org/wiki/Norton_Commander">Norton Commander</a><span>1986</span></li>
+      <li><a href="https://en.wikipedia.org/wiki/DOS_Navigator">DOS Navigator</a><span>1991</span></li>
+      <li><a href="https://en.wikipedia.org/wiki/Total_Commander">Total Commander</a><span>1993</span></li>
+      <li><a href="https://en.wikipedia.org/wiki/Double_Commander">Double Commander</a><span>2007</span></li>
+    </ul>
+  </section>
+</main>
+
+<footer class="wrap"><div class="rule">
+  <p>Written in Rust with <a href="https://github.com/zed-industries/zed/tree/main/crates/gpui">gpui</a>, Zed's UI framework. MIT licensed.</p>
+  <p><a href="https://github.com/sebbarg/yagni-commander">GitHub</a> &nbsp; <a href="https://github.com/sebbarg/yagni-commander/issues">Report a bug</a> &nbsp; <a href="https://github.com/sebbarg/yagni-commander/blob/main/THIRD-PARTY-NOTICES.md">Fonts and third-party notices</a></p>
+</div></footer>
+
+<script>
+(() => {
+  "use strict";
+
+  // The app's built-in themes, copied from crates/yagni-commander/assets/themes.
+  const THEMES = {
+    "tokyo-night": { name: "Tokyo Night", mode: "dark", c: {
+      window_bg: "#16161e", panel_bg: "#1a1b26", dialog_bg: "#292e42", header_bg: "#1f2335", header_active_bg: "#2f3549", popup_bg: "#292e42", raised_border: "#545c7e", border: "#292e42", text: "#c0caf5", text_secondary: "#a9b1d6", text_dim: "#8b94bb", directory: "#7aa2f7", symlink: "#7dcfff", hidden: "#8c94ba", accent: "#7aa2f7", text_on_accent: "#1a1b26", cursor_inactive_bg: "#292e42", selected: "#ff9e64", text_on_selected: "#1a1b26", success: "#9ece6a", info: "#7dcfff", warning: "#e0af68" } },
+    "gruvbox-dark": { name: "Gruvbox Dark", mode: "dark", c: {
+      window_bg: "#1d2021", panel_bg: "#282828", dialog_bg: "#3c3836", header_bg: "#32302f", header_active_bg: "#3c3836", popup_bg: "#3c3836", raised_border: "#7c6f64", border: "#3c3836", text: "#ebdbb2", text_secondary: "#d5c4a1", text_dim: "#aea08d", directory: "#8fb0a3", symlink: "#8ec07c", hidden: "#bdae93", accent: "#fabd2f", text_on_accent: "#282828", cursor_inactive_bg: "#3c3836", selected: "#fe8019", text_on_selected: "#282828", success: "#b8bb26", info: "#88a99c", warning: "#fabd2f" } },
+    "everforest-dark": { name: "Everforest Dark", mode: "dark", c: {
+      window_bg: "#232a2e", panel_bg: "#2d353b", dialog_bg: "#384247", header_bg: "#343f44", header_active_bg: "#3d484d", popup_bg: "#384247", raised_border: "#7a8478", border: "#475258", text: "#d3c6aa", text_secondary: "#b4beb6", text_dim: "#a5aea8", directory: "#7fbbb3", symlink: "#83c092", hidden: "#a3aca6", accent: "#a7c080", text_on_accent: "#2d353b", cursor_inactive_bg: "#343f44", selected: "#e69875", text_on_selected: "#2d353b", success: "#a7c080", info: "#7fbbb3", warning: "#dbbc7f" } },
+    "catppuccin-latte": { name: "Catppuccin Latte", mode: "light", c: {
+      window_bg: "#dce0e8", panel_bg: "#eff1f5", dialog_bg: "#e6e9ef", header_bg: "#e6e9ef", header_active_bg: "#ccd0da", popup_bg: "#ffffff", raised_border: "#bcc0cc", border: "#bcc0cc", text: "#4c4f69", text_secondary: "#5c5f77", text_dim: "#63667a", directory: "#094bcf", symlink: "#116c71", hidden: "#5f6173", accent: "#094bcf", text_on_accent: "#eff1f5", cursor_inactive_bg: "#dce0e8", selected: "#7c2fe6", text_on_selected: "#eff1f5", success: "#2f7620", info: "#177181", warning: "#905c13" } },
+    "classic": { name: "Classic", mode: "light", c: {
+      window_bg: "#d4d0c8", panel_bg: "#ffffff", dialog_bg: "#d4d0c8", header_bg: "#d4d0c8", header_active_bg: "#b9d1ea", popup_bg: "#d4d0c8", raised_border: "#808080", border: "#808080", text: "#000000", text_secondary: "#3c3c3c", text_dim: "#585858", directory: "#000080", symlink: "#005f5f", hidden: "#5f5f5f", accent: "#000080", text_on_accent: "#ffffff", cursor_inactive_bg: "#e4e2dc", selected: "#c00000", text_on_selected: "#ffffff", success: "#005a00", info: "#00577a", warning: "#7a4f00" } },
+  };
+
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
+  };
+
+  function applyTheme(id) {
+    const t = THEMES[id];
+    const root = document.documentElement;
+    root.dataset.theme = id;
+    root.style.colorScheme = t.mode;
+    for (const [role, hex] of Object.entries(t.c)) root.style.setProperty("--" + role.replace(/_/g, "-"), hex);
+  }
+
+  const picker = document.getElementById("themes");
+  const prefersLight = matchMedia("(prefers-color-scheme: light)").matches;
+  let current = store.get("theme");
+  if (!THEMES[current]) current = prefersLight ? "catppuccin-latte" : "tokyo-night";
+  for (const [id, t] of Object.entries(THEMES)) {
+    const input = Object.assign(document.createElement("input"), { type: "radio", name: "theme", id: "theme-" + id, value: id, checked: id === current });
+    const label = document.createElement("label");
+    label.htmlFor = input.id;
+    const sw = document.createElement("span");
+    sw.className = "sw";
+    sw.style.background = `linear-gradient(135deg, ${t.c.panel_bg} 50%, ${t.c.accent} 50%)`;
+    label.append(sw, t.name);
+    input.addEventListener("change", () => { applyTheme(id); store.set("theme", id); });
+    picker.append(input, label);
+  }
+  if (store.get("theme")) applyTheme(current);
+
+  // Copy buttons
+  for (const btn of document.querySelectorAll("[data-copy]")) {
+    btn.addEventListener("click", async () => {
+      const text = document.getElementById(btn.dataset.copy).textContent;
+      try { await navigator.clipboard.writeText(text); btn.textContent = "Copied"; }
+      catch { btn.textContent = "Select and copy"; }
+      setTimeout(() => { btn.textContent = "Copy"; }, 1600);
+    });
+  }
+
+  // The demo: two panels over a small made-up file tree.
+  const D = (name, mod, kids, extra = {}) => ({ name, dir: true, mod, kids, ...extra });
+  const F = (name, size, mod, extra = {}) => ({ name, dir: false, size, mod, ...extra });
+  const HOME = "/home/seb";
+  const tree = D("/", "2026-10-04 18:35", [
+    D("home", "2026-10-04 18:35", [
+      D("seb", "2026-11-05 21:12", [
+        D("Documents", "2026-10-30 09:14", [
+          F("invoice-2026-10.pdf", "182.4 KiB", "2026-10-31 10:02"),
+          F("notes.md", "3.1 KiB", "2026-11-04 22:47"),
+          F("taxes.pdf", "1.2 MiB", "2026-04-28 19:30"),
+        ]),
+        D("Downloads", "2026-11-05 20:51", [
+          F("debian-13.1-amd64-netinst.iso", "754.0 MiB", "2026-09-12 08:41"),
+          F("dotfiles-main.zip", "48.2 KiB", "2026-11-01 13:05"),
+          F("holiday.jpg", "4.6 MiB", "2026-08-02 17:12"),
+          F("talk-recording.mp4", "1.8 GiB", "2026-10-22 16:30"),
+          F("yagni-commander-1.9.1-linux-x86_64.tar.gz", "11.7 MiB", "2026-11-05 20:51"),
+        ]),
+        D("Music", "2026-10-04 18:38", []),
+        D("Pictures", "2026-10-04 20:30", [F("screenshot.png", "412.0 KiB", "2026-11-03 11:20")]),
+        D("Projects", "2026-11-05 21:12", [
+          D("yagni-commander", "2026-11-06 08:17", [
+            D(".github", "2026-10-15 12:00", [F("release.yml", "4.4 KiB", "2026-10-15 12:00")]),
+            D("app-icon", "2026-10-14 16:34", [F("yagni-commander.svg", "10.9 KiB", "2026-10-14 16:34")]),
+            D("crates", "2026-10-02 14:34", [
+              D("yagni-commander", "2026-11-05 19:40", [D("src", "2026-11-05 19:40", [F("main.rs", "14.2 KiB", "2026-11-05 19:40"), F("viewer_view.rs", "96.8 KiB", "2026-11-05 19:40")])]),
+              D("yagni-commander-core", "2026-11-03 18:02", [D("src", "2026-11-03 18:02", [F("git.rs", "18.5 KiB", "2026-11-03 18:02"), F("sftp.rs", "61.3 KiB", "2026-10-27 22:10")])]),
+            ]),
+            D("docs", "2026-11-06 09:16", [F("index.html", "28.4 KiB", "2026-11-06 09:16")]),
+            D("install", "2026-11-02 10:00", [F("install.sh", "6.0 KiB", "2026-11-05 18:20", { exe: true })]),
+            D("target", "2026-11-06 08:20", []),
+            F("ARCHITECTURE.md", "71.9 KiB", "2026-11-05 19:44"),
+            F("build.sh", "1.0 KiB", "2026-10-31 15:02", { exe: true }),
+            F("Cargo.lock", "198.6 KiB", "2026-11-05 20:01"),
+            F("Cargo.toml", "1.9 KiB", "2026-11-05 20:01"),
+            F("LICENSE", "1.0 KiB", "2026-10-01 09:00"),
+            F("README.md", "12.1 KiB", "2026-11-05 19:44"),
+            F("SPEC.md", "64.0 KiB", "2026-11-06 08:15"),
+          ], { git: "main ↑1 •" }),
+        ]),
+        D("Videos", "2026-10-04 18:37", []),
+      ], { home: true }),
+    ]),
+  ]);
+
+  // Glyphs from the app's icon table (core icons.rs and icons/table.rs).
+  const G = {
+    up: "", folder: "", open: "", file: "", exe: "", home: "\u{f10b5}", branch: "",
+    ".github": "", "Documents": "\u{f0c82}", "docs": "\u{f0c82}", "Downloads": "\u{f024d}", "Music": "\u{f1359}",
+    "Pictures": "\u{f024f}", "Videos": "\u{f19fa}", "src": "\u{f08de}", "target": "\u{f107f}",
+    rs: "", toml: "", lock: "", license: "", md: "", sh: "", gz: "", zip: "",
+    iso: "", jpg: "", png: "", pdf: "", mp4: "", svg: "\u{f0721}", yml: "", html: "",
+  };
+  function glyph(e) {
+    if (e.up) return G.up;
+    if (e.dir) return e.home ? G.home : (G[e.name] || G.folder);
+    const lower = e.name.toLowerCase();
+    if (lower === "license") return G.license;
+    const ext = lower.split(".").pop();
+    if (G[ext]) return G[ext];
+    return e.exe ? G.exe : G.file;
+  }
+
+  const find = (path) => {
+    let node = tree;
+    for (const part of path.split("/").filter(Boolean)) node = node.kids.find((k) => k.dir && k.name === part);
+    return node;
+  };
+  const parentOf = (path) => path.replace(/\/[^/]+$/, "") || "/";
+  const show = (path) => path === HOME ? "~" : path.startsWith(HOME + "/") ? "~" + path.slice(HOME.length) : path;
+  const label = (path) => path === "/" ? "/" : path.split("/").pop();
+  const gitOf = (path) => {
+    for (let p = path; ; p = parentOf(p)) {
+      const n = find(p);
+      if (n && n.git) return n.git;
+      if (p === "/") return null;
+    }
+  };
+
+  const panels = [
+    { path: HOME + "/Projects/yagni-commander", cursor: 0, sel: new Set() },
+    { path: HOME + "/Downloads", cursor: 5, sel: new Set() },
+  ];
+  let active = 0;
+  let search = "";
+
+  function entries(p) {
+    const node = find(p.path);
+    const kids = [...node.kids].sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    return p.path === "/" ? kids : [{ name: "..", up: true, dir: true }, ...kids];
+  }
+
+  const sizeOf = (e) => e.up ? "" : e.dir ? "<DIR>" : e.size;
+  const bytes = (s) => { const [n, u] = s.split(" "); return parseFloat(n) * ({ B: 1, KiB: 1024, MiB: 1024 ** 2, GiB: 1024 ** 3 })[u]; };
+  const fmt = (b) => { const u = ["B", "KiB", "MiB", "GiB"]; let i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return i ? b.toFixed(1) + " " + u[i] : b + " B"; };
+
+  function summary(p, list) {
+    const real = list.filter((e) => !e.up);
+    const dirs = real.filter((e) => e.dir).length, files = real.length - dirs;
+    const total = real.filter((e) => !e.dir).reduce((s, e) => s + bytes(e.size), 0);
+    if (!p.sel.size) return `${dirs} dirs, ${files} files, ${fmt(total)}`;
+    const chosen = real.filter((e) => p.sel.has(e.name));
+    const selBytes = chosen.filter((e) => !e.dir).reduce((s, e) => s + bytes(e.size), 0);
+    return `${chosen.length} of ${real.length} selected, ${fmt(selBytes)} of ${fmt(total)}`;
+  }
+
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const app = document.getElementById("app");
+  const status = document.getElementById("status");
+  const DEFAULT_STATUS = status.textContent;
+  let note = null;
+
+  function render() {
+    panels.forEach((p, side) => {
+      const box = app.querySelector(`.side[data-side="${side}"]`);
+      box.classList.toggle("active", side === active);
+      box.replaceChildren();
+      const list = entries(p);
+      p.cursor = Math.max(0, Math.min(p.cursor, list.length - 1));
+
+      const tabs = el("div", "tabs"); tabs.append(el("div", "tab", label(p.path))); box.append(tabs);
+
+      const bar = el("div", "pathbar");
+      bar.append(el("i", "i pwd", G.open), el("span", "path", show(p.path)));
+      const git = gitOf(p.path);
+      if (git) { const g = el("span", "git"); g.append(el("i", "i", G.branch), git); bar.append(g); }
+      box.append(bar);
+
+      const listing = el("div", "listing");
+      const head = el("div", "row head");
+      head.append(el("span", "", "Name ▲"), el("span", "num", "Size"), el("span", "mod", "Modified"), el("span", "own", "Owner"), el("span", "perm", "Permissions"));
+      listing.append(head);
+
+      const rows = el("div", "rows");
+      const visible = Math.floor((app.querySelector(".listing")?.clientHeight || 372) / 20) - 3;
+      const start = Math.max(0, Math.min(p.cursor - Math.floor(visible / 2), list.length - visible));
+      list.slice(start, start + visible + 1).forEach((e, i) => {
+        const ix = start + i;
+        const r = el("div", "row" + (e.dir ? " dir" : "") + (ix === p.cursor ? " cur" : "") + (p.sel.has(e.name) ? " sel" : ""));
+        const name = el("span", "name");
+        name.append(el("i", "i", glyph(e)), e.name);
+        const own = e.up ? "" : p.path.startsWith(HOME) ? "seb:seb" : "root:root";
+        const perm = e.up ? "" : e.dir ? "drwxr-xr-x" : e.exe ? "-rwxr-xr-x" : "-rw-r--r--";
+        r.append(name, el("span", "num meta", sizeOf(e)), el("span", "mod meta", e.mod || ""), el("span", "own meta", own), el("span", "perm meta", perm));
+        r.addEventListener("mousedown", () => { active = side; p.cursor = ix; search = ""; render(); });
+        r.addEventListener("dblclick", () => { active = side; p.cursor = ix; open(); });
+        rows.append(r);
+      });
+      listing.append(rows, el("div", "footer", search && side === active ? `Search: ${search}` : summary(p, list)));
+      box.append(listing);
+    });
+    status.textContent = note || DEFAULT_STATUS;
+    status.classList.toggle("note", !!note);
+  }
+
+  function go(p, path, focusName) {
+    p.path = path; p.sel.clear();
+    const list = entries(p);
+    const ix = focusName ? list.findIndex((e) => e.name === focusName) : 0;
+    p.cursor = Math.max(0, ix);
+  }
+  function up() {
+    const p = panels[active];
+    if (p.path === "/") return;
+    go(p, parentOf(p.path), label(p.path));
+  }
+  function open() {
+    const p = panels[active];
+    const e = entries(p)[p.cursor];
+    if (e.up) return up();
+    if (e.dir) return go(p, (p.path === "/" ? "" : p.path) + "/" + e.name);
+    note = `${e.name} would open in its application. Here it stays a demo.`;
+  }
+  function toggle(p) {
+    const e = entries(p)[p.cursor];
+    if (e.up) return;
+    p.sel.has(e.name) ? p.sel.delete(e.name) : p.sel.add(e.name);
+  }
+
+  app.addEventListener("keydown", (ev) => {
+    if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const p = panels[active];
+    const n = entries(p).length;
+    const page = Math.floor(app.querySelector(".listing").clientHeight / 20) - 4;
+    note = null;
+    const key = ev.key;
+    let handled = true;
+    if (key === "ArrowDown" && search) {
+      const list = entries(p);
+      for (let k = 1; k <= n; k++) { const i = (p.cursor + k) % n; if (list[i].name.toLowerCase().startsWith(search)) { p.cursor = i; break; } }
+    } else if (key === "ArrowUp" && search) {
+      const list = entries(p);
+      for (let k = 1; k <= n; k++) { const i = (p.cursor - k + n) % n; if (list[i].name.toLowerCase().startsWith(search)) { p.cursor = i; break; } }
+    } else if (key === "Backspace" && search) {
+      search = search.slice(0, -1);
+    } else if (key.length === 1 && key !== " ") {
+      const next = search + key.toLowerCase();
+      const ix = entries(p).findIndex((e) => !e.up && e.name.toLowerCase().startsWith(next));
+      if (ix >= 0) { search = next; p.cursor = ix; }
+      render(); ev.preventDefault(); return;
+    } else {
+      search = "";
+      switch (key) {
+        case "ArrowDown": p.cursor = Math.min(n - 1, p.cursor + 1); break;
+        case "ArrowUp": p.cursor = Math.max(0, p.cursor - 1); break;
+        case "PageDown": p.cursor = Math.min(n - 1, p.cursor + page); break;
+        case "PageUp": p.cursor = Math.max(0, p.cursor - page); break;
+        case "Home": p.cursor = 0; break;
+        case "End": p.cursor = n - 1; break;
+        case "Tab": active = 1 - active; break;
+        case "Enter": open(); break;
+        case "Backspace": up(); break;
+        case " ": toggle(p); break;
+        case "Insert": toggle(p); p.cursor = Math.min(n - 1, p.cursor + 1); break;
+        case "Escape": app.blur(); break;
+        case "F3": case "F4": case "F5": case "F6": case "F7": case "F8": case "F2":
+          note = `${key} works in the app. This page only moves around.`; break;
+        default: handled = false;
+      }
+    }
+    if (handled) { ev.preventDefault(); render(); }
+  });
+  app.addEventListener("focus", render);
+  app.addEventListener("blur", () => { search = ""; note = null; render(); });
+
+  render();
+})();
+</script>
+</body>
+</html>
