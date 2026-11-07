@@ -156,6 +156,8 @@ pub struct ViewerView {
     dragging_thumb: bool,
     /// Fractional rows of wheel scrolling not applied yet.
     wheel_rows: f32,
+    /// Fractional columns of sideways wheel scrolling not applied yet.
+    wheel_cols: f32,
     _subscriptions: Vec<Subscription>,
     /// The private copy of an archive entry, deleted with the window.
     temp: Option<tempfile::TempDir>,
@@ -222,6 +224,7 @@ impl ViewerView {
             shown_end: 0,
             dragging_thumb: false,
             wheel_rows: 0.0,
+            wheel_cols: 0.0,
             _subscriptions: subscriptions,
             temp,
         }
@@ -350,15 +353,26 @@ impl ViewerView {
     }
 
     fn scroll_h(&mut self, right: bool, cx: &mut Context<Self>) {
-        if self.wraps_rows() || self.markdown.is_some() {
+        self.scroll_cols(
+            if right {
+                H_STEP as i64
+            } else {
+                -(H_STEP as i64)
+            },
+            cx,
+        );
+    }
+
+    /// Sideways by `cols` columns (negative: left), never past the widest
+    /// row on screen. Only when rows scroll sideways.
+    fn scroll_cols(&mut self, cols: i64, cx: &mut Context<Self>) {
+        if self.wraps_rows() || self.markdown.is_some() || cols == 0 {
             return;
         }
         let max = self.widest.saturating_sub(self.cols);
-        self.h_offset = if right {
-            (self.h_offset + H_STEP).min(max.max(self.h_offset))
-        } else {
-            self.h_offset.saturating_sub(H_STEP)
-        };
+        let to = (i64::from(self.h_offset) + cols).max(0);
+        // Right never goes past the widest row, but never jumps back either.
+        self.h_offset = to.min(i64::from(max.max(self.h_offset))) as u32;
         cx.notify();
     }
 
@@ -604,7 +618,20 @@ impl ViewerView {
             return;
         }
         let line = line_height(cx);
-        let dy = f32::from(event.delta.pixel_delta(px(line)).y);
+        let delta = event.delta.pixel_delta(px(line));
+        let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
+        // One axis per event, the larger, like gpui's own scrolling: a
+        // trackpad swipe is never quite straight.
+        if dx.abs() > dy.abs() {
+            if !self.wraps_rows() {
+                // Positive x reveals what is to the left.
+                self.wheel_cols -= dx / self.char_width;
+                let whole = self.wheel_cols.trunc();
+                self.wheel_cols -= whole;
+                self.scroll_cols(whole as i64, cx);
+            }
+            return;
+        }
         self.wheel_rows += dy / line;
         let whole = self.wheel_rows.trunc();
         self.wheel_rows -= whole;

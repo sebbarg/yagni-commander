@@ -267,6 +267,50 @@ fn wheel_scrolls_rows(cx: &mut TestAppContext) {
     assert_eq!(shown(&viewer, &mut cx)[0], "line 3");
 }
 
+fn wheel(cx: &mut VisualTestContext, delta: gpui_kit::ScrollDelta) {
+    let at = bounds_of(cx, "viewer-row-0").center();
+    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+        position: at,
+        delta,
+        ..Default::default()
+    });
+}
+
+#[gpui_kit::test]
+fn a_sideways_swipe_scrolls_columns_only_without_wrap(cx: &mut TestAppContext) {
+    let long: String = (1..=100)
+        .map(|n| format!("line {n} {}\n", "x".repeat(300)))
+        .collect();
+    let (_tmp, viewer, mut cx) = view(long.as_bytes(), cx);
+    let w = viewer.read_with(&cx, |v, _| v.char_width());
+    let offset = |cx: &mut VisualTestContext| viewer.read_with(cx, |v, _| v.h_offset());
+    let swipe = |cx: &mut VisualTestContext, cols: f32, y: f32| {
+        wheel(
+            cx,
+            gpui_kit::ScrollDelta::Pixels(point(px(cols * w), px(y))),
+        )
+    };
+    // A swipe to the left reveals what is to the right; its slight
+    // vertical drift moves no rows.
+    swipe(&mut cx, -5.5, 2.0);
+    assert_eq!(offset(&mut cx), 5);
+    swipe(&mut cx, -0.5, 0.0);
+    assert_eq!(offset(&mut cx), 6, "fractions add up");
+    assert!(shown(&viewer, &mut cx)[0].starts_with(" xxx"));
+    swipe(&mut cx, 100.0, 0.0);
+    assert_eq!(offset(&mut cx), 0, "stops at the left");
+    swipe(&mut cx, -10_000.0, 0.0);
+    let far = offset(&mut cx);
+    assert!(far > 0 && far < 309, "stops at the widest row: {far}");
+    cx.simulate_keystrokes("w");
+    swipe(&mut cx, -20.0, 0.0);
+    assert_eq!(offset(&mut cx), 0, "wrap mode ignores it");
+    assert!(
+        shown(&viewer, &mut cx)[0].starts_with("line 1 "),
+        "and moves no rows"
+    );
+}
+
 #[gpui_kit::test]
 fn dragging_the_scrollbar_moves_by_byte_position(cx: &mut TestAppContext) {
     let (_tmp, viewer, mut cx) = view(&numbered(10_000), cx);
