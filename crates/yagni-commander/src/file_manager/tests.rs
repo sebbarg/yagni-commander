@@ -7464,6 +7464,22 @@ mod themes {
         assert_eq!(notice(cx).as_deref(), Some(text));
     }
 
+    #[gpui_kit::test]
+    fn unknown_settings_are_named_in_the_status_line(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        std::fs::write(&path, "futur = 1\nicons = false\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(
+            notice(cx).as_deref(),
+            Some("Ignored unknown setting: futur")
+        );
+        assert!(!config(cx).icons, "the other settings still apply");
+        cx.simulate_keystrokes("down");
+        assert_eq!(notice(cx), None);
+    }
+
     fn settings_view(cx: &mut VisualTestContext) -> Entity<crate::settings_dialog::SettingsView> {
         let view = file_manager(cx);
         view.read_with(cx, |this, _| this.settings.clone())

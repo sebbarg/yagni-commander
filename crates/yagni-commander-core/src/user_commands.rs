@@ -134,7 +134,6 @@ fn has_parameter(pieces: &[Piece<'_>]) -> bool {
 
 /// One command, as stored in `config.toml` (`[[commands]]`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct UserCommand {
     /// `&` marks the letter, as in the hotlist. May be left out: the popup
     /// then shows the command.

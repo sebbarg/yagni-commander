@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 
 /// One hotlist entry, as stored in `config.toml` (`[[hotlist]]`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct HotlistEntry {
     /// May be left out by hand: the popup then shows the folder's name.
     #[serde(default)]

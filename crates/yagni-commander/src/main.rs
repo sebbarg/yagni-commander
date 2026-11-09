@@ -104,7 +104,12 @@ fn main() {
             config.theme.as_deref().unwrap_or_default()
         )
     });
-    let notice = current.problem.clone().or(log_problem).or(unknown_theme);
+    let notice = current
+        .problem
+        .clone()
+        .or(log_problem)
+        .or(unknown_theme)
+        .or_else(|| config.ignored_notice());
 
     // ssh's questions (passwords, host keys) come to the app's dialogs, and
     // ssh shares one connection per host so each asks once. Without the

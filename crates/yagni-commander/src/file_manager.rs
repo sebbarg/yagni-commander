@@ -779,6 +779,10 @@ impl FileManager {
         match Config::load_or_create(&path) {
             Ok(config) => {
                 cx.global_mut::<CurrentConfig>().problem = None;
+                // Before applying: its own notices matter more.
+                if let Some(ignored) = config.ignored_notice() {
+                    self.notice = Some(ignored.into());
+                }
                 self.apply_config(config, cx);
             }
             Err(e) => {

@@ -12,8 +12,11 @@ use crate::storage::{self, StorageError};
 pub use crate::hotlist::HotlistEntry;
 pub use crate::user_commands::UserCommand;
 
+/// Unknown keys are ignored, and left alone when the file is saved, so
+/// another version of the app can read a file this one wrote and the
+/// reverse. Missing keys get their defaults.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(default)]
 pub struct Config {
     /// Command that F4 runs with the file or directory as its argument, e.g. `code`.
     pub editor: Option<String>,
@@ -42,6 +45,10 @@ pub struct Config {
     pub hotlist: Vec<HotlistEntry>,
     /// Programs to open the cursor entry with (Ctrl-S), edited in the app.
     pub commands: Vec<UserCommand>,
+    /// The file's top-level keys this version doesn't know, as loaded by
+    /// [`Config::load_or_create`]. Not part of the file.
+    #[serde(skip)]
+    pub ignored: Vec<String>,
 }
 
 impl Default for Config {
@@ -60,6 +67,7 @@ impl Default for Config {
             theme: None,
             hotlist: Vec::new(),
             commands: Vec::new(),
+            ignored: Vec::new(),
         }
     }
 }
@@ -108,8 +116,42 @@ impl Config {
         if !path.exists() {
             storage::write_atomic(path, TEMPLATE)?;
         }
-        storage::load(path)
+        let mut config: Self = storage::load(path)?;
+        if let Ok(text) = fs::read_to_string(path) {
+            config.ignored = unknown_keys(&text);
+        }
+        Ok(config)
     }
+
+    /// The status line's note about [`Config::ignored`], if any.
+    pub fn ignored_notice(&self) -> Option<String> {
+        match self.ignored.as_slice() {
+            [] => None,
+            [key] => Some(format!("Ignored unknown setting: {key}")),
+            keys => Some(format!("Ignored unknown settings: {}", keys.join(", "))),
+        }
+    }
+}
+
+/// The top-level keys of `text` that [`Config`] doesn't have, sorted.
+fn unknown_keys(text: &str) -> Vec<String> {
+    // Every field, so the list can't fall behind the struct.
+    let filled = Config {
+        editor: Some(String::new()),
+        theme: Some(String::new()),
+        ..Config::default()
+    };
+    let (Ok(table), Ok(known)) = (text.parse::<toml::Table>(), toml::Table::try_from(filled))
+    else {
+        return Vec::new();
+    };
+    let mut unknown: Vec<String> = table
+        .keys()
+        .filter(|key| !known.contains_key(*key))
+        .cloned()
+        .collect();
+    unknown.sort();
+    unknown
 }
 
 /// One setting, as the settings dialog changes it.
@@ -383,9 +425,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_key_in_a_hotlist_entry_is_a_parse_error() {
+    fn a_hotlist_entry_missing_its_path_is_a_parse_error() {
         let text = "[[hotlist]]\nname = \"x\"\npth = \"/etc\"\n";
         assert!(toml::from_str::<Config>(text).is_err());
+    }
+
+    #[test]
+    fn an_unknown_key_in_an_entry_is_ignored() {
+        let text =
+            "[[hotlist]]\npath = \"/x\"\nfuture = 1\n[[commands]]\ncommand = \"c\"\nfuture = 1\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.hotlist, [entry("", "/x")]);
+        assert_eq!(config.commands[0].command, "c");
     }
 
     #[test]
@@ -513,8 +564,67 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_are_rejected_to_catch_typos() {
-        assert!(toml::from_str::<Config>("case_sensitve_sort = true").is_err());
+    fn unknown_keys_and_tables_are_ignored_for_other_versions() {
+        let text = "log = true\nfuture = 1\n[[future_list]]\na = 1\n[future_table]\nb = 2\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert!(config.log);
+    }
+
+    #[test]
+    fn unknown_keys_are_listed_for_the_status_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(
+            &path,
+            "case_sensitve_sort = true\nlog = true\n[[zed]]\na = 1\n",
+        )
+        .unwrap();
+        let config = Config::load_or_create(&path).unwrap();
+        assert!(config.log);
+        assert_eq!(config.ignored, ["case_sensitve_sort", "zed"]);
+        assert_eq!(
+            config.ignored_notice().unwrap(),
+            "Ignored unknown settings: case_sensitve_sort, zed"
+        );
+        fs::write(&path, "future = 1\n").unwrap();
+        assert_eq!(
+            Config::load_or_create(&path)
+                .unwrap()
+                .ignored_notice()
+                .unwrap(),
+            "Ignored unknown setting: future"
+        );
+    }
+
+    #[test]
+    fn every_known_key_and_the_template_count_as_known() {
+        let text = "editor = \"e\"\ncase_sensitive_sort = true\nlog = true\nlog_keep_days = 1\nshow_modified = true\nshow_owner = true\nshow_permissions = true\nicons = true\ngit = true\ncheck_updates = true\ntheme = \"t\"\n[[hotlist]]\npath = \"/x\"\n[[commands]]\ncommand = \"c\"\n";
+        assert_eq!(unknown_keys(text), Vec::<String>::new());
+        assert_eq!(unknown_keys(TEMPLATE), Vec::<String>::new());
+    }
+
+    #[test]
+    fn saving_keeps_what_another_version_wrote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "future = 1\n\n[[future_list]]\na = 1\n").unwrap();
+        save_setting(&path, &Setting::Log(true)).unwrap();
+        save_hotlist(&path, &[entry("n", "/x")]).unwrap();
+        save_commands(
+            &path,
+            &[UserCommand {
+                name: "c".into(),
+                command: "x".into(),
+            }],
+        )
+        .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("future = 1"), "{text}");
+        assert!(text.contains("[[future_list]]"), "{text}");
+        let config: Config = toml::from_str(&text).unwrap();
+        assert!(config.log);
+        assert_eq!(config.hotlist.len(), 1);
+        assert_eq!(config.commands.len(), 1);
     }
 
     #[test]
@@ -535,6 +645,7 @@ mod tests {
             theme: Some("classic".into()),
             hotlist: vec![entry("&Src", "~/src")],
             commands: Vec::new(),
+            ignored: Vec::new(),
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);
