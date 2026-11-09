@@ -2080,6 +2080,47 @@ mod reload {
     }
 
     #[gpui_kit::test]
+    fn after_the_help_button_the_keys_still_reach_the_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.blur(cx);
+        });
+        cx.run_until_parked();
+        let at = cx
+            .debug_bounds("viewer-help-button")
+            .expect("drawn")
+            .center();
+        cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_down(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_up(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down");
+        assert_eq!(shown(&viewer, &mut cx)[0], "line 2");
+    }
+
+    #[gpui_kit::test]
+    fn after_the_button_the_keys_still_reach_the_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        // Focus is elsewhere, as after coming back from the editor.
+        cx.update(|window, cx| {
+            window.activate_window();
+            window.blur(cx);
+        });
+        cx.run_until_parked();
+        let at = cx
+            .debug_bounds("viewer-reload-button")
+            .expect("drawn")
+            .center();
+        cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_down(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_up(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.run_until_parked();
+        cx.simulate_keystrokes("down");
+        assert_eq!(shown(&viewer, &mut cx)[0], "line 2");
+    }
+
+    #[gpui_kit::test]
     fn a_reload_keeps_the_place_and_clamps_to_a_shorter_file(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
         cx.simulate_keystrokes("pagedown pagedown");
@@ -2102,6 +2143,21 @@ mod reload {
         assert!(shown(&viewer, &mut cx)[0].contains("41 42"));
     }
 
+    /// The search runs on a real thread, so simulated time alone can't
+    /// tell when it has found something.
+    fn wait_for_match(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) {
+        for _ in 0..400 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+            if viewer.read_with(cx, |v, _| v.search.current.is_some()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("no match");
+    }
+
     #[gpui_kit::test]
     fn a_reload_drops_positions_but_keeps_the_search(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(b"one two\n", cx);
@@ -2109,11 +2165,7 @@ mod reload {
         cx.simulate_input("two");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
-        for _ in 0..5 {
-            cx.executor()
-                .advance_clock(crate::file_manager::commands::OPENER_POLL);
-            cx.run_until_parked();
-        }
+        wait_for_match(&viewer, &mut cx);
         assert!(viewer.read_with(&cx, |v, _| v.search.current.is_some()));
         std::fs::write(file(&viewer, &cx), b"two one\n").unwrap();
         cx.simulate_keystrokes("ctrl-r");
@@ -2122,11 +2174,7 @@ mod reload {
             assert!(v.selection.is_none());
         });
         cx.simulate_keystrokes("f3");
-        for _ in 0..5 {
-            cx.executor()
-                .advance_clock(crate::file_manager::commands::OPENER_POLL);
-            cx.run_until_parked();
-        }
+        wait_for_match(&viewer, &mut cx);
         let current = viewer.read_with(&cx, |v, _| v.search.current.clone());
         assert_eq!(current, Some(0..3));
     }

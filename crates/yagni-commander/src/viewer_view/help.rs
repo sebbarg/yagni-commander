@@ -206,8 +206,11 @@ impl ViewerView {
             .child(icons::HELP.to_string())
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
-                cx.listener(|this, _, _, cx| {
+                cx.listener(|this, _, window, cx| {
+                    // Stopped here, the click can't reach the view's own
+                    // focus handling.
                     cx.stop_propagation();
+                    this.focus.focus(window, cx);
                     this.toggle_help(cx);
                 }),
             )

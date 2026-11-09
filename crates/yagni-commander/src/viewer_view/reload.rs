@@ -165,7 +165,11 @@ impl ViewerView {
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    // Stopped here, the click can't reach the view's own
+                    // focus handling. First, so a reload's message box
+                    // still takes focus from it.
                     cx.stop_propagation();
+                    this.focus.focus(window, cx);
                     this.reload(window, cx);
                 }),
             )
