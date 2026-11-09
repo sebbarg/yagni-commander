@@ -5,7 +5,7 @@ default-members = ["crates/yagni-commander"]
 
 [workspace.package]
 # The release version; release/release.sh sets it.
-version = "1.9.2"
+version = "1.9.3"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/sebbarg/yagni-commander"
