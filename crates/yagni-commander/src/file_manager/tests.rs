@@ -6823,6 +6823,63 @@ mod find_files {
     }
 
     #[gpui_kit::test]
+    fn alt_f_selects_search_for_from_the_list_and_the_buttons(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.rs");
+        let view = dialog(cx);
+        cx.simulate_keystrokes("alt-f");
+        cx.simulate_input("x");
+        assert_eq!(view.read_with(cx, |v, cx| v.field(Field::Masks, cx)), "x");
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("tab alt-f");
+        cx.simulate_input("y");
+        assert_eq!(view.read_with(cx, |v, cx| v.field(Field::Masks, cx)), "y");
+        assert!(dialog_open(cx), "the dialog stays");
+    }
+
+    #[gpui_kit::test]
+    fn alt_g_goes_to_the_selected_result_from_anywhere(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = opened(cx);
+        let on_result = |cx: &mut VisualTestContext| {
+            commander.read_with(cx, |c, _| {
+                let name = &c.panel(c.active()).cursor_entry().unwrap().name;
+                name.to_string_lossy().ends_with(".rs")
+            })
+        };
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("alt-g");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && on_result(cx), "from the list");
+        cx.simulate_keystrokes("home");
+        assert!(!on_result(cx));
+        search(cx, "*.rs");
+        let view = dialog(cx);
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.simulate_keystrokes("alt-g");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && on_result(cx), "from a field");
+        assert_eq!(
+            view.read_with(cx, |v, cx| v.field(Field::Masks, cx)),
+            "*.rs",
+            "nothing typed"
+        );
+        cx.simulate_keystrokes("home");
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("tab alt-g");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx) && on_result(cx), "from the buttons");
+    }
+
+    #[gpui_kit::test]
+    fn alt_g_does_nothing_without_results(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.nothing");
+        cx.simulate_keystrokes("alt-g");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
     fn feed_does_nothing_without_results(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = opened(cx);
         search(cx, "*.none");

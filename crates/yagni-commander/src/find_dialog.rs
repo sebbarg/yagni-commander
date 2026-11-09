@@ -276,6 +276,15 @@ impl FindDialog {
             .update(cx, |s, cx| s.set_value(text, window, cx));
     }
 
+    /// Alt-F: Search for, focused with its text selected.
+    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input(Field::Masks).clone().update(cx, |s, cx| {
+            let len = s.value().len();
+            s.set_selected_range(0..len, cx);
+            s.focus(window, cx);
+        });
+    }
+
     #[cfg(test)]
     pub fn focus_field(&mut self, field: Field, window: &mut Window, cx: &mut Context<Self>) {
         self.input(field)
@@ -549,7 +558,8 @@ impl FindDialog {
         self.found.get(self.cursor).map(|e| self.root.join(&e.name))
     }
 
-    fn open(&mut self, cx: &mut Context<Self>) {
+    /// Goes to the file under the list's cursor (Enter in the list, Alt-G).
+    pub fn open(&mut self, cx: &mut Context<Self>) {
         if let Some(path) = self.cursor_path() {
             cx.emit(FindEvent::GoTo(path));
         }
@@ -937,6 +947,10 @@ impl Render for FindDialog {
         div()
             .key_context(FIND_DIALOG_CONTEXT)
             .on_action(cx.listener(|this, _: &act::Feed, _, cx| this.feed(cx)))
+            .on_action(
+                cx.listener(|this, _: &act::FocusSearch, window, cx| this.focus_search(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &act::GoTo, _, cx| this.open(cx)))
             .relative()
             .flex()
             .flex_col()

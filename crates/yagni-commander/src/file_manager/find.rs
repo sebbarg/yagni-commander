@@ -50,12 +50,22 @@ impl FileManager {
                 .close_button(false)
                 .child(view.clone())
                 .footer(
-                    // The buttons are outside the view: Alt-L here too.
+                    // The buttons are outside the view: its Alt keys here too.
                     div()
                         .key_context(FIND_DIALOG_CONTEXT)
                         .on_action({
                             let view = view.clone();
                             move |_: &find_results::Feed, _, cx| view.update(cx, |v, cx| v.feed(cx))
+                        })
+                        .on_action({
+                            let view = view.clone();
+                            move |_: &find_results::FocusSearch, window, cx| {
+                                view.update(cx, |v, cx| v.focus_search(window, cx))
+                            }
+                        })
+                        .on_action({
+                            let view = view.clone();
+                            move |_: &find_results::GoTo, _, cx| view.update(cx, |v, cx| v.open(cx))
                         })
                         .relative()
                         .child(buttons.clone())

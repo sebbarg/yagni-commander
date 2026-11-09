@@ -196,8 +196,23 @@ pub mod find_results {
     gpui_kit::actions!(
         find_results,
         [
-            Up, Down, PageUp, PageDown, Home, End, Open, View, Toggle, Feed, SkipOpen, SkipUp,
-            SkipDown, SkipToggle, SkipClose
+            Up,
+            Down,
+            PageUp,
+            PageDown,
+            Home,
+            End,
+            Open,
+            View,
+            Toggle,
+            Feed,
+            FocusSearch,
+            GoTo,
+            SkipOpen,
+            SkipUp,
+            SkipDown,
+            SkipToggle,
+            SkipClose
         ]
     );
 }
@@ -511,6 +526,12 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("escape", find_results::SkipClose, Some(FIND_SKIP_CONTEXT)),
         // TC's "Feed to listbox" key.
         KeyBinding::new("alt-l", find_results::Feed, Some(FIND_DIALOG_CONTEXT)),
+        KeyBinding::new(
+            "alt-f",
+            find_results::FocusSearch,
+            Some(FIND_DIALOG_CONTEXT),
+        ),
+        KeyBinding::new("alt-g", find_results::GoTo, Some(FIND_DIALOG_CONTEXT)),
     ]);
     let ctx = Some(VIEWER_CONTEXT);
     cx.bind_keys([
