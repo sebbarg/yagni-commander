@@ -85,7 +85,7 @@ pub fn check(url: &str) -> Result<Check, String> {
     Ok(Check::new(Version::current(), latest(url)?))
 }
 
-pub fn latest(url: &str) -> Result<Version, String> {
+fn latest(url: &str) -> Result<Version, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
         .timeout_global(Some(TIMEOUT))
@@ -122,17 +122,6 @@ pub fn installed_app(exe: &Path, home: &Path) -> Option<PathBuf> {
         exe.ancestors().nth(3).map(Path::to_owned)
     } else {
         Some(exe)
-    }
-}
-
-/// TEMPORARY (the macOS test button): what `installed_app` would return for
-/// a copy where the install script puts it, wherever this one runs.
-pub fn default_app(home: &Path) -> PathBuf {
-    let exe = home.join(INSTALLED_EXE);
-    if cfg!(target_os = "macos") {
-        exe.ancestors().nth(3).map(Path::to_owned).unwrap_or(exe)
-    } else {
-        exe
     }
 }
 

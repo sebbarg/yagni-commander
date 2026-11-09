@@ -315,6 +315,12 @@ impl Render for SettingsView {
                 Setting::CaseSensitiveSort,
             ))
             .child(switch(
+                "settings-updates",
+                "Check for updates at startup",
+                config.check_updates,
+                Setting::CheckUpdates,
+            ))
+            .child(switch(
                 "settings-log",
                 "Log file operations",
                 config.log,
@@ -376,6 +382,8 @@ impl Render for SettingsView {
             .child(hint("Name and Size are always shown.".into()));
 
         column()
+            // A dialog body clips at its bottom edge.
+            .pb(crate::zoom::rems_from_px(8.0))
             .when_some(problem, |d, problem| {
                 d.child(
                     div()
@@ -398,13 +406,6 @@ impl Render for SettingsView {
                 }
             })
             .children(log_dir_below)
-            // Last, under the log folder's line in either layout.
-            .child(switch(
-                "settings-updates",
-                "Check for updates at startup",
-                config.check_updates,
-                Setting::CheckUpdates,
-            ))
     }
 }
 

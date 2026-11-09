@@ -2265,16 +2265,6 @@ mod check_for_updates {
         (tmp, started)
     }
 
-    // TEMPORARY, with the macOS test button.
-    #[gpui_kit::test]
-    fn the_test_button_offers_the_update_even_when_up_to_date(cx: &mut TestAppContext) {
-        let (_tmp, _commander, cx) = open(cx);
-        release("v0.0.1", cx);
-        click(cx, "update-test-button", 1);
-        wait_until(cx, dialog_open);
-        assert!(cx.debug_bounds("update-question").is_some());
-    }
-
     #[gpui_kit::test]
     fn no_button_until_the_setting_finds_a_release(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
@@ -2374,10 +2364,8 @@ mod check_for_updates {
         };
         let text = middle(cx, "status-hint");
         // Within layout's rounding of each element to whole pixels.
-        for id in ["update-button", "update-test-button"] {
-            let off = f32::from(text - middle(cx, id)).abs();
-            assert!(off < 1.0, "{id}: {off}");
-        }
+        let off = f32::from(text - middle(cx, "update-button")).abs();
+        assert!(off < 1.0, "{off}");
     }
 
     #[gpui_kit::test]
@@ -3134,7 +3122,7 @@ fn tab_reaches_the_switches_and_space_toggles_them(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("tab"); // sort switch
     press(cx, "space");
     assert!(config(cx).case_sensitive_sort);
-    cx.simulate_keystrokes("tab"); // log switch
+    cx.simulate_keystrokes("tab tab"); // past Check for updates to the log switch
     press(cx, "space");
     assert!(config(cx).log);
     assert!(commander.read_with(cx, |c, _| c.log().is_some()));
@@ -3244,7 +3232,7 @@ fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
     let path = use_config(cfg.path(), "log_keep_days = 30\n", cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab tab tab"); // editor -> sort -> log -> days
+    cx.simulate_keystrokes("tab tab tab tab"); // editor -> sort -> updates -> log -> days
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("0");
     cx.simulate_keystrokes("tab"); // leaving the field checks it
@@ -3355,7 +3343,7 @@ fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
     use_config(cfg.path(), "", cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab tab tab ctrl-a");
+    cx.simulate_keystrokes("tab tab tab tab ctrl-a");
     cx.simulate_input("0");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -3715,24 +3703,16 @@ fn ctrl_r_applies_a_hand_edited_icons_key(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn the_update_switch_sits_below_the_log_folder_in_both_layouts(cx: &mut TestAppContext) {
-    let (tmp, _commander, cx) = open(cx);
+fn the_update_switch_sits_right_above_the_log_switch(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
     use_config(cfg.path(), "", cx);
-    use_log_dir(tmp.path(), cx);
     activate(cx);
-    for width in [1000.0, 600.0] {
-        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(800.0)));
-        cx.simulate_keystrokes("ctrl-,");
-        cx.run_until_parked();
-        let y = |cx: &mut VisualTestContext, id: &'static str| cx.debug_bounds(id).unwrap().top();
-        assert!(
-            y(cx, "settings-updates") > y(cx, "settings-log-dir"),
-            "{width}"
-        );
-        cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
-    }
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    let y = |cx: &mut VisualTestContext, id: &'static str| cx.debug_bounds(id).unwrap().top();
+    assert!(y(cx, "settings-sort") < y(cx, "settings-updates"));
+    assert!(y(cx, "settings-updates") < y(cx, "settings-log"));
 }
 
 #[gpui_kit::test]
@@ -9072,6 +9052,8 @@ pub(crate) mod tab_order {
         let order = [
             "theme",
             "editor",
+            // Sort, Check for updates, Log.
+            "Dialog",
             "Dialog",
             "Dialog",
             "days",
@@ -9080,8 +9062,6 @@ pub(crate) mod tab_order {
             "Dialog",
             "Dialog",
             "Dialog",
-            "Dialog",
-            // Check for updates.
             "Dialog",
             "button:Close",
         ];

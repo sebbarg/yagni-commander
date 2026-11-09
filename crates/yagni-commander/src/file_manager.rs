@@ -1124,7 +1124,6 @@ impl Render for FileManager {
                     .px(rems_from_px(10.0))
                     .text_size(rems_from_px(12.0))
                     .child(status.flex_1().min_w_0().overflow_hidden())
-                    .child(self.test_update_button(cx))
                     .children(self.update_button(cx)),
             )
     }

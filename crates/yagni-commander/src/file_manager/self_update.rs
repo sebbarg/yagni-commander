@@ -32,8 +32,6 @@ pub(crate) struct Updates {
     /// The newer release the quiet check found: the button shows.
     pub(crate) available: Option<update::Version>,
     checking: bool,
-    /// TEMPORARY: the macOS test button is waiting for GitHub.
-    test_checking: bool,
     /// What to start after an update; `None` if this copy isn't where the
     /// install script puts it, so the button only says how to install.
     pub(crate) app: Option<PathBuf>,
@@ -91,7 +89,6 @@ impl Updates {
         Self {
             available: None,
             checking: false,
-            test_checking: false,
             // Now: once the file is replaced, Linux reports it as deleted.
             app: std::env::current_exe()
                 .ok()
@@ -195,73 +192,6 @@ impl FileManager {
         )
     }
 
-    /// TEMPORARY, until the update is verified on macOS: always there.
-    pub(super) fn test_update_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = &Theme::get(cx).colors;
-        div()
-            .id("update-test-button")
-            .debug_selector(|| "update-test-button".into())
-            .flex_none()
-            .self_center()
-            .ml(rems_from_px(8.0))
-            .px(rems_from_px(6.0))
-            .h(rems_from_px(16.0))
-            .flex()
-            .items_center()
-            .rounded(rems_from_px(3.0))
-            .border_1()
-            .border_color(colors.border)
-            .bg(colors.header_bg)
-            .text_color(colors.text_secondary)
-            .cursor_pointer()
-            .text_size(rems_from_px(10.0))
-            .child("Test update")
-            .on_click(cx.listener(|this, _, window, cx| this.test_update(window, cx)))
-    }
-
-    /// TEMPORARY: the normal question and install, for the latest release
-    /// even if this copy already is that version.
-    fn test_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.updates.test_checking {
-            return;
-        }
-        self.updates.test_checking = true;
-        let (tx, rx) = mpsc::channel();
-        let url = self.update_url.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(update::latest(&url));
-        });
-        cx.spawn_in(window, async move |this, cx| {
-            let result = loop {
-                cx.background_executor().timer(OPENER_POLL).await;
-                match rx.try_recv() {
-                    Ok(result) => break result,
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        break Err("The check stopped unexpectedly.".to_owned());
-                    }
-                }
-            };
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.updates.test_checking = false;
-                match result {
-                    Ok(latest) => {
-                        this.updates.available = Some(latest);
-                        if this.updates.app.is_none() {
-                            this.updates.app = Some(update::default_app(&storage::home_dir()));
-                        }
-                        this.offer_update(window, cx);
-                    }
-                    Err(e) => {
-                        let refocus = Some(this.focus.clone());
-                        show_error("Update failed", e, refocus, window, cx);
-                    }
-                }
-            });
-        })
-        .detach();
-    }
-
     fn offer_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         let Some(latest) = self.updates.available else {
@@ -339,7 +269,7 @@ impl FileManager {
         cx.spawn_in(window, async move |this, cx| {
             let result = loop {
                 cx.background_executor().timer(FRAME).await;
-                let _ = progress.update(cx, |view, cx| {
+                progress.update(cx, |view, cx| {
                     view.frame += 1;
                     cx.notify();
                 });
