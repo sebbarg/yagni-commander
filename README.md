@@ -32,7 +32,7 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
 - A viewer (F3) that opens multi-GB files instantly, with text (T), hex (H) and formatted Markdown (M) modes.
-- Help > Check for updates (on macOS in the app menu): asks GitHub only when you choose it.
+- Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it. With the Settings switch "Check for updates at startup" on (off by default), it also asks at startup, and a button in the status bar offers to install a newer release and restart.
 - Panels follow changes made by other programs.
 - The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
@@ -126,7 +126,7 @@ Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `
 
 `./build.sh` and `./run.sh` build (and run) a release build (on macOS `build.sh` also makes the `.app`), `--debug` for a debug one; `./clean.sh` removes the build output.
 
-`./test.sh` (`cargo test --workspace`), `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. The remote-folder tests run OpenSSH's `sftp-server` locally in place of a host (no server is started): `sudo apt install openssh-sftp-server` on Kubuntu; Arch's `openssh` and macOS have it already; elsewhere point `YAGNI_SFTP_SERVER` at it. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
+`./test.sh` (`cargo test --workspace`), `cargo clippy --workspace --all-targets` and, on Linux, `scripts/smoke.sh`, which drives the real app under Xvfb. The remote-folder tests run OpenSSH's `sftp-server` locally in place of a host (no server is started): `sudo apt install openssh-sftp-server` on Kubuntu (the update tests also need `curl`); Arch's `openssh` and macOS have it already; elsewhere point `YAGNI_SFTP_SERVER` at it. It needs `sudo apt install xvfb xdotool x11-utils imagemagick xclip mesa-vulkan-drivers` (Kubuntu) or `sudo pacman -S xorg-server-xvfb xdotool xorg-xprop imagemagick xclip vulkan-swrast` (Arch).
 
 - [SPEC.md](SPEC.md): what the app does, and why.
 - [ARCHITECTURE.md](ARCHITECTURE.md): how the code is organized, technical decisions, known issues.

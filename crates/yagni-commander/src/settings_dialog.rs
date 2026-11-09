@@ -398,6 +398,13 @@ impl Render for SettingsView {
                 }
             })
             .children(log_dir_below)
+            // Last, under the log folder's line in either layout.
+            .child(switch(
+                "settings-updates",
+                "Check for updates at startup",
+                config.check_updates,
+                Setting::CheckUpdates,
+            ))
     }
 }
 

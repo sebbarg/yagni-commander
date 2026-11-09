@@ -25,6 +25,9 @@ pub const GIT_BRANCH: char = '\u{f418}';
 /// nf-md-refresh: the F3 viewer's reload button.
 pub const RELOAD: char = '\u{f0450}';
 
+/// nf-md-update: the status bar's button for a newer release.
+pub const UPDATE: char = '\u{f06b0}';
+
 /// nf-md-help: the F3 viewer's key overlay button.
 pub const HELP: char = '\u{f02d6}';
 
@@ -142,6 +145,7 @@ mod tests {
             ("GIT_BRANCH", GIT_BRANCH),
             ("RELOAD", RELOAD),
             ("HELP", HELP),
+            ("UPDATE", UPDATE),
         ];
         let all = table::FILE_NAMES
             .iter()

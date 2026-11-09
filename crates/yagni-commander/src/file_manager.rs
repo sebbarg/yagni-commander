@@ -23,6 +23,7 @@ mod loads;
 mod open_with;
 mod properties;
 pub(crate) mod remote_edit;
+pub(crate) mod self_update;
 mod watch;
 
 use crate::actions::{
@@ -48,7 +49,7 @@ use crate::zoom::{Zoom, rems_from_px, scaled};
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
-const STATUS_HEIGHT: f32 = 22.0;
+const STATUS_HEIGHT: f32 = 30.0;
 /// An Alt press this soon after the window became active is the tail of a
 /// window switch, never a lone Alt for the menu.
 const ALT_AFTER_ACTIVATION: std::time::Duration = std::time::Duration::from_millis(200);
@@ -110,6 +111,8 @@ pub struct FileManager {
     pub(crate) update_url: String,
     /// A check for updates is running: another press waits for it.
     checking_updates: bool,
+    /// The startup check's state and the update itself (`self_update.rs`).
+    pub(crate) updates: self_update::Updates,
     /// Runs directory reads; `None` reads them inline (tests).
     load: Option<loads::LoadFn>,
     /// Directory reads in progress.
@@ -286,6 +289,7 @@ impl FileManager {
             opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
             update_url: yagni_commander_core::update::LATEST_URL.to_owned(),
             checking_updates: false,
+            updates: self_update::Updates::new(),
             terminal: None,
             load: Some(loads::spawn_load),
             loads: Vec::new(),
@@ -681,7 +685,12 @@ impl FileManager {
             }
         }
         let git_changed = config.git != old.git;
+        let updates_changed = config.check_updates != old.check_updates;
+        let check_updates = config.check_updates;
         cx.global_mut::<CurrentConfig>().config = config;
+        if updates_changed {
+            self.check_updates_changed(check_updates, cx);
+        }
         if git_changed {
             self.sync_git(cx);
         }
@@ -885,6 +894,7 @@ impl Render for FileManager {
                 .child(text),
             None => div()
                 .id("status-hint")
+                .debug_selector(|| "status-hint".into())
                 .text_color(colors.text_secondary)
                 .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
         };
@@ -1079,7 +1089,8 @@ impl Render for FileManager {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .p(rems_from_px(PADDING))
+                    .pt(rems_from_px(PADDING))
+                    .px(rems_from_px(PADDING))
                     .child(
                         div()
                             .relative()
@@ -1105,11 +1116,16 @@ impl Render for FileManager {
                     ),
             )
             .child(
-                status
+                div()
+                    .flex()
+                    .items_center()
                     .h(rems_from_px(STATUS_HEIGHT))
                     .flex_none()
                     .px(rems_from_px(10.0))
-                    .text_size(rems_from_px(12.0)),
+                    .text_size(rems_from_px(12.0))
+                    .child(status.flex_1().min_w_0().overflow_hidden())
+                    .child(self.test_update_button(cx))
+                    .children(self.update_button(cx)),
             )
     }
 }

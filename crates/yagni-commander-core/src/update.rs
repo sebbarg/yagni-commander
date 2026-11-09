@@ -1,8 +1,12 @@
-//! Help > Check for updates: asks GitHub which release is the latest and
-//! compares it with this build. One HTTPS request, nothing sent but the
-//! request itself.
+//! Asks GitHub which release is the latest and compares it with this build
+//! (one HTTPS request, nothing sent but the request itself), and installs a
+//! release over this copy.
 
+use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::time::Duration;
 
 /// Redirects to the latest release's tag page (`.../releases/tag/v1.2.3`).
@@ -12,6 +16,16 @@ pub const LATEST_URL: &str = "https://github.com/sebbarg/yagni-commander/release
 
 /// How to install a release, for the "available" message.
 pub const INSTALL_URL: &str = "https://github.com/sebbarg/yagni-commander#installing";
+
+/// A release's files are at `<this>/v<version>/<file>`.
+pub const RELEASES_URL: &str = "https://github.com/sebbarg/yagni-commander/releases/download";
+
+/// Where `install/install.sh` puts the program, under the home folder.
+const INSTALLED_EXE: &str = if cfg!(target_os = "macos") {
+    "Applications/yagni-commander.app/Contents/MacOS/yagni-commander"
+} else {
+    ".local/bin/yagni-commander"
+};
 
 /// The whole check gives up after this long.
 const TIMEOUT: Duration = Duration::from_secs(15);
@@ -71,7 +85,7 @@ pub fn check(url: &str) -> Result<Check, String> {
     Ok(Check::new(Version::current(), latest(url)?))
 }
 
-fn latest(url: &str) -> Result<Version, String> {
+pub fn latest(url: &str) -> Result<Version, String> {
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .max_redirects(0)
         .timeout_global(Some(TIMEOUT))
@@ -93,6 +107,141 @@ fn latest(url: &str) -> Result<Version, String> {
             Some(l) => format!("GitHub sent an unexpected address: {l}"),
             None => format!("GitHub sent no release (status {}).", response.status()),
         })
+}
+
+/// What to start after an update, if `exe` is where the install script puts
+/// the program (the installed binary; on macOS its `.app`). A copy anywhere
+/// else (a build, a bundle dragged to `/Applications`) isn't the one the
+/// script would replace, so it can't update itself.
+pub fn installed_app(exe: &Path, home: &Path) -> Option<PathBuf> {
+    let exe = exe.canonicalize().ok()?;
+    if exe != home.canonicalize().ok()?.join(INSTALLED_EXE) {
+        return None;
+    }
+    if cfg!(target_os = "macos") {
+        exe.ancestors().nth(3).map(Path::to_owned)
+    } else {
+        Some(exe)
+    }
+}
+
+/// TEMPORARY (the macOS test button): what `installed_app` would return for
+/// a copy where the install script puts it, wherever this one runs.
+pub fn default_app(home: &Path) -> PathBuf {
+    let exe = home.join(INSTALLED_EXE);
+    if cfg!(target_os = "macos") {
+        exe.ancestors().nth(3).map(Path::to_owned).unwrap_or(exe)
+    } else {
+        exe
+    }
+}
+
+/// Installs release `version` as the README's one-liner does: the release's
+/// own `install.sh`, fetched with `curl` and run by `sh`, which checks the
+/// download and replaces the installed copy. Blocks: run it on a thread.
+///
+/// Always through `curl`: macOS quarantines what an app with
+/// `LSFileQuarantineEnabled` writes, and neither curl nor we set that, so
+/// the unnotarized app opens afterwards. The error is a sentence.
+pub fn install(releases: &str, version: Version) -> Result<(), String> {
+    let url = format!("{releases}/v{version}/install.sh");
+    let script = crate::shell_path::command("curl")
+        .args(["-fsSL", "--max-time", "60", &url])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("Cannot run curl: {e}"))?;
+    if !script.status.success() {
+        let stderr = String::from_utf8_lossy(&script.stderr);
+        return Err(github_trouble(&stderr)
+            .unwrap_or_else(|| format!("Cannot download the installer: {}", stderr.trim())));
+    }
+    let mut child = crate::shell_path::command("sh")
+        .arg("-s")
+        .env("YAGNI_COMMANDER_RELEASES", releases)
+        // Would move a Linux install away from the copy being replaced.
+        .env_remove("PREFIX")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot run the installer: {e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // A script that stops early shows up in its exit status.
+        let _ = stdin.write_all(&script.stdout);
+    }
+    let done = child
+        .wait_with_output()
+        .map_err(|e| format!("The installer stopped unexpectedly: {e}"))?;
+    if done.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&done.stderr);
+        Err(github_trouble(&stderr)
+            .unwrap_or_else(|| format!("The installer failed: {}", stderr.trim())))
+    }
+}
+
+/// A sentence for curl's error text when the cause is GitHub or the network,
+/// not the update. Only curl's messages match, and every download comes
+/// before the install script touches the installed copy, so nothing changed.
+/// An unknown wording just keeps the technical message.
+fn github_trouble(stderr: &str) -> Option<String> {
+    // curl: DNS, connect, timeout, TLS, empty reply, cut off, receive.
+    const UNREACHABLE: [&str; 7] = [
+        "curl: (6)",
+        "curl: (7)",
+        "curl: (28)",
+        "curl: (35)",
+        "curl: (52)",
+        "curl: (18)",
+        "curl: (56)",
+    ];
+    if let Some((_, rest)) = stderr.split_once("returned error: 5") {
+        let digits = rest.get(..2)?;
+        if digits.bytes().all(|b| b.is_ascii_digit()) {
+            return Some(format!(
+                "GitHub is having trouble serving this release (HTTP 5{digits}). Nothing was changed. Try again later."
+            ));
+        }
+    }
+    UNREACHABLE
+        .iter()
+        .any(|code| stderr.contains(code))
+        .then(|| {
+            "Cannot reach GitHub. Nothing was changed. Check the connection and try again."
+                .to_owned()
+        })
+}
+
+/// Starts `app` once this process has ended. The caller quits right after,
+/// so the state file is saved before the new copy reads it (and macOS's
+/// `open` would only bring the old copy to the front).
+pub fn relaunch(app: &Path) -> Result<(), String> {
+    let command: Vec<&OsStr> = if cfg!(target_os = "macos") {
+        vec![OsStr::new("open"), app.as_os_str()]
+    } else {
+        vec![app.as_os_str()]
+    };
+    relaunch_after(std::process::id(), &command)
+}
+
+/// Waits for `pid` to end, 10 s at most, then runs `command`, from a shell
+/// that outlives us.
+#[allow(clippy::zombie_processes)] // It is meant to outlive us.
+fn relaunch_after(pid: u32, command: &[&OsStr]) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    const WAIT: &str = r#"i=0; while kill -0 "$0" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done; exec "$@""#;
+    let mut args: Vec<OsString> = vec!["-c".into(), WAIT.into(), pid.to_string().into()];
+    args.extend(command.iter().map(|part| part.to_os_string()));
+    crate::shell_path::command("sh")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("Cannot restart: {e}"))
 }
 
 #[cfg(test)]
@@ -230,5 +379,128 @@ mod tests {
             .port();
         let error = check(&format!("http://127.0.0.1:{port}/")).unwrap_err();
         assert!(error.starts_with("Cannot reach GitHub: "), "{error}");
+    }
+
+    #[test]
+    fn only_the_install_scripts_location_can_update_itself() {
+        let home = tempfile::tempdir().unwrap();
+        let exe = home.path().join(INSTALLED_EXE);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"").unwrap();
+        let elsewhere = home.path().join("yagni-commander");
+        std::fs::write(&elsewhere, b"").unwrap();
+        let found = installed_app(&exe, home.path()).unwrap();
+        let wanted = home
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(if cfg!(target_os = "macos") {
+                "Applications/yagni-commander.app"
+            } else {
+                INSTALLED_EXE
+            });
+        assert_eq!(found, wanted);
+        assert_eq!(installed_app(&elsewhere, home.path()), None);
+        assert_eq!(installed_app(&home.path().join("gone"), home.path()), None);
+    }
+
+    /// A release folder with `script` as v1.2.3's install.sh.
+    fn releases(script: &str) -> (tempfile::TempDir, String) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("v1.2.3")).unwrap();
+        std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
+        let url = format!("file://{}", tmp.path().display());
+        (tmp, url)
+    }
+
+    #[test]
+    fn install_runs_the_releases_script_and_points_it_at_the_releases() {
+        let (tmp, url) = releases("");
+        let mark = tmp.path().join("ran");
+        let script = format!(
+            "echo \"$YAGNI_COMMANDER_RELEASES\" > '{}'\n",
+            mark.display()
+        );
+        std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
+        install(&url, Version(1, 2, 3)).unwrap();
+        assert_eq!(std::fs::read_to_string(mark).unwrap().trim(), url);
+    }
+
+    #[test]
+    fn a_failing_script_says_why() {
+        let (_tmp, url) = releases("echo 'install.sh: broken' >&2; exit 1\n");
+        let error = install(&url, Version(1, 2, 3)).unwrap_err();
+        assert_eq!(error, "The installer failed: install.sh: broken");
+    }
+
+    #[test]
+    fn github_and_network_trouble_get_a_plain_sentence() {
+        let served =
+            "curl: (22) The requested URL returned error: 504\ninstall.sh: could not download x";
+        assert_eq!(
+            github_trouble(served).unwrap(),
+            "GitHub is having trouble serving this release (HTTP 504). Nothing was changed. Try again later."
+        );
+        for line in [
+            "curl: (6) Could not resolve host: github.com",
+            "curl: (7) Failed to connect",
+            "curl: (28) Operation too slow",
+            "curl: (56) Recv failure",
+        ] {
+            assert!(
+                github_trouble(line)
+                    .unwrap()
+                    .starts_with("Cannot reach GitHub."),
+                "{line}"
+            );
+        }
+        for other in [
+            "curl: (22) The requested URL returned error: 404",
+            "install.sh: x does not match its checksum",
+            "returned error: 5",
+        ] {
+            assert_eq!(github_trouble(other), None, "{other}");
+        }
+    }
+
+    #[test]
+    fn a_script_stopped_by_github_says_so() {
+        let (_tmp, url) =
+            releases("echo 'curl: (22) The requested URL returned error: 503' >&2; exit 1\n");
+        let error = install(&url, Version(1, 2, 3)).unwrap_err();
+        assert!(error.contains("(HTTP 503)"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_release_runs_nothing() {
+        let (_tmp, url) = releases("");
+        let error = install(&url, Version(9, 9, 9)).unwrap_err();
+        assert!(
+            error.starts_with("Cannot download the installer: "),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn relaunch_waits_for_the_old_process_then_runs_the_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mark = tmp.path().join("started");
+        let mut old = std::process::Command::new("sleep")
+            .arg("0.4")
+            .spawn()
+            .unwrap();
+        let line = format!("echo up > '{}'", mark.display());
+        let parts = [OsStr::new("sh"), OsStr::new("-c"), OsStr::new(&line)];
+        relaunch_after(old.id(), &parts).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert!(!mark.exists(), "the old process still runs");
+        old.wait().unwrap();
+        for _ in 0..100 {
+            if mark.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("never started");
     }
 }

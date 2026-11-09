@@ -43,6 +43,9 @@ fi
 iconutil -c icns "$root/app-icon/$app.iconset" -o "$bundle/Contents/Resources/$app.icns"
 "$root/packaging/copy-licenses.sh" "$bundle/Contents/Resources"
 
+# Never add LSFileQuarantineEnabled: macOS would quarantine what the app
+# and its children write, so an update from inside the app would be blocked
+# at its next start (see core `update::install`).
 cat >"$bundle/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

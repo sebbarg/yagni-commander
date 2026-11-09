@@ -39,7 +39,7 @@ sha256() {
 
 # Downloads release file $1 into the work folder and checks it.
 fetch() {
-    curl -fsSL -o "$work/$1" "$base/$1" || fail "could not download $base/$1"
+    curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/$1" "$base/$1" || fail "could not download $base/$1"
     expected=$(awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' "$work/SHA256SUMS")
     [ -n "$expected" ] || fail "$1 is not in SHA256SUMS"
     [ "$(sha256 "$work/$1")" = "$expected" ] || fail "$1 does not match its checksum"
@@ -75,7 +75,7 @@ main() {
         fi
         need ditto
         file=$APP-$VERSION-macos.zip
-        curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
+        curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
         fetch "$file"
         ditto -x -k "$work/$file" "$work"
         mkdir -p "$apps"
@@ -87,7 +87,7 @@ main() {
         [ "$(uname -m)" = x86_64 ] || fail "no release for $(uname -m); build it from source (see the README)"
         need tar
         name=$APP-$VERSION-linux-x86_64
-        curl -fsSL -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
+        curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
         fetch "$name.tar.gz"
         tar -xzf "$work/$name.tar.gz" -C "$work"
         if [ $uninstall = 1 ]; then

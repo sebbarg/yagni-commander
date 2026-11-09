@@ -1022,7 +1022,7 @@ impl FileManager {
         .detach();
     }
 
-    fn show_update_check(
+    pub(super) fn show_update_check(
         &mut self,
         result: Result<update::Check, String>,
         window: &mut Window,

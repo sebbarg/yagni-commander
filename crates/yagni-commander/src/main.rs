@@ -168,6 +168,7 @@ fn main() {
                     cx.new(|cx| {
                         let mut view = FileManager::new(commander, notice, window, cx);
                         view.temp_dir = temp_path;
+                        view.check_at_start(cx);
                         if let Some((server, questions)) = questions {
                             view.ask_from(questions, window, cx);
                             // Kept for the app's life: it owns the socket.

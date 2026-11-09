@@ -2218,6 +2218,211 @@ mod check_for_updates {
         file_manager(cx).update(cx, |this, _| this.update_url = url);
     }
 
+    fn button_shown(cx: &mut VisualTestContext) -> bool {
+        cx.debug_bounds("update-button").is_some()
+    }
+
+    fn available(cx: &mut VisualTestContext) -> bool {
+        file_manager(cx).read_with(cx, |this, _| this.updates.available.is_some())
+    }
+
+    /// Settings' switch turned on, with `tag` the latest release.
+    fn turn_on(tag: &str, cx: &mut VisualTestContext) -> tempfile::TempDir {
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        release(tag, cx);
+        change_setting(Setting::CheckUpdates(true), cx);
+        cfg
+    }
+
+    /// With the button up: this copy is installed at a made-up place,
+    /// releases come from a folder holding `script` as 999.0.0's install.sh,
+    /// and restarting records the app it was given.
+    fn ready_to_update(
+        script: &str,
+        cx: &mut VisualTestContext,
+    ) -> (
+        tempfile::TempDir,
+        std::rc::Rc<std::cell::RefCell<Vec<PathBuf>>>,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(tmp.path().join("v999.0.0")).unwrap();
+        std::fs::write(tmp.path().join("v999.0.0/install.sh"), script).unwrap();
+        let started = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let record = started.clone();
+        let releases = format!("file://{}", tmp.path().display());
+        file_manager(cx).update(cx, |this, cx| {
+            this.updates.available = yagni_commander_core::update::Version::parse("999.0.0");
+            this.updates.app = Some("/installed/app".into());
+            this.updates.releases = releases;
+            this.updates.relaunch = std::rc::Rc::new(move |app| {
+                record.borrow_mut().push(app.to_owned());
+                Ok(())
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        (tmp, started)
+    }
+
+    // TEMPORARY, with the macOS test button.
+    #[gpui_kit::test]
+    fn the_test_button_offers_the_update_even_when_up_to_date(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        release("v0.0.1", cx);
+        click(cx, "update-test-button", 1);
+        wait_until(cx, dialog_open);
+        assert!(cx.debug_bounds("update-question").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn no_button_until_the_setting_finds_a_release(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        assert!(!button_shown(cx));
+        let _cfg = turn_on("v999.0.0", cx);
+        wait_until(cx, available);
+        assert!(button_shown(cx));
+        assert!(!dialog_open(cx), "a quiet check opens nothing");
+    }
+
+    #[gpui_kit::test]
+    fn the_latest_version_shows_no_button(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let _cfg = turn_on("v0.0.1", cx);
+        wait_until(cx, |cx| {
+            !file_manager(cx).read_with(cx, |this, _| this.updates.is_checking())
+        });
+        assert!(!button_shown(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_quiet_check_says_nothing(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        change_setting(Setting::CheckUpdates(true), cx);
+        wait_until(cx, |cx| {
+            !file_manager(cx).read_with(cx, |this, _| this.updates.is_checking())
+        });
+        assert!(!button_shown(cx));
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn startup_checks_only_with_the_setting_on(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        let at_start = |cx: &mut VisualTestContext| {
+            file_manager(cx).update(cx, |this, cx| this.check_at_start(cx));
+        };
+        at_start(cx);
+        assert!(!file_manager(cx).read_with(cx, |this, _| this.updates.is_checking()));
+        use_config(cfg.path(), "check_updates = true\n", cx);
+        release("v999.0.0", cx);
+        at_start(cx);
+        wait_until(cx, available);
+    }
+
+    #[gpui_kit::test]
+    fn turning_it_off_hides_the_button(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let _cfg = turn_on("v999.0.0", cx);
+        wait_until(cx, available);
+        change_setting(Setting::CheckUpdates(false), cx);
+        assert!(!button_shown(cx));
+    }
+
+    #[gpui_kit::test]
+    fn yes_installs_and_restarts(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (releases, started) = ready_to_update("", cx);
+        let mark = releases.path().join("ran");
+        let script = format!("echo ran > '{}'\n", mark.display());
+        std::fs::write(releases.path().join("v999.0.0/install.sh"), script).unwrap();
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("update-question").is_some());
+        assert!(!mark.exists(), "nothing before the answer");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |_| !started.borrow().is_empty());
+        assert!(mark.exists());
+        assert_eq!(*started.borrow(), [PathBuf::from("/installed/app")]);
+    }
+
+    #[gpui_kit::test]
+    fn the_install_box_keeps_moving(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("sleep 1\n", cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        let bar = "update-progress-bar";
+        wait_until(cx, |cx| cx.debug_bounds(bar).is_some());
+        let first = cx.debug_bounds(bar).unwrap().origin.x;
+        wait_until(cx, |cx| cx.debug_bounds(bar).unwrap().origin.x != first);
+        wait_until(cx, |_| !started.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn the_status_text_and_buttons_share_a_center_line(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        ready_to_update("", cx);
+        let middle = |cx: &mut VisualTestContext, id: &'static str| {
+            let bounds = cx.debug_bounds(id).unwrap();
+            bounds.top() + bounds.size.height / 2.0
+        };
+        let text = middle(cx, "status-hint");
+        // Within layout's rounding of each element to whole pixels.
+        for id in ["update-button", "update-test-button"] {
+            let off = f32::from(text - middle(cx, id)).abs();
+            assert!(off < 1.0, "{id}: {off}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn not_now_leaves_everything_alone(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("", cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("right enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(started.borrow().is_empty());
+        assert!(button_shown(cx));
+        cx.simulate_keystrokes("down");
+        assert_eq!(cursor(&commander, Side::Left, cx), 1);
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_install_says_why_and_does_not_restart(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("echo 'install.sh: broken' >&2; exit 1\n", cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| {
+            cx.debug_bounds("update-installing").is_none() && dialog_open(cx)
+        });
+        assert_eq!(
+            box_text(cx),
+            "Update failed\nThe installer failed: install.sh: broken"
+        );
+        assert!(started.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_copy_elsewhere_gets_the_install_instructions(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("", cx);
+        file_manager(cx).update(cx, |this, _| this.updates.app = None);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        assert!(box_text(cx).contains("999.0.0 is available"));
+        assert!(started.borrow().is_empty());
+    }
+
     fn check(cx: &mut VisualTestContext) {
         cx.dispatch_action(crate::actions::CheckForUpdates);
         wait_until(cx, dialog_open);
@@ -3507,6 +3712,27 @@ fn ctrl_r_applies_a_hand_edited_icons_key(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-r");
     cx.run_until_parked();
     assert!(cx.debug_bounds("icon-left-1").is_none());
+}
+
+#[gpui_kit::test]
+fn the_update_switch_sits_below_the_log_folder_in_both_layouts(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    use_config(cfg.path(), "", cx);
+    use_log_dir(tmp.path(), cx);
+    activate(cx);
+    for width in [1000.0, 600.0] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(800.0)));
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        let y = |cx: &mut VisualTestContext, id: &'static str| cx.debug_bounds(id).unwrap().top();
+        assert!(
+            y(cx, "settings-updates") > y(cx, "settings-log-dir"),
+            "{width}"
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+    }
 }
 
 #[gpui_kit::test]
@@ -8812,6 +9038,25 @@ pub(crate) mod tab_order {
     }
 
     #[gpui_kit::test]
+    fn the_update_question_goes_round_its_buttons(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        file_manager(cx).update(cx, |this, cx| {
+            this.updates.available = yagni_commander_core::update::Version::parse("999.0.0");
+            this.updates.app = Some("/installed/app".into());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        activate(cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        let named = Vec::new();
+        assert_focus(cx, "button:Update and restart", &named);
+        let order = ["button:Not now", "button:Update and restart"];
+        assert_order(cx, "tab", &order, &named);
+        assert_order(cx, "shift-tab", &order, &named);
+    }
+
+    #[gpui_kit::test]
     fn the_settings_go_top_to_bottom(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
@@ -8835,6 +9080,8 @@ pub(crate) mod tab_order {
             "Dialog",
             "Dialog",
             "Dialog",
+            "Dialog",
+            // Check for updates.
             "Dialog",
             "button:Close",
         ];
