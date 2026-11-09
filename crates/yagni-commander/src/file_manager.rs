@@ -35,7 +35,7 @@ use crate::actions::{
     Rename, SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
     ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
     SwapPanels, SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu,
-    ToggleSelection, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    ToggleSelection, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -46,6 +46,10 @@ use crate::mounts_popup::{MountsEvent, MountsPopup};
 use crate::panel_view::PanelView;
 use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
+
+/// The hotlist and mounts popups' distance from the panel's left and from the bottom of
+/// its path header. One value, so the gap looks the same on both sides.
+const POPUP_INSET: f32 = 9.0;
 
 const PADDING: f32 = 6.0;
 const DIVIDER_WIDTH: f32 = 6.0;
@@ -78,8 +82,10 @@ pub(crate) struct OpenMounts {
     _subscriptions: Vec<Subscription>,
 }
 
-/// The open hotlist popup and the side it belongs to.
+/// The open hotlist or user commands popup and the side it belongs to.
 pub(crate) struct OpenHotlist {
+    /// The user commands (Ctrl-S), whose "paths" are commands.
+    pub commands: bool,
     pub side: Side,
     pub popup: Entity<HotlistPopup>,
     _subscriptions: Vec<Subscription>,
@@ -374,10 +380,39 @@ impl FileManager {
         if self.active_loading(cx) || self.hotlist.is_some() {
             return;
         }
+        let entries = cx.global::<CurrentConfig>().config.hotlist.clone();
+        self.open_hotlist_popup(entries, false, window, cx);
+    }
+
+    /// Ctrl-S: the user commands. Refused where there is no local file to
+    /// hand a program.
+    fn user_commands(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) || self.hotlist.is_some() {
+            return;
+        }
+        self.end_search(cx);
+        if self.refuse_read_only(window, cx) {
+            return;
+        }
+        let entries = crate::hotlist_dialog::command_entries(cx);
+        self.open_hotlist_popup(entries, true, window, cx);
+    }
+
+    fn open_hotlist_popup(
+        &mut self,
+        entries: Vec<yagni_commander_core::config::HotlistEntry>,
+        commands: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.end_search(cx);
         let side = self.commander.read(cx).active();
-        let entries = cx.global::<CurrentConfig>().config.hotlist.clone();
-        let popup = cx.new(|cx| HotlistPopup::new(entries, cx));
+        let title = if commands {
+            "User commands"
+        } else {
+            "Directory hotlist"
+        };
+        let popup = cx.new(|cx| HotlistPopup::new(title, entries, !commands, cx));
         let picked = cx.subscribe_in(
             &popup,
             window,
@@ -393,6 +428,7 @@ impl FileManager {
         });
         focus.focus(window, cx);
         self.hotlist = Some(OpenHotlist {
+            commands,
             side,
             popup,
             _subscriptions: vec![picked, blurred],
@@ -409,8 +445,11 @@ impl FileManager {
     }
 
     fn on_hotlist(&mut self, event: &HotlistEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let commands = self.hotlist.as_ref().is_some_and(|open| open.commands);
         self.close_hotlist(window, cx);
         match event {
+            HotlistEvent::Pick(command) if commands => self.run_user_command(command, window, cx),
+            HotlistEvent::Configure if commands => self.open_commands_dialog(window, cx),
             HotlistEvent::Pick(entry_path) => {
                 let entry_path = entry_path.clone();
                 self.notice = None;
@@ -427,14 +466,14 @@ impl FileManager {
         }
     }
 
-    /// The popup, anchored right under `side`'s tabs.
+    /// The popup, anchored just under `side`'s path header.
     fn hotlist_overlay(&self, side: Side) -> Option<impl IntoElement + use<>> {
         let open = self.hotlist.as_ref().filter(|open| open.side == side)?;
         Some(
             div()
                 .absolute()
-                .top(rems_from_px(crate::panel_view::BELOW_TABS))
-                .left(rems_from_px(4.0))
+                .top(rems_from_px(crate::panel_view::BELOW_HEADER + POPUP_INSET))
+                .left(rems_from_px(POPUP_INSET))
                 .child(deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.0))
@@ -513,18 +552,14 @@ impl FileManager {
         }
     }
 
-    /// The dropdown, right under `side`'s path header, left-aligned with
-    /// its button.
+    /// The dropdown, in the same place as the hotlist popup.
     fn mounts_overlay(&self, side: Side) -> Option<impl IntoElement + use<>> {
         let open = self.mounts.as_ref().filter(|open| open.side == side)?;
         Some(
             div()
                 .absolute()
-                .top(rems_from_px(crate::panel_view::BELOW_HEADER))
-                .left(rems_from_px(6.0))
-                // Past the panel's 1 px border, which stays px.
-                .pt(px(1.0))
-                .pl(px(1.0))
+                .top(rems_from_px(crate::panel_view::BELOW_HEADER + POPUP_INSET))
+                .left(rems_from_px(POPUP_INSET))
                 .child(deferred(
                     anchored()
                         .snap_to_window_with_margin(px(8.0))
@@ -576,14 +611,19 @@ impl FileManager {
         self.apply_config(config, cx);
     }
 
-    /// While the config file is broken (or missing a folder), hotlist
-    /// changes are refused with the reason in an error box.
-    pub(crate) fn config_refused(&self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// While the config file is broken (or missing a folder), list changes
+    /// are refused with the reason in an error box titled `title`.
+    pub(crate) fn config_refused(
+        &self,
+        title: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(problem) = cx.global::<CurrentConfig>().problem.clone() else {
             return false;
         };
         commands::show_error(
-            "Hotlist not saved",
+            title,
             format!("{problem}. Fix the file, then press Ctrl-R."),
             Some(self.focus.clone()),
             window,
@@ -592,12 +632,49 @@ impl FileManager {
         true
     }
 
-    /// Saves the whole hotlist to the config file and applies it. A failed
-    /// save shows an error box (after any closing dialog); the list still
-    /// applies for this session.
+    /// Saves the whole hotlist to the config file and applies it.
     pub(crate) fn save_hotlist(
         &mut self,
         hotlist: Vec<yagni_commander_core::config::HotlistEntry>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = hotlist.clone();
+        self.save_list(
+            "Hotlist not saved",
+            move |config| config.hotlist = hotlist,
+            move |path| config::save_hotlist(path, &saved),
+            window,
+            cx,
+        );
+    }
+
+    /// Saves the whole list of user commands and applies it.
+    pub(crate) fn save_commands(
+        &mut self,
+        commands: Vec<yagni_commander_core::config::UserCommand>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let saved = commands.clone();
+        self.save_list(
+            "Commands not saved",
+            move |config| config.commands = commands,
+            move |path| config::save_commands(path, &saved),
+            window,
+            cx,
+        );
+    }
+
+    /// A list's change, saved by `save`. A failed save shows an error box
+    /// (after any closing dialog); the list still applies for this session.
+    fn save_list(
+        &mut self,
+        title: &'static str,
+        change: impl FnOnce(&mut Config),
+        save: impl FnOnce(
+            &std::path::Path,
+        ) -> Result<Config, yagni_commander_core::storage::StorageError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -606,17 +683,13 @@ impl FileManager {
             return;
         }
         let mut config = current.config.clone();
-        config.hotlist = hotlist;
-        match current
-            .path
-            .clone()
-            .map(|path| config::save_hotlist(&path, &config.hotlist))
-        {
+        change(&mut config);
+        match current.path.clone().map(|path| save(&path)) {
             Some(Ok(on_disk)) => config = on_disk,
             Some(Err(e)) => {
                 let message = e.to_string();
                 window.defer(cx, move |window, cx| {
-                    commands::show_error("Hotlist not saved", message, None, window, cx)
+                    commands::show_error(title, message, None, window, cx)
                 });
             }
             None => {}
@@ -1038,6 +1111,9 @@ impl Render for FileManager {
             )
             .on_action(cx.listener(|this, _: &ToggleMenu, window, cx| this.toggle_menu(window, cx)))
             .on_action(cx.listener(|this, _: &MenuAlt, window, cx| this.menu_alt(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &UserCommands, window, cx| this.user_commands(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &DirectoryHotlist, window, cx| {
                 this.directory_hotlist(window, cx)
             }))

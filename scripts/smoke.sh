@@ -45,7 +45,9 @@ export TERMINAL=fake-terminal
 # A stand-in editor: records the file it was given and exits at once.
 printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
 chmod +x "$work/bin/fake-editor"
-printf '# smoke config\neditor = "fake-editor"\nlog = true\n' >"$work/config/yagni-commander/config.toml"
+printf '#!/bin/sh\necho "$1" >"%s/user-command"\n' "$work" >"$work/bin/smoke-command"
+chmod +x "$work/bin/smoke-command"
+printf '# smoke config\neditor = "fake-editor"\nlog = true\n\n[[commands]]\nname = "&Smoke"\ncommand = "smoke-command {active_path}"\n' >"$work/config/yagni-commander/config.toml"
 # Two applications for text files (Shift-Enter), found through the
 # temporary XDG folders; the first is the default. Each records its file.
 mkdir -p "$work/data/applications"
@@ -484,6 +486,20 @@ shot 07h-hotlist-entry
 keys l
 check "back in left by the hotlist letter" title_is "$left"
 shot 07i-hotlist-back
+
+echo "Ctrl-S user commands: run one on the cursor entry, look at Configure"
+typed notes
+keys Escape
+keys ctrl+s
+shot 07i1-user-commands
+keys s
+check "the user command got notes.txt" has "$work/user-command" "$left/notes.txt"
+keys ctrl+s Up Return
+shot 07i2-user-commands-configure
+keys Tab Return        # Help
+shot 07i3-user-commands-help
+keys Escape
+keys Escape
 
 echo "Alt-F1/Alt-F2 mounts dropdown: Root by its letter on both sides"
 keys alt+F1

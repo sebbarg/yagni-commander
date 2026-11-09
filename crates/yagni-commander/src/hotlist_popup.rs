@@ -1,5 +1,6 @@
 //! The directory hotlist popup (Ctrl-D): the entries, then "Add current
-//! folder" and "Configure...". Our own view rather than gpui-component's
+//! folder" and "Configure...". The user commands (Ctrl-S) use it too, with
+//! the command as an entry's path and no Add. Our own view rather than gpui-component's
 //! `PopupMenu`, which has no letter keys. Letters pick an entry; Up/Down
 //! wrap; Enter picks; Escape closes. `FileManager` acts on the events and
 //! keeps other keys away while it is open (see [`passes`]).
@@ -12,7 +13,7 @@ use gpui_kit::{
 use yagni_commander_core::hotlist::{self, HotlistEntry};
 
 use crate::actions::{HOTLIST_CONTEXT, hotlist as act};
-use crate::theme::{Theme, popup_frame};
+use crate::theme::{Theme, popup_frame, popup_title};
 use crate::zoom::rems_from_px;
 
 pub enum HotlistEvent {
@@ -24,7 +25,10 @@ pub enum HotlistEvent {
 }
 
 pub struct HotlistPopup {
+    title: &'static str,
     entries: Vec<HotlistEntry>,
+    /// Whether the "Add current folder" row is there.
+    add: bool,
     /// Row under the highlight: entries, then Add, then Configure.
     highlight: usize,
     focus: FocusHandle,
@@ -50,9 +54,16 @@ pub fn passes(keystroke: &Keystroke) -> bool {
 }
 
 impl HotlistPopup {
-    pub fn new(entries: Vec<HotlistEntry>, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        title: &'static str,
+        entries: Vec<HotlistEntry>,
+        add: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
+            title,
             entries,
+            add,
             highlight: 0,
             focus: cx.focus_handle(),
         }
@@ -64,7 +75,7 @@ impl HotlistPopup {
     }
 
     fn rows(&self) -> usize {
-        self.entries.len() + 2
+        self.entries.len() + usize::from(self.add) + 1
     }
 
     fn step(&mut self, by: isize, cx: &mut Context<Self>) {
@@ -77,7 +88,7 @@ impl HotlistPopup {
         let count = self.entries.len();
         cx.emit(match row {
             r if r < count => HotlistEvent::Pick(self.entries[r].path.clone()),
-            r if r == count => HotlistEvent::Add,
+            r if r == count && self.add => HotlistEvent::Add,
             _ => HotlistEvent::Configure,
         });
     }
@@ -104,6 +115,7 @@ impl Render for HotlistPopup {
         let theme = Theme::get(cx).clone();
         let colors = theme.colors.clone();
         let count = self.entries.len();
+        let configure = self.rows() - 1;
         let row = |ix: usize, highlighted: bool| {
             div()
                 .id(("hotlist-row", ix))
@@ -152,12 +164,13 @@ impl Render for HotlistPopup {
             .debug_selector(|| "hotlist-popup".into())
             .occlude()
             .min_w(rems_from_px(260.0))
-            .py(rems_from_px(4.0))
+            .pb(rems_from_px(4.0))
             .flex()
             .flex_col()
             .map(|d| popup_frame(d, &theme))
             .text_sm()
             .text_color(colors.text)
+            .child(popup_title(self.title, "hotlist-title", &theme))
             .children(entries)
             .when(count > 0, |d| {
                 d.child(
@@ -167,7 +180,9 @@ impl Render for HotlistPopup {
                         .bg(colors.raised_border),
                 )
             })
-            .child(row(count, self.highlight == count).child("Add current folder"))
-            .child(row(count + 1, self.highlight == count + 1).child("Configure..."))
+            .when(self.add, |d| {
+                d.child(row(count, self.highlight == count).child("Add current folder"))
+            })
+            .child(row(configure, self.highlight == configure).child("Configure..."))
     }
 }

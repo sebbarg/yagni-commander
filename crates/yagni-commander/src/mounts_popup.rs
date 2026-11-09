@@ -15,7 +15,7 @@ use yagni_commander_core::mounts::{self, Place};
 
 use crate::actions::{MOUNTS_CONTEXT, mounts as act};
 use crate::hotlist_popup::passes;
-use crate::theme::{Theme, popup_frame};
+use crate::theme::{Theme, popup_frame, popup_title};
 use crate::zoom::rems_from_px;
 
 pub enum MountsEvent {
@@ -144,12 +144,13 @@ impl Render for MountsPopup {
             .debug_selector(|| "mounts-popup".into())
             .occlude()
             .min_w(rems_from_px(260.0))
-            .py(rems_from_px(4.0))
+            .pb(rems_from_px(4.0))
             .flex()
             .flex_col()
             .map(|d| popup_frame(d, &theme))
             .text_sm()
             .text_color(colors.text)
+            .child(popup_title("Mounts", "mounts-title", &theme))
             .children(rows)
     }
 }

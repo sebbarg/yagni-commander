@@ -219,7 +219,7 @@ impl FileManager {
         if self.active_panel(cx).in_archive() && self.refuse_read_only(window, cx) {
             return;
         }
-        if self.config_refused(window, cx) {
+        if self.config_refused("Hotlist not saved", window, cx) {
             return;
         }
         let path = self.current_folder_entry_path(cx);
@@ -839,7 +839,7 @@ pub(super) fn show_message_box(
 
 /// A [`show_message_box`] whose body `body` builds, for more than text.
 #[allow(clippy::too_many_arguments)]
-fn show_box(
+pub(crate) fn show_box(
     title: &'static str,
     body: impl Fn(&mut App) -> gpui_kit::AnyElement + 'static,
     copied: String,
@@ -894,11 +894,16 @@ pub(crate) fn text_field(state: &gpui_kit::Entity<InputState>) -> Input {
 /// focus ring 3 px outside the field, so the field needs room above and
 /// below or the ring is cut off.
 pub(crate) fn dialog_field(state: &gpui_kit::Entity<InputState>) -> gpui_kit::Div {
+    dialog_input(text_field(state))
+}
+
+/// [`dialog_field`] around a field already built, for one with options.
+pub(crate) fn dialog_input(field: Input) -> gpui_kit::Div {
     use gpui_kit::{InteractiveElement, ParentElement, Styled};
     gpui_kit::div()
         .debug_selector(|| "prompt-field".into())
         .py(crate::zoom::rems_from_px(4.0))
-        .child(text_field(state))
+        .child(field)
 }
 
 /// A [`dialog_field`] for a password: the text is masked (set

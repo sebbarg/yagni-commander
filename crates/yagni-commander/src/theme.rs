@@ -253,6 +253,27 @@ pub fn popup_frame<E: Styled>(element: E, theme: &Theme) -> E {
         .shadow(theme.popup_shadow())
 }
 
+/// The title of a popup, with a line between it and the rows. It must be the
+/// popup's first child, in a popup without top padding (`pb` only), or the
+/// text is off center between the popup's top edge and the line.
+pub fn popup_title(text: &'static str, selector: &'static str, theme: &Theme) -> gpui_kit::Div {
+    use crate::zoom::rems_from_px;
+    use gpui_kit::{InteractiveElement, ParentElement};
+    gpui_kit::div()
+        .debug_selector(move || selector.into())
+        .h(rems_from_px(26.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .px(rems_from_px(10.0))
+        .mb(rems_from_px(4.0))
+        .border_b_1()
+        .border_color(theme.colors.raised_border)
+        .text_color(theme.colors.text_secondary)
+        .child(text)
+}
+
 /// The frame of our own controls in dialogs (the dropdown, the find
 /// dialog's "Skip folders"), drawn like gpui-component's text fields: the
 /// `input` edge, and in dark mode its tint, in light mode `panel_bg`. This

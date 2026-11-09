@@ -10,6 +10,7 @@ use crate::sort::SortKey;
 use crate::storage::{self, StorageError};
 
 pub use crate::hotlist::HotlistEntry;
+pub use crate::user_commands::UserCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -39,6 +40,8 @@ pub struct Config {
     pub theme: Option<String>,
     /// Bookmarked folders (Ctrl-D), edited in the app.
     pub hotlist: Vec<HotlistEntry>,
+    /// Programs to open the cursor entry with (Ctrl-S), edited in the app.
+    pub commands: Vec<UserCommand>,
 }
 
 impl Default for Config {
@@ -56,6 +59,7 @@ impl Default for Config {
             check_updates: false,
             theme: None,
             hotlist: Vec::new(),
+            commands: Vec::new(),
         }
     }
 }
@@ -220,24 +224,52 @@ const HOTLIST_COMMENT: &str = "\n# Directory hotlist (Ctrl-D), edited in the app
 /// tables change (comments inside the old ones are lost), a broken file is
 /// left alone, and the config as now on disk is returned.
 pub fn save_hotlist(path: &Path, hotlist: &[HotlistEntry]) -> Result<Config, StorageError> {
+    let tables = hotlist
+        .iter()
+        .map(|entry| [("name", entry.name.as_str()), ("path", entry.path.as_str())]);
+    save_tables(path, "hotlist", HOTLIST_COMMENT, tables)
+}
+
+/// Comment above the first `[[commands]]` table.
+const COMMANDS_COMMENT: &str = "\n# User commands (Ctrl-S), edited in the app. Keep them at the end of the\n# file: a setting written below would belong to the last entry.\n";
+
+/// Saves the whole list of user commands, like [`save_hotlist`].
+pub fn save_commands(path: &Path, commands: &[UserCommand]) -> Result<Config, StorageError> {
+    let tables = commands.iter().map(|entry| {
+        [
+            ("name", entry.name.as_str()),
+            ("command", entry.command.as_str()),
+        ]
+    });
+    save_tables(path, "commands", COMMANDS_COMMENT, tables)
+}
+
+/// Replaces the `[[key]]` tables, each given as its fields.
+fn save_tables<'a, const N: usize>(
+    path: &Path,
+    key: &str,
+    comment: &str,
+    entries: impl ExactSizeIterator<Item = [(&'a str, &'a str); N]>,
+) -> Result<Config, StorageError> {
     Config::load_or_create(path)?;
     let text = fs::read_to_string(path).map_err(|e| StorageError::Io(path.to_owned(), e))?;
     let mut doc: toml_edit::DocumentMut = text
         .parse()
         .map_err(|e: toml_edit::TomlError| StorageError::Edit(path.to_owned(), e.to_string()))?;
-    doc.remove("hotlist");
-    if !hotlist.is_empty() {
+    doc.remove(key);
+    if entries.len() > 0 {
         let mut tables = toml_edit::ArrayOfTables::new();
-        for (ix, entry) in hotlist.iter().enumerate() {
+        for (ix, fields) in entries.enumerate() {
             let mut table = toml_edit::Table::new();
-            table["name"] = toml_edit::value(entry.name.as_str());
-            table["path"] = toml_edit::value(entry.path.as_str());
+            for (name, value) in fields {
+                table[name] = toml_edit::value(value);
+            }
             table
                 .decor_mut()
-                .set_prefix(if ix == 0 { HOTLIST_COMMENT } else { "\n" });
+                .set_prefix(if ix == 0 { comment } else { "\n" });
             tables.push(table);
         }
-        doc.insert("hotlist", toml_edit::Item::ArrayOfTables(tables));
+        doc.insert(key, toml_edit::Item::ArrayOfTables(tables));
     }
     let text = doc.to_string();
     let config: Config =
@@ -286,6 +318,53 @@ mod tests {
             name: name.into(),
             path: path.into(),
         }
+    }
+
+    #[test]
+    fn user_commands_are_read_from_the_file() {
+        let text = "[[commands]]\nname = \"&SQLite\"\ncommand = \"sqlitebrowser {active_path}\"\n\n[[commands]]\ncommand = \"x\"\n";
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(config.commands.len(), 2);
+        assert_eq!(config.commands[0].name, "&SQLite");
+        assert_eq!(config.commands[1].name, "");
+        assert!(Config::default().commands.is_empty());
+    }
+
+    #[test]
+    fn the_hotlist_and_the_commands_are_saved_without_touching_each_other() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "# mine\nicons = false\n").unwrap();
+        let commands = [UserCommand {
+            name: "&SQLite".into(),
+            command: "x \"a b\" {active_path}".into(),
+        }];
+        save_hotlist(&path, &[entry("&Src", "~/src")]).unwrap();
+        let config = save_commands(&path, &commands).unwrap();
+        assert_eq!(config.commands, commands);
+        assert_eq!(config.hotlist, [entry("&Src", "~/src")]);
+        let config = save_hotlist(&path, &[entry("&New", "/new")]).unwrap();
+        assert_eq!(config.commands, commands);
+        let config = save_setting(&path, &Setting::Git(false)).unwrap();
+        assert_eq!(config.commands, commands);
+        assert!(!config.git, "a setting doesn't land in a table");
+        let config = save_commands(&path, &[]).unwrap();
+        assert!(config.commands.is_empty());
+        assert_eq!(config.hotlist, [entry("&New", "/new")]);
+        let saved = fs::read_to_string(&path).unwrap();
+        assert!(
+            saved.contains("# mine") && !saved.contains("[[commands]]"),
+            "{saved}"
+        );
+    }
+
+    #[test]
+    fn save_commands_never_writes_a_broken_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "not toml [").unwrap();
+        assert!(save_commands(&path, &[]).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "not toml [");
     }
 
     #[test]
@@ -455,6 +534,7 @@ mod tests {
             check_updates: true,
             theme: Some("classic".into()),
             hotlist: vec![entry("&Src", "~/src")],
+            commands: Vec::new(),
         };
         storage::save(&path, &config).unwrap();
         assert_eq!(Config::load_or_create(&path).unwrap(), config);

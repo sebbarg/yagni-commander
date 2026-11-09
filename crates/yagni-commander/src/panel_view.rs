@@ -32,14 +32,11 @@ pub fn row_height(cx: &App) -> f32 {
     scaled(ROW_HEIGHT, Zoom::get(cx).ui)
 }
 
-const HEADER_HEIGHT: f32 = 32.0;
+pub(crate) const HEADER_HEIGHT: f32 = 32.0;
 const TAB_HEIGHT: f32 = 26.0;
 /// A tab's width while they all fit; then they shrink evenly.
 const TAB_WIDTH: f32 = 160.0;
 const COLUMN_HEADER_HEIGHT: f32 = 26.0;
-/// Distance from a panel's top to the bottom of its tabs. The hotlist popup
-/// opens there, over the path header.
-pub(crate) const BELOW_TABS: f32 = TAB_HEIGHT;
 /// Distance from a panel's top to the bottom of its path header, where the
 /// mounts dropdown opens.
 pub(crate) const BELOW_HEADER: f32 = TAB_HEIGHT + HEADER_HEIGHT;

@@ -89,6 +89,8 @@ actions!(
         MenuAlt,
         OpenSettings,
         DirectoryHotlist,
+        /// Ctrl-S: the user commands popup.
+        UserCommands,
         /// Ctrl-F: the Connect dialog (hosts of `~/.ssh/config`).
         Connect,
         /// Alt-F1/Alt-F2: the mounts dropdown of the left or right panel.
@@ -380,6 +382,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-tab", PrevTab, context),
         KeyBinding::new("ctrl-r", Reload, context),
         KeyBinding::new("ctrl-d", DirectoryHotlist, context),
+        KeyBinding::new("ctrl-s", UserCommands, context),
         KeyBinding::new("ctrl-f", Connect, context),
         KeyBinding::new("alt-f1", MountsLeft, context),
         KeyBinding::new("alt-f2", MountsRight, context),

@@ -15,6 +15,7 @@ use gpui_kit::{
     Window, anchored, deferred, div, px,
 };
 use yagni_commander_core::apps::{self, App, Found};
+use yagni_commander_core::user_commands::{self, Panels, Place};
 use yagni_commander_core::{EntryKind, Side};
 
 use super::FileManager;
@@ -158,6 +159,42 @@ impl FileManager {
         self.close_open_with(window, cx);
         if let OpenWithEvent::Pick(app) = event {
             self.start_app(app.clone(), window, cx);
+        }
+    }
+
+    /// A user command (Ctrl-S), on the entry under the cursor. On ".." that
+    /// is the current folder.
+    pub(super) fn run_user_command(
+        &mut self,
+        command: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let commander = self.commander.read(cx);
+        let panel = commander.panel(commander.active());
+        let other = commander.panel(commander.active().other());
+        let entry = panel.cursor_path();
+        let cwd = match (panel.cursor_entry(), entry.parent()) {
+            (Some(cursor), Some(parent)) if cursor.kind != EntryKind::Parent => parent.to_owned(),
+            _ => entry.clone(),
+        };
+        let panels = Panels {
+            active: Place {
+                entry,
+                dir: panel.path().to_owned(),
+            },
+            inactive: (!other.in_archive() && !other.is_remote()).then(|| Place {
+                entry: other.cursor_path(),
+                dir: other.path().to_owned(),
+            }),
+            cwd,
+        };
+        match user_commands::prepare(command, &panels, commander.home()) {
+            Ok(app) => self.start_app(app, window, cx),
+            Err(why) => {
+                let refocus = Some(self.focus.clone());
+                show_error("Cannot run command", why, refocus, window, cx);
+            }
         }
     }
 

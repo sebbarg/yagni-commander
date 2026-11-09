@@ -15,7 +15,7 @@ use yagni_commander_core::mounts::next_label;
 
 use crate::actions::{OPEN_WITH_CONTEXT, open_with as act};
 use crate::hotlist_popup::passes;
-use crate::theme::{Theme, popup_frame};
+use crate::theme::{Theme, popup_frame, popup_title};
 use crate::zoom::rems_from_px;
 
 pub enum OpenWithEvent {
@@ -150,23 +150,11 @@ impl Render for OpenWithPopup {
             .debug_selector(|| "open-with-popup".into())
             .occlude()
             .min_w(rems_from_px(220.0))
-            .py(rems_from_px(4.0))
+            .pb(rems_from_px(4.0))
             .map(|d| popup_frame(d, &theme))
             .text_sm()
             .text_color(colors.text)
-            .child(
-                div()
-                    .debug_selector(|| "open-with-title".into())
-                    .h(rems_from_px(ROW_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .px(rems_from_px(10.0))
-                    .mb(rems_from_px(4.0))
-                    .border_b_1()
-                    .border_color(colors.raised_border)
-                    .text_color(colors.text_secondary)
-                    .child("Open with"),
-            )
+            .child(popup_title("Open with", "open-with-title", &theme))
             .child(
                 div()
                     .id("open-with-list")

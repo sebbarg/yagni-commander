@@ -34,6 +34,7 @@ pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_archives;
 pub mod update;
+pub mod user_commands;
 pub mod viewer;
 pub mod watch;
 

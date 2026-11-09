@@ -13,7 +13,7 @@ use crate::actions::{
     MakeDirectory, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal,
     OpenWith, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
     SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
-    ToggleHidden, Trash, View, ZoomIn, ZoomOut, ZoomReset,
+    ToggleHidden, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -202,6 +202,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Mounts right", MountsRight),
                 item("Find files...", FindFiles),
                 item("Open terminal here", OpenTerminal),
+                item("User commands", UserCommands),
                 MenuEntry::Separator,
                 item("New tab", NewTab),
                 item("Close tab", CloseTab),
@@ -372,6 +373,7 @@ mod tests {
                 "Mounts right",
                 "Find files...",
                 "Open terminal here",
+                "User commands",
                 "-",
                 "New tab",
                 "Close tab",

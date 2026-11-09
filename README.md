@@ -38,6 +38,18 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
 - Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
 
+## User commands
+
+Ctrl-S lists programs you chose to open the entry under the cursor with, handy for file types nothing is registered for. Add them with Configure in that list, or in `config.toml`:
+
+```toml
+[[commands]]
+name = "&SQLite"
+command = "sqlitebrowser {active_path}"
+```
+
+Nothing is added to a command by itself, so use a parameter to pass the file. The parameters are `{active_path}`, `{active_name}`, `{active_stem}`, `{active_ext}` and `{active_dir}`, and the same with `inactive_` for the other panel (the Help button in Configure lists them). The command runs without a shell. On a Mac, use for example `open -a "DB Browser for SQLite" {active_path}`.
+
 ## Remote folders (SFTP)
 
 Ctrl-F (or Commands > Connect...) lists the hosts in your `~/.ssh/config`; pick one, or type `user@host`, and its home folder opens in a new tab, labeled `sftp:`. From there it works like a local folder: copy and move in either direction or between two hosts (F5, F6), delete (F8, permanently: there is no trash on a host), rename (F2), new folder (F7), view (F3). Hotlist entries can point at `sftp://host/path` too.
