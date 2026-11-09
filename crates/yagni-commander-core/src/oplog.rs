@@ -1,5 +1,5 @@
 //! The operation log: one line per file the app creates, copies, moves,
-//! renames, trashes or deletes, in one file per day
+//! renames, trashes or deletes, and each update installed, in one file per day
 //! (`operations-YYYY-MM-DD.log`, local date) in the log directory. Enabled by
 //! `log = true` in the config; files older than `log_keep_days` are deleted
 //! at startup ([`prune`]).

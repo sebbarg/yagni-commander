@@ -319,5 +319,6 @@ Alt-F7 or Commands > Find files.... Pulled forward from v2 and decided with the 
 - Off by default; `log = true` in the config turns it on.
 - One file per day, `operations-YYYY-MM-DD.log` (local date), in a `logs` folder next to the state file (`~/.local/state/yagni-commander/logs/` on Linux). Private to the user (mode 0600), never written through a symlink. Not in `/tmp`: shared with other users and emptied on reboot.
 - One line per file or directory the app creates, copies, moves, renames, trashes or deletes, plus skips ("exists") and failures, with a timestamp. Copy/move/trash/delete also log a start line (with each selected source) and a finish line (failed and skipped counts). F2, F7 and Shift-F4 log one line each; Shift-F4 on an existing file logs nothing.
+- An install from the update button logs one line, `update installed X -> Y` or `update failed X -> Y: why`, and `update restart failed: why` if the new copy can't be started. Background checks log nothing.
 - At startup, log files older than `log_keep_days` (default 7) are deleted, even when logging is off. Only files named like log files are touched.
 - Logging problems never stop an operation. A log that can't be opened at startup is reported in the status line and the app runs without it.

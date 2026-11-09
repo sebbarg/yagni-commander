@@ -282,7 +282,7 @@ impl FileManager {
                 }
             };
             let _ = this.update_in(cx, |this, window, cx| {
-                this.update_installed(result, window, cx)
+                this.update_installed(version, result, window, cx)
             });
         })
         .detach();
@@ -290,11 +290,20 @@ impl FileManager {
 
     fn update_installed(
         &mut self,
+        version: update::Version,
         result: Result<(), String>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         window.close_dialog(cx);
+        let log = self.commander.read(cx).log().cloned();
+        if let Some(log) = &log {
+            log.write(install_log_line(
+                update::Version::current(),
+                version,
+                &result,
+            ));
+        }
         let refocus = Some(self.focus.clone());
         let failure = match result {
             Err(e) => ("Update failed", e),
@@ -302,7 +311,12 @@ impl FileManager {
                 let app = self.updates.app.clone().unwrap_or_default();
                 match (self.updates.relaunch)(&app) {
                     Ok(()) => return cx.quit(),
-                    Err(e) => ("Updated, but not restarted", e),
+                    Err(e) => {
+                        if let Some(log) = &log {
+                            log.write(format_args!("update restart failed: {}", one_line(&e)));
+                        }
+                        ("Updated, but not restarted", e)
+                    }
                 }
             }
         };
@@ -311,6 +325,23 @@ impl FileManager {
             show_error(failure.0, failure.1, refocus, window, cx)
         });
     }
+}
+
+/// The operation log's line for an install attempt.
+fn install_log_line(
+    current: update::Version,
+    version: update::Version,
+    result: &Result<(), String>,
+) -> String {
+    match result {
+        Ok(()) => format!("update installed {current} -> {version}"),
+        Err(e) => format!("update failed {current} -> {version}: {}", one_line(e)),
+    }
+}
+
+/// The log has one line per entry; curl and the script may write several.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 pub(super) fn update_question(latest: update::Version, current: update::Version) -> String {

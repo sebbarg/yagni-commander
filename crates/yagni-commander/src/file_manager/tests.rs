@@ -2368,6 +2368,48 @@ mod check_for_updates {
         assert!(off < 1.0, "{off}");
     }
 
+    /// Logging on, in a folder of its own; `update` runs, then the log's text.
+    fn logged_update(script: &str, cx: &mut VisualTestContext) -> String {
+        let cfg = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        use_log_dir(logs.path(), cx);
+        change_setting(Setting::Log(true), cx);
+        let (_releases, started) = ready_to_update(script, cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| {
+            !started.borrow().is_empty()
+                || (cx.debug_bounds("update-installing").is_none() && dialog_open(cx))
+        });
+        let file = std::fs::read_dir(logs.path())
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap();
+        std::fs::read_to_string(file.path()).unwrap()
+    }
+
+    #[gpui_kit::test]
+    fn an_installed_update_is_logged(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let text = logged_update("", cx);
+        let version = env!("CARGO_PKG_VERSION");
+        let wanted = format!(" update installed {version} -> 999.0.0");
+        assert!(text.lines().any(|l| l.ends_with(&wanted)), "{text}");
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_update_is_logged_on_one_line(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let text = logged_update("echo first >&2; echo second >&2; exit 1\n", cx);
+        let version = env!("CARGO_PKG_VERSION");
+        let wanted =
+            format!(" update failed {version} -> 999.0.0: The installer failed: first second");
+        assert!(text.lines().any(|l| l.ends_with(&wanted)), "{text}");
+    }
+
     #[gpui_kit::test]
     fn not_now_leaves_everything_alone(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
