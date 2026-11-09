@@ -17,4 +17,4 @@ pub use images::{IMAGE_CAP, Images, has_scheme, local_image};
 pub use layout::{BLOCK, HexColumn, Highlight, MAX_ROW_CHARS, ROW_WINDOW, Row, Visible, Wrap};
 pub use lines::{LineIndex, count_lines};
 pub use search::{Direction, find};
-pub use source::{FileSource, Source};
+pub use source::{FileSource, FileStamp, Source};

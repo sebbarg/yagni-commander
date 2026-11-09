@@ -5,6 +5,9 @@
 
 use gpui_kit::{Context, div, prelude::*};
 
+use yagni_commander_core::icons;
+
+use super::reload::ICON_TEXT;
 use super::{STATUS_HEIGHT, ViewerView};
 use crate::theme::{Theme, popup_frame};
 use crate::zoom::rems_from_px;
@@ -23,7 +26,8 @@ pub(super) enum Needs {
     NotHex,
     /// Another mode than Markdown (`M`).
     NotMarkdown,
-    /// The file itself, not an archive entry's private copy (F4).
+    /// The file itself, not a private copy of an archive entry or a remote
+    /// file (F4, Ctrl-R).
     File,
 }
 
@@ -105,6 +109,7 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
             "Other",
             &[
                 entry(&["f4"], "Edit", Needs::File),
+                entry(&["ctrl-r"], "Reload", Needs::File),
                 entry(&["?"], "These keys", Needs::Always),
                 entry(&["escape", "q"], "Close", Needs::Always),
             ],
@@ -196,7 +201,9 @@ impl ViewerView {
             .bg(bg)
             .text_color(fg)
             .cursor_pointer()
-            .child("?")
+            .font_family(icons::FONT_FAMILY)
+            .text_size(rems_from_px(ICON_TEXT))
+            .child(icons::HELP.to_string())
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {

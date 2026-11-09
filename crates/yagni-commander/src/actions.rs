@@ -134,7 +134,8 @@ pub mod viewer {
             ZoomOut,
             ZoomReset,
             Edit,
-            Help
+            Help,
+            Reload
         ]
     );
 }
@@ -528,6 +529,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("t", viewer::ShowText, ctx),
         KeyBinding::new("h", viewer::ShowHex, ctx),
         KeyBinding::new("m", viewer::ShowMarkdown, ctx),
+        KeyBinding::new("ctrl-r", viewer::Reload, ctx),
         KeyBinding::new("left", viewer::ScrollLeft, ctx),
         KeyBinding::new("right", viewer::ScrollRight, ctx),
         KeyBinding::new("ctrl-f", viewer::Find, ctx),

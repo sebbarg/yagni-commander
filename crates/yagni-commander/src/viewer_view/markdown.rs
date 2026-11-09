@@ -13,6 +13,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::time::Duration;
 
 use gpui_kit::base::TextViewStyle;
 use gpui_kit::base::text::TextView;
@@ -81,6 +82,10 @@ fn longest_paragraph(bytes: &[u8]) -> u64 {
     longest
 }
 
+/// How often, and how many times, a reload looks for the parsed blocks.
+const RESTORE_POLL: Duration = Duration::from_millis(10);
+const RESTORE_TRIES: u32 = 500;
+
 /// A line for Up/Down, in px at the 16 px base.
 const LINE: f32 = 24.0;
 
@@ -142,6 +147,40 @@ impl Markdown {
             Scroll::End => list.scroll_to_end(),
         }
         self.state.update(cx, |_, cx| cx.notify());
+    }
+
+    /// The block at the top of the view and how far into it.
+    pub(super) fn top(&self, cx: &App) -> ListOffset {
+        self.state.read(cx).list_state().logical_scroll_top()
+    }
+
+    /// Goes to `top` once the new text is parsed and its blocks are listed:
+    /// until then the view has nothing to scroll, and listing them resets
+    /// the list to the start.
+    pub(super) fn restore_top(&self, top: ListOffset, cx: &mut App) {
+        let state = self.state.downgrade();
+        let list = self.state.read(cx).list_state().clone();
+        let timer = cx.background_executor().clone();
+        cx.spawn(async move |cx| {
+            for _ in 0..RESTORE_TRIES {
+                timer.timer(RESTORE_POLL).await;
+                let count = list.item_count();
+                if count == 0 {
+                    continue;
+                }
+                list.scroll_to(if top.item_ix < count {
+                    top
+                } else {
+                    ListOffset {
+                        item_ix: count - 1,
+                        offset_in_item: px(0.0),
+                    }
+                });
+                let _ = state.update(cx, |_, cx| cx.notify());
+                break;
+            }
+        })
+        .detach();
     }
 
     /// How far down the view is scrolled, 0 to 100 (100 when it all fits).

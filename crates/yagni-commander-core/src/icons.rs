@@ -22,6 +22,12 @@ pub const CURRENT_FOLDER: char = '\u{f07c}';
 /// nf-oct-git_branch: before the branch in a panel's path header.
 pub const GIT_BRANCH: char = '\u{f418}';
 
+/// nf-md-refresh: the F3 viewer's reload button.
+pub const RELOAD: char = '\u{f0450}';
+
+/// nf-md-help: the F3 viewer's key overlay button.
+pub const HELP: char = '\u{f02d6}';
+
 /// Folders with their own icon, matched by exact name. Sorted by name.
 const SPECIAL_FOLDERS: &[(&str, char)] = &[
     (".cargo", '\u{e68b}'),       // seti-rust
@@ -134,6 +140,8 @@ mod tests {
             ("HOME", HOME),
             ("CURRENT_FOLDER", CURRENT_FOLDER),
             ("GIT_BRANCH", GIT_BRANCH),
+            ("RELOAD", RELOAD),
+            ("HELP", HELP),
         ];
         let all = table::FILE_NAMES
             .iter()

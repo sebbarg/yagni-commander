@@ -667,6 +667,15 @@ keys ctrl+a ctrl+c
 check "markdown copy is the shown text" bash -c "xclip -o -selection clipboard | grep -qx 'Second heading'"
 check "markdown copy has no marks" bash -c "! xclip -o -selection clipboard | grep -q '[#*|]'"
 check "a remote image is its alt text" bash -c "xclip -o -selection clipboard | grep -q 'Badge: remote badge'"
+echo "a file changed behind the viewer lights the reload button; Ctrl-R reads it"
+printf '\nAdded behind the viewer\n' >>"$left/guide.md"
+sleep 1.5
+shot 10e1-viewer-file-changed
+keys ctrl+r
+sleep 1
+shot 10e2-viewer-reloaded
+keys ctrl+a ctrl+c
+check "the reload shows the new text" bash -c "xclip -o -selection clipboard | grep -q 'Added behind the viewer'"
 keys t
 shot 10f-viewer-markdown-off
 keys Escape

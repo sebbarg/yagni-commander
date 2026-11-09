@@ -1,10 +1,11 @@
 //! Where the viewer's bytes come from: positional reads, so any part of a
 //! huge file can be read without the rest.
 
-use std::fs::{File, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions};
 use std::io;
-use std::os::unix::fs::{FileExt, OpenOptionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt};
 use std::path::Path;
+use std::time::SystemTime;
 
 use nix::fcntl::OFlag;
 
@@ -36,10 +37,38 @@ impl Source for Vec<u8> {
     }
 }
 
+/// Tells one version of a file from another: a rewrite changes the size or
+/// the time, a replacement (an editor's rename over it) the inode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStamp {
+    dev: u64,
+    ino: u64,
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+impl FileStamp {
+    fn of_metadata(meta: &Metadata) -> Self {
+        Self {
+            dev: meta.dev(),
+            ino: meta.ino(),
+            len: meta.len(),
+            modified: meta.modified().ok(),
+        }
+    }
+
+    /// The regular file at `path` now (a symlink's target), if there is one.
+    pub fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        meta.is_file().then(|| Self::of_metadata(&meta))
+    }
+}
+
 /// A regular file opened for viewing.
 pub struct FileSource {
     file: File,
     len: u64,
+    stamp: FileStamp,
 }
 
 impl FileSource {
@@ -64,7 +93,14 @@ impl FileSource {
         Ok(Self {
             file,
             len: meta.len(),
+            stamp: FileStamp::of_metadata(&meta),
         })
+    }
+
+    /// The version that was opened, read from the open file, so a change
+    /// right after opening still differs from it.
+    pub fn stamp(&self) -> FileStamp {
+        self.stamp
     }
 
     /// A second handle on the same file, for the background line count.
@@ -72,6 +108,7 @@ impl FileSource {
         Ok(Self {
             file: self.file.try_clone()?,
             len: self.len,
+            stamp: self.stamp,
         })
     }
 }
@@ -98,6 +135,50 @@ impl Source for FileSource {
 mod tests {
     use super::*;
     use crate::viewer::{Document, Wrap};
+
+    #[test]
+    fn a_stamp_tells_versions_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f");
+        std::fs::write(&path, b"one").unwrap();
+        let stamp = FileSource::open(&path).unwrap().stamp();
+        assert_eq!(FileStamp::of(&path), Some(stamp), "unchanged");
+
+        // The same size, a later time.
+        let file = File::options().write(true).open(&path).unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(10);
+        file.set_modified(later).unwrap();
+        assert_ne!(FileStamp::of(&path), Some(stamp), "touched");
+
+        // Replaced, with the same size and time: another inode.
+        let before = FileStamp::of(&path).unwrap();
+        let new = tmp.path().join("new");
+        std::fs::write(&new, b"two").unwrap();
+        File::options()
+            .write(true)
+            .open(&new)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        std::fs::rename(&new, &path).unwrap();
+        assert_ne!(FileStamp::of(&path), Some(before), "replaced");
+    }
+
+    #[test]
+    fn a_stamp_needs_a_regular_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(FileStamp::of(&tmp.path().join("gone")), None);
+        assert_eq!(FileStamp::of(tmp.path()), None, "a folder");
+    }
+
+    #[test]
+    fn a_clone_keeps_the_stamp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f");
+        std::fs::write(&path, b"one").unwrap();
+        let source = FileSource::open(&path).unwrap();
+        assert_eq!(source.try_clone().unwrap().stamp(), source.stamp());
+    }
 
     #[test]
     fn reads_a_file_by_position() {

@@ -1420,6 +1420,43 @@ mod markdown_mode {
         viewer.update(cx, |v, cx| v.status_text(cx))
     }
 
+    #[gpui_kit::test]
+    fn a_reload_shows_the_new_text_at_the_same_place(cx: &mut TestAppContext) {
+        let text: String = (1..=200).map(|n| format!("Paragraph {n}\n\n")).collect();
+        let (_tmp, viewer, mut vcx) = view_named("long.md", text.as_bytes(), None, cx);
+        settle(&mut vcx);
+        vcx.simulate_keystrokes("pagedown pagedown");
+        settle(&mut vcx);
+        let top = viewer.read_with(&vcx, |v, cx| v.markdown().unwrap().top(cx));
+        assert!(top.item_ix > 0);
+
+        // One paragraph more: another block count, which resets the list.
+        let path = viewer.read_with(&vcx, |v, _| v.path.clone());
+        std::fs::write(&path, format!("{text}Added\n\nAnother\n")).unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        settle(&mut vcx);
+        for _ in 0..3 {
+            vcx.executor()
+                .advance_clock(std::time::Duration::from_millis(10));
+            settle(&mut vcx);
+        }
+        assert!(rendered(&viewer, &mut vcx).unwrap().contains("Added"));
+        let now = viewer.read_with(&vcx, |v, cx| v.markdown().unwrap().top(cx));
+        assert_eq!(now.item_ix, top.item_ix);
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_past_the_limits_falls_back_to_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("doc.md", b"# Title\n", None, cx);
+        settle(&mut vcx);
+        let path = viewer.read_with(&vcx, |v, _| v.path.clone());
+        std::fs::write(&path, vec![b'a'; super::super::markdown::CAP as usize + 1]).unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        settle(&mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_none()));
+        assert!(dialog_open(&mut vcx));
+    }
+
     fn dialog_open(cx: &mut VisualTestContext) -> bool {
         cx.update(|window, cx| window.has_active_dialog(cx))
     }
@@ -1970,5 +2007,155 @@ mod help {
         assert!(Needs::NotHex.met(markdown_over_hex), "H leaves Markdown");
         assert!(Needs::File.met(text) && !Needs::File.met(archive));
         assert!(Needs::Always.met(markdown));
+    }
+}
+
+mod reload {
+    use super::*;
+    use gpui_kit::component::WindowExt;
+    use yagni_commander_core::viewer::FileStamp;
+
+    fn file(viewer: &Entity<ViewerView>, cx: &VisualTestContext) -> PathBuf {
+        viewer.read_with(cx, |v, _| v.path.clone())
+    }
+
+    /// What the watcher reports after a change.
+    fn report(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) {
+        let stamp = FileStamp::of(&file(viewer, cx));
+        viewer.update(cx, |v, cx| v.file_seen(stamp, cx));
+    }
+
+    fn changed(viewer: &Entity<ViewerView>, cx: &VisualTestContext) -> bool {
+        viewer.read_with(cx, |v, _| v.changed)
+    }
+
+    #[gpui_kit::test]
+    fn a_change_lights_the_button_and_leaves_the_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        report(&viewer, &mut cx);
+        assert!(!changed(&viewer, &cx), "a sibling's change is no change");
+        std::fs::write(file(&viewer, &cx), b"newer\n").unwrap();
+        report(&viewer, &mut cx);
+        assert!(changed(&viewer, &cx));
+        assert_eq!(shown(&viewer, &mut cx)[0], "old");
+    }
+
+    #[gpui_kit::test]
+    fn a_deleted_file_lights_nothing(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        std::fs::write(file(&viewer, &cx), b"newer\n").unwrap();
+        report(&viewer, &mut cx);
+        std::fs::remove_file(file(&viewer, &cx)).unwrap();
+        report(&viewer, &mut cx);
+        assert!(!changed(&viewer, &cx));
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_r_reads_the_new_version(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        std::fs::write(file(&viewer, &cx), b"newer\nlines\n").unwrap();
+        report(&viewer, &mut cx);
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(shown(&viewer, &mut cx)[..2], ["newer", "lines"]);
+        assert!(!changed(&viewer, &cx));
+        let lines = viewer.read_with(&cx, |v, _| v.lines.as_ref().map(|l| l.lines()));
+        assert_eq!(lines, Some(2), "counted again");
+        report(&viewer, &mut cx);
+        assert!(!changed(&viewer, &cx), "the new version is the one shown");
+    }
+
+    #[gpui_kit::test]
+    fn the_button_reloads(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        std::fs::write(file(&viewer, &cx), b"newer\n").unwrap();
+        cx.run_until_parked();
+        let at = cx
+            .debug_bounds("viewer-reload-button")
+            .expect("drawn")
+            .center();
+        cx.simulate_mouse_move(at, None, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_down(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        cx.simulate_mouse_up(at, gpui_kit::MouseButton::Left, gpui_kit::Modifiers::none());
+        assert_eq!(shown(&viewer, &mut cx)[0], "newer");
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_keeps_the_place_and_clamps_to_a_shorter_file(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        cx.simulate_keystrokes("pagedown pagedown");
+        let top = shown(&viewer, &mut cx)[0].clone();
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(shown(&viewer, &mut cx)[0], top);
+
+        std::fs::write(file(&viewer, &cx), numbered(3)).unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(shown(&viewer, &mut cx)[0], "line 1");
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_keeps_hex_mode(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        cx.simulate_keystrokes("h");
+        std::fs::write(file(&viewer, &cx), b"AB\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert!(viewer.read_with(&cx, |v, _| v.hex));
+        assert!(shown(&viewer, &mut cx)[0].contains("41 42"));
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_drops_positions_but_keeps_the_search(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"one two\n", cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.simulate_input("two");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        for _ in 0..5 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        assert!(viewer.read_with(&cx, |v, _| v.search.current.is_some()));
+        std::fs::write(file(&viewer, &cx), b"two one\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        viewer.read_with(&cx, |v, _| {
+            assert!(v.search.current.is_none());
+            assert!(v.selection.is_none());
+        });
+        cx.simulate_keystrokes("f3");
+        for _ in 0..5 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        let current = viewer.read_with(&cx, |v, _| v.search.current.clone());
+        assert_eq!(current, Some(0..3));
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_reload_keeps_the_text_and_says_why(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(b"old\n", cx);
+        std::fs::remove_file(file(&viewer, &cx)).unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+        assert_eq!(shown(&viewer, &mut cx)[0], "old");
+    }
+
+    #[gpui_kit::test]
+    fn a_private_copy_has_no_reload(cx: &mut TestAppContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("entry.txt");
+        std::fs::write(&path, b"old\n").unwrap();
+        let copy = tempfile::tempdir().unwrap();
+        cx.update(|cx| open(path.clone(), main_bounds(), Some(copy), None, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        let mut cx = VisualTestContext::from_window(window, cx);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("viewer-reload-button").is_none());
+        std::fs::write(&path, b"newer\n").unwrap();
+        cx.simulate_keystrokes("ctrl-r");
+        assert_eq!(shown(&viewer, &mut cx)[0], "old");
     }
 }

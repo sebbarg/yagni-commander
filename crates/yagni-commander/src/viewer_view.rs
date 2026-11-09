@@ -18,14 +18,15 @@ use yagni_commander_core::find::text::Text;
 use yagni_commander_core::format_size;
 use yagni_commander_core::launch;
 use yagni_commander_core::viewer::{
-    Direction, Document, FileSource, Highlight, LineIndex, Row, Visible, Wrap, count_lines,
+    Direction, Document, FileSource, FileStamp, Highlight, LineIndex, Row, Visible, Wrap,
 };
+use yagni_commander_core::watch::PanelWatcher;
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, Help, LineDown, LineUp,
-    PageDown, PageUp, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowMarkdown, ShowText, Start,
-    ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
+    PageDown, PageUp, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowMarkdown, ShowText,
+    Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::file_manager::commands::{configured_editor, show_error, show_message};
@@ -35,6 +36,7 @@ use crate::zoom::{Zoom, rems_from_px, scaled};
 
 mod help;
 mod markdown;
+mod reload;
 mod search;
 mod select;
 
@@ -159,6 +161,13 @@ pub struct ViewerView {
     /// Fractional columns of sideways wheel scrolling not applied yet.
     wheel_cols: f32,
     _subscriptions: Vec<Subscription>,
+    /// The version of the file on screen.
+    stamp: FileStamp,
+    /// The file on disk is another version than `stamp`.
+    changed: bool,
+    /// Watches the file's folder, while the window lives. `None` for a
+    /// private copy, or when the folder can't be watched.
+    _watcher: Option<PanelWatcher>,
     /// The private copy of an archive entry, deleted with the window.
     temp: Option<tempfile::TempDir>,
 }
@@ -179,25 +188,17 @@ impl ViewerView {
         })];
         AppState::remember_viewer(window.window_bounds(), cx);
 
-        let cancel_count = Arc::new(AtomicBool::new(false));
-        if let Ok(counter) = source.try_clone() {
-            let cancel = cancel_count.clone();
-            let counting = cx
-                .background_executor()
-                .spawn(async move { count_lines(&counter, &cancel) });
-            cx.spawn(async move |this, cx| {
-                if let Ok(Some(index)) = counting.await {
-                    let _ = this.update(cx, |this, cx| {
-                        this.lines = Some(Arc::new(index));
-                        cx.notify();
-                    });
-                }
-            })
-            .detach();
-        }
+        let cancel_count = reload::start_count(&source, cx);
+        let watcher = temp
+            .is_none()
+            .then(|| reload::watch_file(&path, cx))
+            .flatten();
 
         Self {
             path,
+            stamp: source.stamp(),
+            changed: false,
+            _watcher: watcher,
             doc: Document::new(source),
             focus,
             wrap: cx.try_global::<Wrapping>().is_some_and(|w| w.0),
@@ -785,6 +786,7 @@ impl Render for ViewerView {
                 cx.listener(|this, _: &ShowMarkdown, window, cx| this.show_markdown(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Help, _, cx| this.toggle_help(cx)))
+            .on_action(cx.listener(|this, _: &Reload, window, cx| this.reload(window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
             .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
@@ -895,6 +897,9 @@ impl Render for ViewerView {
                                 .whitespace_nowrap()
                                 .text_ellipsis(),
                             )
+                            .when(self.temp.is_none(), |this| {
+                                this.child(self.reload_button(cx))
+                            })
                             .child(self.help_button(cx)),
                     )
                     .when(self.help, |this| this.child(self.render_help(cx))),
