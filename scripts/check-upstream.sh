@@ -6,9 +6,10 @@
 #   scripts/check-upstream.sh <check> [crate-file]
 #
 # Checks:
-#   menu-keys     gpui-pre-macos `key_to_native` maps Enter and Tab, so the
-#                 native macOS menu can show them (Gotchas, menu shortcut
-#                 labels; actions::hide_native_menu_keys).
+#   menu-keys     gpui-pre-macos `key_to_menu_equivalent` (`key_to_native`
+#                 before 0.3.12) maps Enter and Tab, so the native macOS
+#                 menu can show them (Gotchas, menu shortcut labels;
+#                 actions::hide_native_menu_keys).
 #   x11-position  gpui-pre-linux sets a position in the X11 window's
 #                 WM_NORMAL_HINTS, so KWin restores and centers the window
 #                 (Known issues).
@@ -54,9 +55,9 @@ source_file=${files[0]}
 
 case $check in
 menu-keys)
-    # The match arms of key_to_native, up to its catch-all.
-    table=$(sed -n '/fn key_to_native/,/_ =>/p' "$source_file")
-    [[ -n $table ]] || { echo "no key_to_native in $name $version" >&2; exit 2; }
+    # The match arms of the key table, up to its catch-all.
+    table=$(sed -nE '/fn key_to_(native|menu_equivalent)/,/_ =>/p' "$source_file")
+    [[ -n $table ]] || { echo "no key table in $name $version" >&2; exit 2; }
     echo "$version"
     grep -q '"enter" =>' <<<"$table" && grep -q '"tab" =>' <<<"$table" && exit 0
     ;;

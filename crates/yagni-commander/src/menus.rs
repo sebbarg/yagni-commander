@@ -601,11 +601,12 @@ mod tests {
             eprintln!("gpui-pre-macos {version} source not found; not checked");
             return;
         };
-        let table = source
-            .split("fn key_to_native")
-            .nth(1)
+        // Renamed in 0.3.12.
+        let table = ["fn key_to_native", "fn key_to_menu_equivalent"]
+            .iter()
+            .find_map(|name| source.split(name).nth(1))
             .and_then(|rest| rest.split("_ =>").next())
-            .expect("key_to_native in gpui-pre-macos");
+            .expect("the menu key table in gpui-pre-macos");
         let maps = |key: &str| table.contains(&format!("\"{key}\" =>"));
         assert!(
             !(maps("enter") && maps("tab")),
