@@ -993,8 +993,8 @@ impl FileManager {
 
 impl FileManager {
     /// Help > Check for updates: asks GitHub on a thread of its own and
-    /// shows what it found in a box: the latest version, or a newer one
-    /// with a link to the install instructions, or why it couldn't tell.
+    /// shows what it found: the latest version, an offer to install a newer
+    /// one, or why it couldn't tell.
     pub(super) fn check_for_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         if self.checking_updates {
@@ -1019,12 +1019,36 @@ impl FileManager {
                 };
                 let _ = this.update_in(cx, |this, window, cx| {
                     this.checking_updates = false;
-                    this.show_update_check(result, window, cx);
+                    this.checked_for_updates(result, window, cx);
                 });
                 break;
             }
         })
         .detach();
+    }
+
+    /// A newer release is offered like the update button's click (which
+    /// shows the install link for a copy that can't replace itself), and
+    /// the button shows it from now on; any other answer is shown in a box.
+    fn checked_for_updates(
+        &mut self,
+        result: Result<update::Check, String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match result {
+            Ok(update::Check::Available { latest, .. }) => {
+                self.updates.available = Some(latest);
+                cx.notify();
+                self.offer_update(window, cx);
+            }
+            Ok(update::Check::UpToDate(_)) => {
+                self.updates.available = None;
+                cx.notify();
+                self.show_update_check(result, window, cx);
+            }
+            Err(_) => self.show_update_check(result, window, cx),
+        }
     }
 
     pub(super) fn show_update_check(

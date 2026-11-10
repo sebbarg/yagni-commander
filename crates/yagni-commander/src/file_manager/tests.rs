@@ -2478,6 +2478,8 @@ mod check_for_updates {
     #[gpui_kit::test]
     fn a_newer_version_links_to_the_install_instructions(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
+        // Not where the install script puts it.
+        file_manager(cx).update(cx, |this, _| this.updates.app = None);
         release("v999.0.0", cx);
         check(cx);
         let text = box_text(cx);
@@ -2493,6 +2495,48 @@ mod check_for_updates {
             Some("https://github.com/sebbarg/yagni-commander#installing")
         );
         assert!(dialog_open(cx), "the box stays open");
+    }
+
+    #[gpui_kit::test]
+    fn a_newer_version_is_offered_like_the_button_does(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("", cx);
+        file_manager(cx).update(cx, |this, cx| {
+            this.updates.available = None;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(!button_shown(cx));
+        release("v999.0.0", cx);
+        check(cx);
+        assert!(cx.debug_bounds("update-question").is_some());
+        assert!(button_shown(cx), "the button stays for later");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |_| !started.borrow().is_empty());
+        assert_eq!(*started.borrow(), [PathBuf::from("/installed/app")]);
+    }
+
+    #[gpui_kit::test]
+    fn not_now_after_a_check_keeps_the_button(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (_releases, started) = ready_to_update("", cx);
+        release("v999.0.0", cx);
+        check(cx);
+        cx.simulate_keystrokes("right enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(started.borrow().is_empty());
+        assert!(button_shown(cx));
+    }
+
+    #[gpui_kit::test]
+    fn finding_the_latest_version_hides_the_button(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        ready_to_update("", cx);
+        release("v0.0.1", cx);
+        check(cx);
+        assert!(box_text(cx).contains("is the latest version"));
+        assert!(!button_shown(cx));
     }
 
     #[gpui_kit::test]

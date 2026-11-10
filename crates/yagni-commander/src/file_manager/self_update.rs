@@ -192,7 +192,7 @@ impl FileManager {
         )
     }
 
-    fn offer_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn offer_update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         let Some(latest) = self.updates.available else {
             return;
