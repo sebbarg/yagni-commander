@@ -43,6 +43,10 @@ fn main() {
     if let Some(code) = yagni_commander_core::askpass::run_helper() {
         std::process::exit(code);
     }
+    // Run by the login shell to report its environment (core `shell_path`).
+    if let Some(code) = yagni_commander_core::shell_path::run_helper() {
+        std::process::exit(code);
+    }
     // gpui's macOS text system warns about every duplicate face in the system
     // font family (harmless: it skips them), once per font key loaded.
     env_logger::Builder::from_env(
@@ -50,11 +54,11 @@ fn main() {
     )
     .init();
 
-    // Apps started from Finder get a minimal PATH: ask the login shell, so
-    // the editor, the terminal and the opener are found as in a terminal.
-    if cfg!(target_os = "macos") {
-        yagni_commander_core::shell_path::start();
-    }
+    // Apps started from Finder get a minimal environment, and a Linux
+    // session often lacks what the shell profile sets: ask the login shell,
+    // so the editor, the terminal, the opener and user commands run as in a
+    // terminal.
+    yagni_commander_core::shell_path::start();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let app_state = AppState::load();

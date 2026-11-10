@@ -145,7 +145,7 @@ impl Env {
         let kde = std::env::var("XDG_CURRENT_DESKTOP")
             .is_ok_and(|d| d.split(':').any(|part| part.eq_ignore_ascii_case("KDE")));
         Self {
-            terminal: std::env::var("TERMINAL").ok(),
+            terminal: crate::shell_path::var("TERMINAL").and_then(|t| t.into_string().ok()),
             kde,
             kdeglobals: kde
                 .then(dirs::config_dir)
