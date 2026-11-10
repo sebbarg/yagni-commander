@@ -50,6 +50,16 @@ command = "sqlitebrowser {active_path}"
 
 Nothing is added to a command by itself, so use a parameter to pass the file. The parameters are `{active_path}`, `{active_name}`, `{active_stem}`, `{active_ext}` and `{active_dir}`, and the same with `inactive_` for the other panel (the Help button in Configure lists them). The command runs without a shell. On a Mac, use for example `open -a "DB Browser for SQLite" {active_path}`.
 
+A program that runs in a terminal, such as lazygit, needs a terminal to run in: start one with the program, for example `wezterm start --cwd {active_path} lazygit` or `kitty --directory {active_path} lazygit`. When a command needs a shell (`&&`, pipes), pass the path as an argument rather than writing it into the script, so a file name can't run code: `sh -c 'cd "$1" && lazygit' sh {active_path}`.
+
+### Windows that open behind yagni-commander
+
+A program the editor (F4) or a user command starts may open its window behind yagni-commander. yagni-commander can't bring another program's window to the front: on macOS only apps launched through Launch Services (Finder, the Dock, `open`) are brought forward, and on Linux the window manager decides. It happens most with a program that is already running, because the command hands the file to the running copy, which stays in the background. Workarounds:
+
+- **VS Code:** `editor = "code -n"` opens a new window, which comes to the front.
+- **macOS, any app:** start it with `open -a`, which brings it forward, for example `open -a "DB Browser for SQLite" {active_path}`. An app started this way gets a minimal `PATH`, so give programs it runs by their full path.
+- **macOS, a running app:** run the command, then `open -a` to bring the app forward: `sh -c 'wezterm start --cwd "$1" lazygit; open -a WezTerm' sh {active_path}`.
+
 ## Remote folders (SFTP)
 
 Ctrl-F (or Commands > Connect...) lists the hosts in your `~/.ssh/config`; pick one, or type `user@host`, and its home folder opens in a new tab, labeled `sftp:`. From there it works like a local folder: copy and move in either direction or between two hosts (F5, F6), delete (F8, permanently: there is no trash on a host), rename (F2), new folder (F7), view (F3). Hotlist entries can point at `sftp://host/path` too.
@@ -130,7 +140,7 @@ The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R
 - Linux: `~/.config/yagni-commander/config.toml`
 - macOS: `~/Library/Application Support/yagni-commander/config.toml`
 
-Set `editor` to the command F4 runs, for example `editor = "code --wait"`.
+Set `editor` to the command F4 runs, for example `editor = "code --wait"`. If its window opens behind yagni-commander, see [Windows that open behind yagni-commander](#windows-that-open-behind-yagni-commander).
 
 Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` (light) or `classic` (light), or pick one in the settings dialog; it switches at once.
 
