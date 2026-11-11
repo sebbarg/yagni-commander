@@ -314,13 +314,18 @@ impl Drop for Session {
     }
 }
 
-/// ssh's error output as a message: its lines, without the notice that a
-/// host key was just added (it comes first and explains nothing).
+/// ssh's error output as a message: its lines, without the notices that
+/// explain no failure: a host key just added, and the `** WARNING` banners
+/// (OpenSSH 10's note on a key exchange that isn't post-quantum; the
+/// connection goes on). Left in, a banner stood in for the real reason when
+/// ssh said nothing else.
 fn ssh_message(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
         .lines()
         .map(str::trim)
-        .filter(|l| !l.is_empty() && !l.starts_with("Warning: Permanently added"))
+        .filter(|l| {
+            !l.is_empty() && !l.starts_with("Warning: Permanently added") && !l.starts_with("**")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -385,6 +390,17 @@ fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
                 )
             } else if !text.is_empty() {
                 io::Error::new(io::ErrorKind::ConnectionRefused, text)
+            } else if e.kind() == io::ErrorKind::UnexpectedEof {
+                // Closed without a word: through a shared connection ssh's
+                // own "subsystem request failed" goes to the background
+                // master, whose error output is /dev/null.
+                io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!(
+                        "{host} closed the connection before SFTP started. Is SFTP turned on \
+                         there? (On a NAS it is often a switch of its own, beside SSH.)"
+                    ),
+                )
             } else if e.kind() == io::ErrorKind::InvalidData {
                 // The classic cause: a login script that prints text.
                 io::Error::new(
@@ -857,6 +873,54 @@ pub(crate) mod tests {
         command.args(["-c", "echo 'Permission denied (publickey).' >&2; exit 255"]);
         let err = connect_with("x", command).unwrap_err();
         assert_eq!(err.to_string(), "Permission denied (publickey).");
+    }
+
+    const PQ_WARNING: &str = "** WARNING: connection is not using a post-quantum key exchange algorithm.\n\
+        ** This session may be vulnerable to \"store now, decrypt later\" attacks.\n\
+        ** The server may need to be upgraded. See https://openssh.com/pq.html\n";
+
+    #[test]
+    fn the_post_quantum_warning_is_left_out_of_messages() {
+        let stderr = format!("{PQ_WARNING}Permission denied (publickey).\n");
+        assert_eq!(
+            ssh_message(stderr.as_bytes()),
+            "Permission denied (publickey)."
+        );
+        assert_eq!(ssh_message(PQ_WARNING.as_bytes()), "");
+    }
+
+    #[test]
+    fn a_warning_alone_does_not_hide_the_real_failure() {
+        // The host answers with a login script's text, not SFTP; ssh warned
+        // about the key exchange and said nothing else.
+        let mut command = Command::new("sh");
+        let script = format!(
+            "printf '{}' >&2; echo 'Welcome to the NAS'",
+            PQ_WARNING.replace('"', "\\\"")
+        );
+        command.args(["-c", &script]);
+        let err = connect_with("nas", command).unwrap_err();
+        let text = err.to_string();
+        assert!(!text.contains("post-quantum"), "{text}");
+        assert!(
+            text.contains("does the login shell on nas print text?"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_silent_close_asks_whether_sftp_is_on() {
+        // The NAS case through a shared connection: only the warning, then
+        // the channel closes.
+        let mut command = Command::new("sh");
+        command.args(["-c", "echo '** WARNING: not post-quantum' >&2; exit 0"]);
+        let err = connect_with("nas", command).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(
+            err.to_string()
+                .starts_with("nas closed the connection before SFTP started. Is SFTP turned on"),
+            "{err}"
+        );
     }
 
     #[test]
