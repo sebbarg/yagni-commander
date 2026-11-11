@@ -133,6 +133,9 @@ impl ViewerView {
                 Err(message) => show_message("Markdown", message, "OK", back, window, cx),
             }
         }
+        if self.picture.is_some() {
+            self.read_picture(window, cx);
+        }
         cx.notify();
     }
 

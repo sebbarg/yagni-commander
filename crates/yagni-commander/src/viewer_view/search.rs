@@ -89,6 +89,9 @@ impl ViewerView {
 
     /// Ctrl-F: the Find dialog, with the selection or the last search.
     pub(super) fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            return;
+        }
         let mut last = cx
             .try_global::<LastSearch>()
             .map(|l| l.0.clone())
@@ -217,6 +220,9 @@ impl ViewerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.picture.is_some() {
+            return;
+        }
         if self.search.query.is_none() {
             self.open_find(window, cx);
         } else if self.markdown.is_some() {

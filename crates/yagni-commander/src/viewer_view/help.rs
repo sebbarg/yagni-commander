@@ -26,6 +26,8 @@ pub(super) enum Needs {
     NotHex,
     /// Another mode than Markdown (`M`).
     NotMarkdown,
+    /// Another mode than image (`I`), and the keys that work on text.
+    NotImage,
     /// The file itself, not a private copy of an archive entry or a remote
     /// file (F4, Ctrl-R).
     File,
@@ -36,6 +38,7 @@ pub(super) enum Needs {
 pub(super) struct Modes {
     pub hex: bool,
     pub markdown: bool,
+    pub image: bool,
     pub sideways: bool,
     pub archive: bool,
 }
@@ -44,11 +47,12 @@ impl Needs {
     pub(super) fn met(self, m: Modes) -> bool {
         match self {
             Needs::Always => true,
-            Needs::Sideways => m.sideways && !m.markdown,
-            Needs::Text => !m.hex && !m.markdown,
-            Needs::NotText => m.hex || m.markdown,
-            Needs::NotHex => !m.hex || m.markdown,
-            Needs::NotMarkdown => !m.markdown,
+            Needs::Sideways => m.sideways && !m.markdown && !m.image,
+            Needs::Text => !m.hex && !m.markdown && !m.image,
+            Needs::NotText => m.hex || m.markdown || m.image,
+            Needs::NotHex => !m.hex || m.markdown || m.image,
+            Needs::NotMarkdown => !m.markdown || m.image,
+            Needs::NotImage => !m.image,
             Needs::File => !m.archive,
         }
     }
@@ -71,9 +75,9 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
         (
             "Move",
             &[
-                entry(&["up", "down"], "One row", Needs::Always),
-                entry(&["pageup", "pagedown"], "One screen", Needs::Always),
-                entry(&["home", "end"], "Start, end of file", Needs::Always),
+                entry(&["up", "down"], "One row", Needs::NotImage),
+                entry(&["pageup", "pagedown"], "One screen", Needs::NotImage),
+                entry(&["home", "end"], "Start, end of file", Needs::NotImage),
                 entry(&["left", "right"], "Scroll sideways", Needs::Sideways),
             ],
         ),
@@ -83,6 +87,7 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
                 entry(&["t"], "Text", Needs::NotText),
                 entry(&["h"], "Hex", Needs::NotHex),
                 entry(&["m"], "Markdown", Needs::NotMarkdown),
+                entry(&["i"], "Image", Needs::NotImage),
                 entry(&["w"], "Wrap on, off", Needs::Text),
                 entry(&["ctrl-=", "ctrl--"], "Zoom in, out", Needs::Always),
                 entry(&["ctrl-0"], "Actual size", Needs::Always),
@@ -93,16 +98,16 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
         (
             "Search",
             &[
-                entry(&["ctrl-f"], "Find", Needs::Always),
-                entry(&["f3", "enter"], "Find next", Needs::Always),
-                entry(&["shift-f3"], "Find previous", Needs::Always),
+                entry(&["ctrl-f"], "Find", Needs::NotImage),
+                entry(&["f3", "enter"], "Find next", Needs::NotImage),
+                entry(&["shift-f3"], "Find previous", Needs::NotImage),
             ],
         ),
         (
             "Selection",
             &[
-                entry(&["ctrl-a"], "Select all", Needs::Always),
-                entry(&["ctrl-c", "ctrl-insert"], "Copy", Needs::Always),
+                entry(&["ctrl-a"], "Select all", Needs::NotImage),
+                entry(&["ctrl-c", "ctrl-insert"], "Copy", Needs::NotImage),
             ],
         ),
         (
@@ -173,6 +178,7 @@ impl ViewerView {
         Modes {
             hex: self.hex,
             markdown: self.markdown.is_some(),
+            image: self.picture.is_some(),
             sideways: !self.wraps_rows(),
             archive: self.temp.is_some(),
         }

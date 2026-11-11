@@ -7,6 +7,7 @@ mod hex;
 mod images;
 mod layout;
 mod lines;
+mod picture;
 mod search;
 mod source;
 
@@ -16,5 +17,6 @@ pub use hex::{HEX_ROW, offset_digits};
 pub use images::{IMAGE_CAP, Images, has_scheme, local_image};
 pub use layout::{BLOCK, HexColumn, Highlight, MAX_ROW_CHARS, ROW_WINDOW, Row, Visible, Wrap};
 pub use lines::{LineIndex, count_lines};
+pub use picture::{PICTURE_PIXELS, PICTURE_SIDE, Picture, is_picture_name, read_picture};
 pub use search::{Direction, find};
 pub use source::{FileSource, FileStamp, Source};

@@ -19,14 +19,15 @@ use yagni_commander_core::format_size;
 use yagni_commander_core::launch;
 use yagni_commander_core::viewer::{
     Direction, Document, FileSource, FileStamp, Highlight, LineIndex, Row, Visible, Wrap,
+    is_picture_name,
 };
 use yagni_commander_core::watch::PanelWatcher;
 
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, Help, LineDown, LineUp,
-    PageDown, PageUp, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowMarkdown, ShowText,
-    Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
+    PageDown, PageUp, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowImage, ShowMarkdown,
+    ShowText, Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::file_manager::commands::{configured_editor, show_error, show_message};
@@ -36,11 +37,13 @@ use crate::zoom::{Zoom, rems_from_px, scaled};
 
 mod help;
 mod markdown;
+mod picture;
 mod reload;
 mod search;
 mod select;
 
 use markdown::{Markdown, Scroll};
+use picture::PictureMode;
 use select::{Run, Selection};
 
 const PADDING: f32 = 8.0;
@@ -71,8 +74,8 @@ pub fn window_title(path: &Path) -> String {
 /// `temp`: the private copy of an archive entry that `path` is in, deleted
 /// with the window.
 /// `search`: Alt-F7's text, searched for from the start of the file.
-/// A Markdown file (by its extension) opens in Markdown mode, unless it is
-/// opened for a search, whose match is in the file's text.
+/// A Markdown file or an image (by the extension) opens in that mode, unless
+/// it is opened for a search, whose match is in the file's text.
 pub fn open(
     path: PathBuf,
     main: WindowBounds,
@@ -90,12 +93,15 @@ pub fn open(
     let (window, _) = gpui_kit::open_window(options, cx, |window, cx| {
         cx.new(|cx| {
             let markdown = search.is_none() && markdown::is_markdown_name(&path);
+            let picture = search.is_none() && is_picture_name(&path);
             let mut view = ViewerView::new(path, source, temp, window, cx);
             if let Some(text) = search {
                 view.search_from_start(text, window, cx);
             } else if markdown {
                 // Over the limits it stays text, quietly: nobody asked.
                 let _ = view.try_markdown(cx);
+            } else if picture {
+                view.show_picture(window, cx);
             }
             view
         })
@@ -121,6 +127,10 @@ pub struct ViewerView {
     hex: bool,
     /// Markdown mode (`M`), over the text or hex mode kept below it.
     markdown: Option<Markdown>,
+    /// Image mode (`I`), over whatever mode is kept below it.
+    picture: Option<PictureMode>,
+    /// The last image read started, so a stale poll stops.
+    next_picture: u64,
     /// Byte position of the top row (always a row start).
     top: u64,
     /// Columns per row in wrap mode, from the last layout.
@@ -204,6 +214,8 @@ impl ViewerView {
             wrap: cx.try_global::<Wrapping>().is_some_and(|w| w.0),
             hex: false,
             markdown: None,
+            picture: None,
+            next_picture: 0,
             top: 0,
             cols: 80,
             screen_rows: FALLBACK_ROWS,
@@ -274,7 +286,7 @@ impl ViewerView {
     }
 
     fn toggle_wrap(&mut self, cx: &mut Context<Self>) {
-        if self.hex || self.markdown.is_some() {
+        if self.hex || self.markdown.is_some() || self.picture.is_some() {
             return;
         }
         self.wrap = !self.wrap;
@@ -286,9 +298,12 @@ impl ViewerView {
     /// A file too large or with a paragraph too long stays in its mode,
     /// with a box saying why.
     fn show_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Err(message) = self.try_markdown(cx) {
-            let back = Some(self.focus.clone());
-            show_message("Markdown", message, "OK", back, window, cx);
+        match self.try_markdown(cx) {
+            Ok(()) => self.leave_picture(window, cx),
+            Err(message) => {
+                let back = Some(self.focus.clone());
+                show_message("Markdown", message, "OK", back, window, cx);
+            }
         }
     }
 
@@ -313,8 +328,9 @@ impl ViewerView {
     }
 
     /// `T` (`hex` false) and `H` (true): the text or hex view, also out of
-    /// Markdown mode. Text comes back in the wrap mode it had.
-    fn show_bytes(&mut self, hex: bool, cx: &mut Context<Self>) {
+    /// Markdown or image mode. Text comes back in the wrap mode it had.
+    fn show_bytes(&mut self, hex: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.leave_picture(window, cx);
         self.markdown = None;
         if self.hex != hex {
             self.hex = hex;
@@ -325,6 +341,9 @@ impl ViewerView {
 
     /// The keys that move the view, in either mode.
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            return;
+        }
         if let Some(markdown) = &self.markdown {
             markdown.scroll(scroll, cx);
             cx.notify();
@@ -367,7 +386,7 @@ impl ViewerView {
     /// Sideways by `cols` columns (negative: left), never past the widest
     /// row on screen. Only when rows scroll sideways.
     fn scroll_cols(&mut self, cols: i64, cx: &mut Context<Self>) {
-        if self.wraps_rows() || self.markdown.is_some() || cols == 0 {
+        if self.wraps_rows() || self.markdown.is_some() || self.picture.is_some() || cols == 0 {
             return;
         }
         let max = self.widest.saturating_sub(self.cols);
@@ -449,6 +468,9 @@ impl ViewerView {
             .checked_div(len)
             .unwrap_or(100)
             .min(100);
+        if let Some(picture) = &self.picture {
+            return format!("{name} · {} · {}", format_size(len), picture.status());
+        }
         if let Some(searching) = self.searching_text() {
             return format!("{name} · {} · {searching}", format_size(len));
         }
@@ -503,6 +525,11 @@ impl ViewerView {
     #[cfg(test)]
     fn markdown(&self) -> Option<&Markdown> {
         self.markdown.as_ref()
+    }
+
+    #[cfg(test)]
+    fn picture(&self) -> Option<&PictureMode> {
+        self.picture.as_ref()
     }
 
     #[cfg(test)]
@@ -613,6 +640,9 @@ impl ViewerView {
     }
 
     fn on_wheel(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            return;
+        }
         if self.markdown.is_some() {
             // The view scrolled itself; the status line follows.
             cx.notify();
@@ -780,8 +810,13 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &Start, _, cx| this.scroll(Scroll::Start, cx)))
             .on_action(cx.listener(|this, _: &End, _, cx| this.scroll(Scroll::End, cx)))
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
-            .on_action(cx.listener(|this, _: &ShowText, _, cx| this.show_bytes(false, cx)))
-            .on_action(cx.listener(|this, _: &ShowHex, _, cx| this.show_bytes(true, cx)))
+            .on_action(
+                cx.listener(|this, _: &ShowText, window, cx| this.show_bytes(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ShowHex, window, cx| this.show_bytes(true, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ShowImage, window, cx| this.show_picture(window, cx)))
             .on_action(
                 cx.listener(|this, _: &ShowMarkdown, window, cx| this.show_markdown(window, cx)),
             )
@@ -833,20 +868,26 @@ impl Render for ViewerView {
                     .relative()
                     .flex()
                     .flex_col()
-                    .when_some(self.markdown.as_ref(), |this, markdown| {
-                        this.child(
-                            div()
-                                .debug_selector(|| "viewer-markdown".into())
-                                .flex_1()
-                                .min_h_0()
-                                .pl(rems_from_px(MARKDOWN_PADDING))
-                                .py(rems_from_px(PADDING))
-                                // Room for the view's own scrollbar, drawn
-                                // over its right edge.
-                                .child(markdown.element(cx).pr(rems_from_px(MARKDOWN_PADDING))),
-                        )
+                    .when(self.picture.is_some(), |this| {
+                        this.child(self.render_picture())
                     })
-                    .when(self.markdown.is_none(), |this| {
+                    .when_some(
+                        self.markdown.as_ref().filter(|_| self.picture.is_none()),
+                        |this, markdown| {
+                            this.child(
+                                div()
+                                    .debug_selector(|| "viewer-markdown".into())
+                                    .flex_1()
+                                    .min_h_0()
+                                    .pl(rems_from_px(MARKDOWN_PADDING))
+                                    .py(rems_from_px(PADDING))
+                                    // Room for the view's own scrollbar, drawn
+                                    // over its right edge.
+                                    .child(markdown.element(cx).pr(rems_from_px(MARKDOWN_PADDING))),
+                            )
+                        },
+                    )
+                    .when(self.markdown.is_none() && self.picture.is_none(), |this| {
                         this.child(
                             div()
                                 .flex()

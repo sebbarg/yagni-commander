@@ -68,6 +68,9 @@ ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 # Already in the tree: same versions, no new crate.
 markdown = "1.0.0"
 percent-encoding = "2.3"
+# Image mode in the F3 viewer: gpui's decoder, which we call ourselves for the
+# format list and the limits. Already in the tree: same version, no new crate.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

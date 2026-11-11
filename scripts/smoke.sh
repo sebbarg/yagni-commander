@@ -699,6 +699,35 @@ check "markdown viewer closed" bash -c '! xdotool search --name "guide.md - yagn
 xdotool windowfocus "$window"
 sleep 0.5
 
+echo "an image opens in image mode; T shows its bytes, I the image again"
+python3 -c 'import base64,struct,sys,zlib
+w,h=640,360
+raw=b"".join(b"\0"+bytes(v for x in range(w) for v in (x*255//w,y*255//h,120)) for y in range(h))
+def chunk(t,d): return struct.pack(">I",len(d))+t+d+struct.pack(">I",zlib.crc32(t+d))
+open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">IIBBBBB",w,h,8,2,0,0,0))+chunk(b"IDAT",zlib.compress(raw))+chunk(b"IEND",b""))' "$left/photo.png"
+keys ctrl+r
+typed photo
+keys Escape F3
+xdotool windowfocus "$(xdotool search --name "photo.png - yagni-commander" | head -1)"
+sleep 1.5
+shot 10g-viewer-image
+keys t
+sleep 0.3
+shot 10g1-viewer-image-as-text
+keys i
+sleep 1
+shot 10g2-viewer-image-again
+keys question
+sleep 0.3
+shot 10g3-viewer-image-keys
+keys question Escape
+check "image viewer closed" bash -c '! xdotool search --name "photo.png - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+rm "$left/photo.png"
+keys ctrl+r
+sleep 0.5
+
 echo "Enter opens a zip; F3 views an entry; F5 copies entries out"
 mkdir -p "$work/browse/docs"
 printf one >"$work/browse/docs/readme.txt"

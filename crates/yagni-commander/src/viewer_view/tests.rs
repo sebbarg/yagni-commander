@@ -2007,6 +2007,22 @@ mod help {
         assert!(Needs::NotHex.met(markdown_over_hex), "H leaves Markdown");
         assert!(Needs::File.met(text) && !Needs::File.met(archive));
         assert!(Needs::Always.met(markdown));
+        let image = Modes {
+            image: true,
+            sideways: true,
+            ..text
+        };
+        assert!(!Needs::NotImage.met(image) && Needs::NotImage.met(text));
+        assert!(!Needs::Sideways.met(image) && !Needs::Text.met(image));
+        assert!(Needs::NotText.met(image) && Needs::NotHex.met(image));
+        assert!(Needs::NotMarkdown.met(image));
+        let image_over_hex = Modes { hex: true, ..image };
+        assert!(Needs::NotHex.met(image_over_hex), "H leaves the image");
+        let image_over_markdown = Modes {
+            markdown: true,
+            ..image
+        };
+        assert!(Needs::NotMarkdown.met(image_over_markdown), "M leaves it");
     }
 }
 
@@ -2205,5 +2221,274 @@ mod reload {
         std::fs::write(&path, b"newer\n").unwrap();
         cx.simulate_keystrokes("ctrl-r");
         assert_eq!(shown(&viewer, &mut cx)[0], "old");
+    }
+}
+
+mod image_mode {
+    use super::*;
+    use crate::file_manager::commands::OPENER_POLL;
+    use gpui_kit::component::WindowExt;
+    use std::io::Cursor;
+    use yagni_commander_core::find::text::Text;
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let image = ::image::RgbaImage::new(width, height);
+        let mut out = Cursor::new(Vec::new());
+        image.write_to(&mut out, ::image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    fn open_named(
+        name: &str,
+        bytes: &[u8],
+        search: Option<Text>,
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<ViewerView>, VisualTestContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, search, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        (tmp, viewer, VisualTestContext::from_window(window, cx))
+    }
+
+    /// Lets the running read end and its result arrive.
+    fn settle(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) {
+        for _ in 0..2000 {
+            cx.executor().advance_clock(OPENER_POLL);
+            cx.run_until_parked();
+            let loading = viewer.read_with(cx, |v, _| v.picture().is_some_and(|p| p.is_loading()));
+            if !loading {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("the picture never arrived");
+    }
+
+    fn status(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> String {
+        settle(viewer, cx);
+        viewer.update(cx, |v, cx| v.status_text(cx))
+    }
+
+    fn in_image_mode(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> bool {
+        settle(viewer, cx);
+        viewer.read_with(cx, |v, _| v.picture().is_some())
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    #[gpui_kit::test]
+    fn an_image_name_opens_in_image_mode(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.PNG", &png(3, 2), None, cx);
+        assert_eq!(
+            status(&viewer, &mut vcx),
+            format!(
+                "a.PNG · {} · image · 3x2 · PNG",
+                format_size(png(3, 2).len() as u64)
+            )
+        );
+        assert!(vcx.debug_bounds("viewer-picture").is_some());
+        assert!(
+            vcx.debug_bounds("viewer-row-0").is_none(),
+            "no text under it"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_status_line_says_while_it_loads(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        let text = viewer.update(&mut vcx, |v, cx| v.status_text(cx));
+        assert!(text.ends_with("image · loading..."), "{text}");
+        settle(&viewer, &mut vcx);
+    }
+
+    #[gpui_kit::test]
+    fn another_name_opens_as_text_and_i_shows_the_image(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.bin", &png(3, 2), None, cx);
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("i");
+        assert!(in_image_mode(&viewer, &mut vcx));
+        assert!(status(&viewer, &mut vcx).ends_with("3x2 · PNG"));
+    }
+
+    #[gpui_kit::test]
+    fn t_and_h_leave_the_image_and_i_comes_back(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("h");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(viewer.read_with(&vcx, |v, _| v.hex()));
+        vcx.simulate_keystrokes("i");
+        assert!(in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("t");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(!viewer.read_with(&vcx, |v, _| v.hex()));
+    }
+
+    #[gpui_kit::test]
+    fn leaving_frees_the_texture(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        settle(&viewer, &mut vcx);
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        let image = viewer.read_with(&vcx, |v, _| v.picture().unwrap().image().unwrap().clone());
+        assert!(vcx.update(|window, _| window.has_image_atlas_entry(&image)));
+        vcx.simulate_keystrokes("t");
+        assert!(!vcx.update(|window, _| window.has_image_atlas_entry(&image)));
+    }
+
+    #[gpui_kit::test]
+    fn i_on_what_is_no_image_says_so_and_stays(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.txt", b"plain\n", None, cx);
+        vcx.simulate_keystrokes("i");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(dialog_open(&mut vcx));
+        vcx.simulate_keystrokes("enter");
+        assert!(!dialog_open(&mut vcx));
+        assert_eq!(shown(&viewer, &mut vcx)[0], "plain");
+    }
+
+    #[gpui_kit::test]
+    fn a_damaged_image_opens_as_text_with_a_box(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", b"not a png\n", None, cx);
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(dialog_open(&mut vcx));
+        vcx.simulate_keystrokes("enter");
+        assert_eq!(shown(&viewer, &mut vcx)[0], "not a png");
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_i_goes_back_to_markdown(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.md", b"# Title\n", None, cx);
+        vcx.simulate_keystrokes("i");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn m_leaves_the_image(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("m");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_some()));
+    }
+
+    #[gpui_kit::test]
+    fn a_refused_m_stays_on_the_image(cx: &mut TestAppContext) {
+        let mut big = png(3, 2);
+        big.resize(2 << 20, 0);
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &big, None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_keystrokes("m");
+        assert!(dialog_open(&mut vcx));
+        vcx.simulate_keystrokes("enter");
+        assert!(in_image_mode(&viewer, &mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn the_text_keys_do_nothing(cx: &mut TestAppContext) {
+        let mut bytes = png(3, 2);
+        bytes.extend(numbered(500));
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &bytes, None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        let wrapped = viewer.read_with(&vcx, |v, _| v.wraps());
+        vcx.simulate_keystrokes("down pagedown end right w ctrl-a");
+        viewer.read_with(&vcx, |v, _| {
+            assert_eq!((v.top(), v.h_offset()), (0, 0));
+            assert_eq!(v.wraps(), wrapped);
+            assert!(v.selection_range().is_none());
+        });
+        for key in ["ctrl-f", "f3", "enter", "shift-f3"] {
+            vcx.simulate_keystrokes(key);
+            assert!(!dialog_open(&mut vcx), "{key}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_wheel_does_nothing(cx: &mut TestAppContext) {
+        let mut bytes = png(3, 2);
+        bytes.extend(numbered(500));
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &bytes, None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: point(px(100.0), px(100.0)),
+            delta: gpui_kit::ScrollDelta::Lines(point(0.0, -5.0)),
+            ..Default::default()
+        });
+        assert_eq!(viewer.read_with(&vcx, |v, _| v.top()), 0);
+    }
+
+    #[gpui_kit::test]
+    fn a_search_from_alt_f7_opens_as_text(cx: &mut TestAppContext) {
+        let text = Text {
+            pattern: "PNG".into(),
+            ..Default::default()
+        };
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), Some(text), cx);
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(!dialog_open(&mut vcx));
+    }
+
+    #[gpui_kit::test]
+    fn the_whole_image_shows_at_any_window_size(cx: &mut TestAppContext) {
+        for (width, height) in [(1500, 500), (500, 1500), (200, 100), (100, 200)] {
+            let (_tmp, viewer, mut vcx) = open_named("a.png", &png(width, height), None, cx);
+            settle(&viewer, &mut vcx);
+            for (w, h) in [
+                (900.0, 650.0),
+                (400.0, 700.0),
+                (1000.0, 200.0),
+                (300.0, 300.0),
+            ] {
+                vcx.simulate_resize(size(px(w), px(h)));
+                vcx.run_until_parked();
+                vcx.update(|window, cx| window.draw(cx).clear(cx));
+                let area = vcx.debug_bounds("viewer-picture").unwrap();
+                let image = vcx.debug_bounds("viewer-picture-image").unwrap();
+                let at = format!("{width}x{height} in {w}x{h}: {image:?} in {area:?}");
+                assert!(area.contains(&image.origin), "{at}");
+                assert!(image.right() <= area.right(), "{at}");
+                assert!(image.bottom() <= area.bottom(), "{at}");
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_shows_the_new_picture(cx: &mut TestAppContext) {
+        let (tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        settle(&viewer, &mut vcx);
+        std::fs::write(tmp.path().join("a.png"), png(5, 4)).unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        let during = viewer.update(&mut vcx, |v, cx| v.status_text(cx));
+        assert!(during.ends_with("3x2 · PNG"), "stays until ready: {during}");
+        assert!(status(&viewer, &mut vcx).ends_with("5x4 · PNG"));
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_that_fails_shows_the_text_and_says_so(cx: &mut TestAppContext) {
+        let (tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        settle(&viewer, &mut vcx);
+        std::fs::write(tmp.path().join("a.png"), b"now text\n").unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(dialog_open(&mut vcx));
+        vcx.simulate_keystrokes("enter");
+        assert_eq!(shown(&viewer, &mut vcx)[0], "now text");
+    }
+
+    #[gpui_kit::test]
+    fn escape_closes_while_it_loads(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
+        let before = cx.windows().len();
+        vcx.simulate_keystrokes("escape");
+        cx.executor().advance_clock(OPENER_POLL);
+        cx.run_until_parked();
+        assert_eq!(cx.windows().len(), before - 1);
     }
 }

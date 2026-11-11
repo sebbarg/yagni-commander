@@ -304,6 +304,9 @@ impl ViewerView {
     }
 
     pub(super) fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            return;
+        }
         if let Some(markdown) = &self.markdown {
             markdown.select_all(cx);
             return;
@@ -321,6 +324,9 @@ impl ViewerView {
 
     /// Ctrl-C: the selection to the clipboard; nothing without one.
     pub(super) fn copy(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            return;
+        }
         if let Some(markdown) = &self.markdown {
             let text = markdown.selected_text(cx);
             if !text.is_empty() {
