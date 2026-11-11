@@ -1,0 +1,50 @@
+# Daily: opens an issue for each RustSec advisory that affects Cargo.lock
+# (`cargo audit`), so a dependency that needs a security update is noticed
+# without anyone running the check. Dependabot reads GitHub's advisory
+# database, which does not carry every RustSec entry. Only vulnerabilities count, not
+# audit's unmaintained or yanked warnings. One issue per advisory, never a
+# repeat: closing one without updating dismisses it. Actions are pinned to
+# commit SHAs.
+name: Security watch
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.23.0 --locked
+      - name: Report new advisories
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Exits 1 when it finds any, so only a missing report is a failure.
+          cargo audit --json >audit.json || true
+          jq -e '.vulnerabilities.list' audit.json >/dev/null
+          # Fields are never empty: read would merge adjacent tabs.
+          jq -r '.vulnerabilities.list[]
+            | [ .advisory.id, .package.name, .package.version, .advisory.title,
+                (.versions.patched | join(" or ") | if . == "" then "none yet" else . end) ]
+            | @tsv' audit.json |
+            while IFS=$'\t' read -r id name version title patched; do
+              found=$(gh issue list --state all --search "\"$id\" in:title" --json number --jq length)
+              if [[ $found -gt 0 ]]; then
+                echo "already reported: $id"
+                continue
+              fi
+              body="$title"$'\n\n'"- Crate: \`$name\` $version"
+              body+=$'\n'"- Patched in: \`$patched\`"
+              body+=$'\n'"- Advisory: https://rustsec.org/advisories/$id"
+              body+=$'\n\n'"Check whether the app reaches the affected code, then run \`cargo update -p $name@$version\` and release."
+              body+=$'\n\n'"Opened by the Security watch workflow (\`cargo audit\`)."
+              gh issue create --title "$id: $name $version needs a security update" --body "$body"
+            done
