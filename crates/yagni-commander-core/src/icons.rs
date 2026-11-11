@@ -25,8 +25,8 @@ pub const GIT_BRANCH: char = '\u{f418}';
 /// nf-md-refresh: the F3 viewer's reload button.
 pub const RELOAD: char = '\u{f0450}';
 
-/// nf-md-update: the status bar's button for a newer release.
-pub const UPDATE: char = '\u{f06b0}';
+/// nf-md-download: the status bar's button for a newer release.
+pub const UPDATE: char = '\u{f01da}';
 
 /// nf-md-help: the F3 viewer's key overlay button.
 pub const HELP: char = '\u{f02d6}';
