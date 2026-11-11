@@ -720,7 +720,10 @@ shot 10g2-viewer-image-again
 keys question
 sleep 0.3
 shot 10g3-viewer-image-keys
-keys question Escape
+keys question ctrl+equal ctrl+equal ctrl+equal End End
+sleep 0.5
+shot 10g4-viewer-image-zoomed
+keys ctrl+0 Escape
 check "image viewer closed" bash -c '! xdotool search --name "photo.png - yagni-commander"'
 xdotool windowfocus "$window"
 sleep 0.5

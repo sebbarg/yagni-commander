@@ -16,8 +16,10 @@ use crate::zoom::rems_from_px;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) enum Needs {
     Always,
-    /// Rows scrolled sideways: no wrap or hex.
+    /// Rows scrolled sideways (no wrap, or hex), or a zoomed picture.
     Sideways,
+    /// Rows, or a zoomed picture: the moving keys.
+    Moves,
     /// The text view (`W`): neither hex nor Markdown.
     Text,
     /// Another mode than text (`T`).
@@ -39,6 +41,8 @@ pub(super) struct Modes {
     pub hex: bool,
     pub markdown: bool,
     pub image: bool,
+    /// A picture zoomed away from fit.
+    pub zoomed: bool,
     pub sideways: bool,
     pub archive: bool,
 }
@@ -47,7 +51,8 @@ impl Needs {
     pub(super) fn met(self, m: Modes) -> bool {
         match self {
             Needs::Always => true,
-            Needs::Sideways => m.sideways && !m.markdown && !m.image,
+            Needs::Sideways => (m.sideways && !m.markdown && !m.image) || (m.image && m.zoomed),
+            Needs::Moves => !m.image || m.zoomed,
             Needs::Text => !m.hex && !m.markdown && !m.image,
             Needs::NotText => m.hex || m.markdown || m.image,
             Needs::NotHex => !m.hex || m.markdown || m.image,
@@ -75,9 +80,9 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
         (
             "Move",
             &[
-                entry(&["up", "down"], "One row", Needs::NotImage),
-                entry(&["pageup", "pagedown"], "One screen", Needs::NotImage),
-                entry(&["home", "end"], "Start, end of file", Needs::NotImage),
+                entry(&["up", "down"], "One row", Needs::Moves),
+                entry(&["pageup", "pagedown"], "One screen", Needs::Moves),
+                entry(&["home", "end"], "Start, end of file", Needs::Moves),
                 entry(&["left", "right"], "Scroll sideways", Needs::Sideways),
             ],
         ),
@@ -90,7 +95,7 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
                 entry(&["i"], "Image", Needs::NotImage),
                 entry(&["w"], "Wrap on, off", Needs::Text),
                 entry(&["ctrl-=", "ctrl--"], "Zoom in, out", Needs::Always),
-                entry(&["ctrl-0"], "Actual size", Needs::Always),
+                entry(&["ctrl-0"], "Reset zoom", Needs::Always),
             ],
         ),
     ],
@@ -179,6 +184,7 @@ impl ViewerView {
             hex: self.hex,
             markdown: self.markdown.is_some(),
             image: self.picture.is_some(),
+            zoomed: self.picture.as_ref().is_some_and(|p| p.is_zoomed()),
             sideways: !self.wraps_rows(),
             archive: self.temp.is_some(),
         }

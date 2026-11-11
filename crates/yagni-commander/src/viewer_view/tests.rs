@@ -2023,6 +2023,13 @@ mod help {
             ..image
         };
         assert!(Needs::NotMarkdown.met(image_over_markdown), "M leaves it");
+        assert!(Needs::Moves.met(text) && !Needs::Moves.met(image));
+        let zoomed = Modes {
+            zoomed: true,
+            ..image
+        };
+        assert!(Needs::Moves.met(zoomed) && Needs::Sideways.met(zoomed));
+        assert!(!Needs::Text.met(zoomed) && !Needs::NotImage.met(zoomed));
     }
 }
 
@@ -2228,6 +2235,7 @@ mod image_mode {
     use super::*;
     use crate::file_manager::commands::OPENER_POLL;
     use gpui_kit::component::WindowExt;
+    use gpui_kit::{Modifiers, MouseButton};
     use std::io::Cursor;
     use yagni_commander_core::find::text::Text;
 
@@ -2480,6 +2488,131 @@ mod image_mode {
         assert!(dialog_open(&mut vcx));
         vcx.simulate_keystrokes("enter");
         assert_eq!(shown(&viewer, &mut vcx)[0], "now text");
+    }
+
+    /// The picture's bounds and its area's, drawn at a window of `w` x `h`.
+    fn drawn(
+        vcx: &mut VisualTestContext,
+    ) -> (
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+        gpui_kit::Bounds<gpui_kit::Pixels>,
+    ) {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.draw(cx).clear(cx));
+        (
+            vcx.debug_bounds("viewer-picture-image").unwrap(),
+            vcx.debug_bounds("viewer-picture-area").unwrap(),
+        )
+    }
+
+    fn zoomed_png(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<ViewerView>, VisualTestContext) {
+        let (tmp, viewer, mut vcx) = open_named("a.png", &png(400, 300), None, cx);
+        settle(&viewer, &mut vcx);
+        vcx.simulate_resize(size(px(500.0), px(400.0)));
+        (tmp, viewer, vcx)
+    }
+
+    #[gpui_kit::test]
+    fn the_zoom_keys_zoom_the_picture_not_the_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = zoomed_png(cx);
+        let level = vcx.update(|_, cx| Zoom::get(cx).viewer);
+        assert!(status(&viewer, &mut vcx).ends_with("400x300 · PNG"), "fit");
+        vcx.simulate_keystrokes("ctrl-=");
+        assert!(status(&viewer, &mut vcx).ends_with("400x300 · PNG · 150%"));
+        let sharp = viewer.read_with(&vcx, |v, _| v.picture().unwrap().is_sharp());
+        assert!(!sharp, "every pixel was decoded already: no second read");
+        let (image, area) = drawn(&mut vcx);
+        assert_eq!(f32::from(image.size.width), 600.0);
+        assert_eq!(f32::from(image.size.height), 450.0);
+        assert!(image.left() < area.left() && image.right() > area.right());
+        assert_eq!(image.center().x, area.center().x, "zooms around the middle");
+        vcx.simulate_keystrokes("ctrl-- ctrl--");
+        assert!(status(&viewer, &mut vcx).ends_with("400x300 · PNG · 75%"));
+        vcx.simulate_keystrokes("ctrl-0");
+        assert!(
+            status(&viewer, &mut vcx).ends_with("400x300 · PNG"),
+            "fit again"
+        );
+        assert_eq!(vcx.update(|_, cx| Zoom::get(cx).viewer), level);
+        vcx.simulate_keystrokes("t ctrl-=");
+        assert_eq!(
+            vcx.update(|_, cx| Zoom::get(cx).viewer),
+            level + 1.0,
+            "text zooms"
+        );
+        vcx.update(|_, cx| crate::zoom::reset_viewer(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_moving_keys_move_a_zoomed_picture_to_its_edges(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut vcx) = zoomed_png(cx);
+        vcx.simulate_keystrokes("ctrl-= ctrl-=");
+        let (start, area) = drawn(&mut vcx);
+        vcx.simulate_keystrokes("down right");
+        let (moved, _) = drawn(&mut vcx);
+        assert!(moved.top() < start.top() && moved.left() < start.left());
+        vcx.simulate_keystrokes("end");
+        let (bottom, _) = drawn(&mut vcx);
+        assert_eq!(bottom.bottom(), area.bottom(), "stops at the edge");
+        vcx.simulate_keystrokes("pagedown down");
+        assert_eq!(drawn(&mut vcx).0, bottom, "never past it");
+        vcx.simulate_keystrokes("home");
+        assert_eq!(drawn(&mut vcx).0.top(), area.top());
+        for _ in 0..20 {
+            vcx.simulate_keystrokes("left");
+        }
+        assert_eq!(drawn(&mut vcx).0.left(), area.left());
+        vcx.simulate_keystrokes("pageup up");
+        assert_eq!(drawn(&mut vcx).0.top(), area.top());
+    }
+
+    #[gpui_kit::test]
+    fn a_picture_smaller_than_the_window_stays_centered(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.png", &png(30, 20), None, cx);
+        settle(&viewer, &mut vcx);
+        vcx.simulate_keystrokes("ctrl-= right down");
+        let (image, area) = drawn(&mut vcx);
+        assert_eq!(f32::from(image.size.width), 45.0);
+        assert_eq!(image.center(), area.center());
+    }
+
+    #[gpui_kit::test]
+    fn the_wheel_and_a_drag_move_a_zoomed_picture(cx: &mut TestAppContext) {
+        let (_tmp, _viewer, mut vcx) = zoomed_png(cx);
+        vcx.simulate_keystrokes("ctrl-= ctrl-=");
+        let (start, area) = drawn(&mut vcx);
+        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+            position: area.center(),
+            delta: gpui_kit::ScrollDelta::Pixels(point(px(-30.0), px(-20.0))),
+            ..Default::default()
+        });
+        let (wheeled, _) = drawn(&mut vcx);
+        assert_eq!(wheeled.origin, start.origin + point(px(-30.0), px(-20.0)));
+        let from = area.center();
+        let to = from + point(px(25.0), px(10.0));
+        vcx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_move(to, MouseButton::Left, Modifiers::none());
+        vcx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        let (dragged, _) = drawn(&mut vcx);
+        assert_eq!(dragged.origin, wheeled.origin + point(px(25.0), px(10.0)));
+        vcx.simulate_mouse_move(from, None, Modifiers::none());
+        assert_eq!(drawn(&mut vcx).0, dragged, "the drag ended with the button");
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_keeps_the_zoom(cx: &mut TestAppContext) {
+        let (tmp, viewer, mut vcx) = zoomed_png(cx);
+        vcx.simulate_keystrokes("ctrl-=");
+        std::fs::write(tmp.path().join("a.png"), png(800, 600)).unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        assert!(status(&viewer, &mut vcx).ends_with("800x600 · PNG · 150%"));
+        vcx.simulate_keystrokes("t i");
+        assert!(
+            status(&viewer, &mut vcx).ends_with("800x600 · PNG"),
+            "a new mode fits"
+        );
     }
 
     #[gpui_kit::test]

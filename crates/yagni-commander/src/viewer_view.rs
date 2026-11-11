@@ -339,6 +339,37 @@ impl ViewerView {
         cx.notify();
     }
 
+    /// The moving keys: a zoomed picture, else the rows.
+    fn move_view(&mut self, scroll: Scroll, window: &Window, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            self.scroll_picture(scroll, window, cx);
+        } else {
+            self.scroll(scroll, cx);
+        }
+    }
+
+    /// Left/Right: a zoomed picture, else the columns.
+    fn move_sideways(&mut self, right: bool, window: &Window, cx: &mut Context<Self>) {
+        if self.picture.is_some() {
+            self.scroll_picture_h(right, window, cx);
+        } else {
+            self.scroll_h(right, cx);
+        }
+    }
+
+    /// The zoom keys (`None`: Ctrl-0): the picture's own zoom in image
+    /// mode, else the viewer's text level.
+    fn zoom(&mut self, zoom_in: Option<bool>, window: &mut Window, cx: &mut Context<Self>) {
+        match (self.picture.is_some(), zoom_in) {
+            (true, Some(zoom_in)) => self.zoom_picture(zoom_in, window, cx),
+            (true, None) => self.fit_picture(cx),
+            (false, Some(zoom_in)) => {
+                crate::zoom::change_viewer(if zoom_in { 1.0 } else { -1.0 }, cx)
+            }
+            (false, None) => crate::zoom::reset_viewer(cx),
+        }
+    }
+
     /// The keys that move the view, in either mode.
     fn scroll(&mut self, scroll: Scroll, cx: &mut Context<Self>) {
         if self.picture.is_some() {
@@ -639,8 +670,16 @@ impl ViewerView {
         self.jump_to((y - top) / height, cx);
     }
 
-    fn on_wheel(&mut self, event: &gpui_kit::ScrollWheelEvent, cx: &mut Context<Self>) {
+    fn on_wheel(
+        &mut self,
+        event: &gpui_kit::ScrollWheelEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.picture.is_some() {
+            // Moves a zoomed picture, both axes at once (no rows to keep).
+            let delta = event.delta.pixel_delta(px(line_height(cx)));
+            self.pan_picture((-f32::from(delta.x), -f32::from(delta.y)), window, cx);
             return;
         }
         if self.markdown.is_some() {
@@ -803,12 +842,26 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &FindPrevious, window, cx| {
                 this.find_again(Direction::Backward, window, cx)
             }))
-            .on_action(cx.listener(|this, _: &LineDown, _, cx| this.scroll(Scroll::Lines(1.0), cx)))
-            .on_action(cx.listener(|this, _: &LineUp, _, cx| this.scroll(Scroll::Lines(-1.0), cx)))
-            .on_action(cx.listener(|this, _: &PageDown, _, cx| this.scroll(Scroll::Pages(1.0), cx)))
-            .on_action(cx.listener(|this, _: &PageUp, _, cx| this.scroll(Scroll::Pages(-1.0), cx)))
-            .on_action(cx.listener(|this, _: &Start, _, cx| this.scroll(Scroll::Start, cx)))
-            .on_action(cx.listener(|this, _: &End, _, cx| this.scroll(Scroll::End, cx)))
+            .on_action(cx.listener(|this, _: &LineDown, window, cx| {
+                this.move_view(Scroll::Lines(1.0), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &LineUp, window, cx| {
+                this.move_view(Scroll::Lines(-1.0), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageDown, window, cx| {
+                this.move_view(Scroll::Pages(1.0), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PageUp, window, cx| {
+                this.move_view(Scroll::Pages(-1.0), window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &Start, window, cx| {
+                    this.move_view(Scroll::Start, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &End, window, cx| this.move_view(Scroll::End, window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleWrap, _, cx| this.toggle_wrap(cx)))
             .on_action(
                 cx.listener(|this, _: &ShowText, window, cx| this.show_bytes(false, window, cx)),
@@ -824,14 +877,31 @@ impl Render for ViewerView {
             .on_action(cx.listener(|this, _: &Reload, window, cx| this.reload(window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &CopySelection, window, cx| this.copy(window, cx)))
-            .on_action(cx.listener(|this, _: &ScrollLeft, _, cx| this.scroll_h(false, cx)))
-            .on_action(cx.listener(|this, _: &ScrollRight, _, cx| this.scroll_h(true, cx)))
-            .on_action(cx.listener(|_, _: &ZoomIn, _, cx| crate::zoom::change_viewer(1.0, cx)))
-            .on_action(cx.listener(|_, _: &ZoomOut, _, cx| crate::zoom::change_viewer(-1.0, cx)))
-            .on_action(cx.listener(|_, _: &ZoomReset, _, cx| crate::zoom::reset_viewer(cx)))
-            .on_scroll_wheel(cx.listener(|this, event, _, cx| this.on_wheel(event, cx)))
+            .on_action(
+                cx.listener(|this, _: &ScrollLeft, window, cx| {
+                    this.move_sideways(false, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ScrollRight, window, cx| {
+                    this.move_sideways(true, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &ZoomIn, window, cx| this.zoom(Some(true), window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &ZoomOut, window, cx| this.zoom(Some(false), window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &ZoomReset, window, cx| this.zoom(None, window, cx)))
+            .on_scroll_wheel(
+                cx.listener(|this, event, window, cx| this.on_wheel(event, window, cx)),
+            )
             .on_mouse_move(
                 cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
+                    if this.drag_picture(event.position, event.pressed_button, window, cx) {
+                        return;
+                    }
                     if this.markdown.is_some() && event.pressed_button.is_some() {
                         cx.notify(); // the view's own scrollbar may be dragged
                         return;
@@ -851,6 +921,7 @@ impl Render for ViewerView {
                 gpui_kit::MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
                     this.dragging_thumb = false;
+                    this.end_picture_drag();
                     cx.notify();
                 }),
             )
@@ -869,7 +940,7 @@ impl Render for ViewerView {
                     .flex()
                     .flex_col()
                     .when(self.picture.is_some(), |this| {
-                        this.child(self.render_picture())
+                        this.child(self.render_picture(window, cx))
                     })
                     .when_some(
                         self.markdown.as_ref().filter(|_| self.picture.is_none()),
