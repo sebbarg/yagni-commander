@@ -19,6 +19,7 @@ Distro testing (2026-10-04): Kubuntu (Wayland and X11) and Omarchy (Hyprland, on
 
 ## How we work
 
+- We always work on `main`, also for commits, unless the owner says otherwise. No feature branches.
 - The owner reviews each step; commit only when asked (they say "commit"). Commits are local; the owner pushes (remote: `github.com/sebbarg/yagni-commander`).
 - Every change: tests (core near 100% coverage; gpui app tests for every key, mouse action and dialog), `cargo clippy --workspace --all-targets` with zero warnings, `cargo fmt`, then `scripts/smoke.sh` and a look at its screenshots. Extend the smoke script when a feature is visible or touches the OS (trash, editor, state file).
 - Keep the docs current: `SPEC.md` when the owner decides behavior, `ROADMAP.md` when an item is done, added or verified, `ARCHITECTURE.md` when the code's structure or a technical decision changes, and Current state above at the end of a session. No history here: git log keeps it.
