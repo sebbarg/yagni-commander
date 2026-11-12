@@ -52,6 +52,16 @@ Nothing is added to a command by itself, so use a parameter to pass the file. Th
 
 A program that runs in a terminal, such as lazygit, needs a terminal to run in: start one with the program, for example `wezterm start --cwd {active_path} lazygit` or `kitty --directory {active_path} lazygit`. When a command needs a shell (`&&`, pipes), pass the path as an argument rather than writing it into the script, so a file name can't run code: `sh -c 'cd "$1" && lazygit' sh {active_path}`.
 
+Enter on an executable script (one that starts with `#!`) runs it without a terminal, so what it prints isn't shown. To see the output, add a command that runs the entry in a terminal that stays open:
+
+```toml
+[[commands]]
+name = "&Run in terminal"
+command = "konsole --hold --workdir {active_dir} -e {active_path}"
+```
+
+With Alacritty: `alacritty --hold --working-directory {active_dir} -e {active_path}`; with kitty: `kitty --hold --directory {active_dir} {active_path}`.
+
 ### Windows that open behind yagni-commander
 
 A program the editor (F4) or a user command starts may open its window behind yagni-commander. yagni-commander can't bring another program's window to the front: on macOS only apps launched through Launch Services (Finder, the Dock, `open`) are brought forward, and on Linux the window manager decides. It happens most with a program that is already running, because the command hands the file to the running copy, which stays in the background. Workarounds:

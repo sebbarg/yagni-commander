@@ -107,6 +107,14 @@ check_updates = false
 # Color theme: "tokyo-night" (the default), "gruvbox-dark", "everforest-dark",
 # "catppuccin-latte" or "classic".
 # theme = "tokyo-night"
+
+# User commands (Ctrl-S): programs to open the entry under the cursor with.
+# Enter runs an executable script without a terminal, so its output isn't
+# shown; this one runs it in a terminal that stays open (Alacritty:
+# "alacritty --hold --working-directory {active_dir} -e {active_path}").
+# [[commands]]
+# name = "&Run in terminal"
+# command = "konsole --hold --workdir {active_dir} -e {active_path}"
 "#;
 
 impl Config {
