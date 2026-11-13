@@ -19,23 +19,28 @@ mod connect;
 mod file_ops;
 mod find;
 mod git;
+mod history;
 mod loads;
 mod open_with;
 mod properties;
 pub(crate) mod remote_edit;
+mod select;
 pub(crate) mod self_update;
+mod sizes;
 mod watch;
 
 use crate::actions::{
-    About, Activate, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Connect, Copy,
-    CopyName, CopyParentPath, CopyPath, CursorDown, CursorEnd, CursorHome, CursorUp, Delete,
-    DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, GoToConfig,
-    GoToLog, GoUp, MakeDirectory, MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab,
-    OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack, PageDown, PageUp, PrevTab, Reload,
-    Rename, SelectAll, SelectDown, SelectEnd, SelectHome, SelectPageDown, SelectPageUp, SelectUp,
-    ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize,
-    SwapPanels, SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu,
-    ToggleSelection, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    About, Activate, Back, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Connect, Copy,
+    CopyHere, CopyName, CopyParentPath, CopyPath, CountFolderSizes, CursorDown, CursorEnd,
+    CursorHome, CursorUp, Delete, DeselectAll, DeselectGroup, DeselectSameExtension,
+    DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, FolderHistory,
+    Forward, GoToConfig, GoToLog, GoUp, InvertSelection, MakeDirectory, MenuAlt, MountsLeft,
+    MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack,
+    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, SelectDown, SelectEnd, SelectGroup,
+    SelectHome, SelectPageDown, SelectPageUp, SelectSameExtension, SelectUp, ShowProperties,
+    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
+    SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
+    UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -163,6 +168,15 @@ pub struct FileManager {
     pub(crate) hotlist: Option<OpenHotlist>,
     /// The open mounts dropdown (Alt-F1/Alt-F2).
     pub(crate) mounts: Option<OpenMounts>,
+    /// The open folder history (Alt-Down), the mounts popup over the
+    /// tab's places.
+    pub(crate) history: Option<OpenMounts>,
+    /// The last mask Num+ or Num- used, for the next prompt.
+    pub(crate) last_mask: String,
+    /// The folder sizes being counted (Alt-Shift-Enter).
+    pub(crate) sizes: Option<sizes::RunningSizes>,
+    /// Id of the last count started; an older one's results are dropped.
+    next_sizes: u64,
     /// The mounts dropdown's entries in place of the system's (app tests).
     pub(crate) places: Option<Vec<yagni_commander_core::mounts::Place>>,
     /// The open Open with popup (Shift-Enter).
@@ -235,6 +249,7 @@ impl FileManager {
                     // Like the menu, the hotlist popup closes.
                     this.close_hotlist(window, cx);
                     this.close_mounts(window, cx);
+                    this.close_history(window, cx);
                     this.close_open_with(window, cx);
                     if let Some(bar) = this.menu_bar.clone() {
                         bar.update(cx, |bar, cx| bar.close(window, cx));
@@ -318,6 +333,10 @@ impl FileManager {
             find: None,
             hotlist: None,
             mounts: None,
+            history: None,
+            last_mask: yagni_commander_core::select::DEFAULT_MASK.to_owned(),
+            sizes: None,
+            next_sizes: 0,
             places: None,
             open_with: None,
             apps_lookup: None,
@@ -542,7 +561,7 @@ impl FileManager {
         cx: &mut Context<Self>,
     ) {
         self.close_mounts(window, cx);
-        if let MountsEvent::Pick(dir) = event {
+        if let MountsEvent::Pick(_, dir) = event {
             let dir = dir.clone();
             self.notice = None;
             self.commander.update(cx, |c, cx| {
@@ -832,21 +851,30 @@ impl FileManager {
     }
 
     /// Escape: closes the quick search box, else stops loading the active
-    /// panel (see `Commander::cancel_load`).
+    /// panel (see `Commander::cancel_load`), else stops counting folder
+    /// sizes.
     fn escape(&mut self, cx: &mut Context<Self>) {
-        self.commander.update(cx, |c, cx| {
+        let done = self.commander.update(cx, |c, cx| {
             let active = c.active();
-            if c.search_cancel() || c.cancel_load(active) {
+            let done = c.search_cancel() || c.cancel_load(active);
+            if done {
                 cx.notify();
             }
+            done
         });
+        if !done {
+            self.stop_sizes(cx);
+        }
     }
 
     /// Whether the active panel is reading a folder; its dialogs and file
     /// operations wait until it is done.
     /// One of our popups (hotlist, mounts, Open with) is open.
     fn popup_open(&self) -> bool {
-        self.hotlist.is_some() || self.mounts.is_some() || self.open_with.is_some()
+        self.hotlist.is_some()
+            || self.mounts.is_some()
+            || self.history.is_some()
+            || self.open_with.is_some()
     }
 
     /// The in-window menu bar has a menu open.
@@ -955,25 +983,34 @@ impl Render for FileManager {
             (Some(err), _) => Some(err.to_owned().into()),
             (None, notice) => notice.clone(),
         };
-        let status = match problem {
-            // A click copies the message (an ssh error is worth pasting).
-            Some(text) => div()
-                .id("status-error")
-                .debug_selector(|| "status-error".into())
-                .cursor_pointer()
-                .text_color(colors.error)
-                .on_click(cx.listener({
-                    let text = text.clone();
-                    move |_, _, _, cx| {
-                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_string()))
-                    }
-                }))
-                .child(text),
-            None => div()
-                .id("status-hint")
-                .debug_selector(|| "status-hint".into())
+        let status = match (problem, self.sizes_text()) {
+            (None, Some(text)) => div()
+                .id("status-sizes")
+                .debug_selector(|| "status-sizes".into())
                 .text_color(colors.text_secondary)
-                .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
+                .child(text),
+            (problem, _) => match problem {
+                // A click copies the message (an ssh error is worth pasting).
+                Some(text) => div()
+                    .id("status-error")
+                    .debug_selector(|| "status-error".into())
+                    .cursor_pointer()
+                    .text_color(colors.error)
+                    .on_click(cx.listener({
+                        let text = text.clone();
+                        move |_, _, _, cx| {
+                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                text.to_string(),
+                            ))
+                        }
+                    }))
+                    .child(text),
+                None => div()
+                    .id("status-hint")
+                    .debug_selector(|| "status-hint".into())
+                    .text_color(colors.text_secondary)
+                    .child("Tab switch · ↑↓ move · Enter open · Backspace up"),
+            },
         };
 
         div()
@@ -1054,6 +1091,39 @@ impl Render for FileManager {
                 this.reload_git(cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
+            .on_action(
+                cx.listener(|this, _: &SelectGroup, window, cx| {
+                    this.select_group(true, window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &DeselectGroup, window, cx| {
+                this.select_group(false, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &DeselectAll, _, cx| this.execute(Command::DeselectAll, cx)),
+            )
+            .on_action(cx.listener(|this, _: &InvertSelection, _, cx| {
+                this.execute(Command::InvertSelection, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SelectSameExtension, _, cx| {
+                this.execute(Command::SelectSameExtension(true), cx)
+            }))
+            .on_action(cx.listener(|this, _: &DeselectSameExtension, _, cx| {
+                this.execute(Command::SelectSameExtension(false), cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &Back, _, cx| this.execute(Command::HistoryStep(-1), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &Forward, _, cx| this.execute(Command::HistoryStep(1), cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &FolderHistory, window, cx| this.toggle_history(window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &CountFolderSizes, window, cx| {
+                this.count_folder_sizes(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &CopyHere, window, cx| this.copy_here(window, cx)))
             .on_action(cx.listener(|this, _: &Rename, window, cx| this.rename(window, cx)))
             .on_action(
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
@@ -1180,6 +1250,7 @@ impl Render for FileManager {
                             .child(self.left.clone())
                             .children(self.hotlist_overlay(Side::Left))
                             .children(self.mounts_overlay(Side::Left))
+                            .children(self.history_overlay(Side::Left))
                             .children(self.open_with_overlay(Side::Left, cx)),
                     )
                     .child(divider)
@@ -1192,6 +1263,7 @@ impl Render for FileManager {
                             .child(self.right.clone())
                             .children(self.hotlist_overlay(Side::Right))
                             .children(self.mounts_overlay(Side::Right))
+                            .children(self.history_overlay(Side::Right))
                             .children(self.open_with_overlay(Side::Right, cx)),
                     ),
             )

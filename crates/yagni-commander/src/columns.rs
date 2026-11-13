@@ -260,7 +260,8 @@ impl Column {
             },
             SortKey::Size => match entry.kind {
                 EntryKind::Parent => String::new(),
-                EntryKind::Dir => "<DIR>".into(),
+                // Counted with Alt-Shift-Enter, else unknown.
+                EntryKind::Dir => entry.size.map_or_else(|| "<DIR>".into(), format_size),
                 EntryKind::File => entry.size.map(format_size).unwrap_or_default(),
             },
             SortKey::Modified => entry.modified.map(format_modified).unwrap_or_default(),
@@ -472,6 +473,10 @@ mod tests {
         let size = column(SortKey::Size);
         let texts: Vec<_> = entries.iter().map(|e| size.text(e, false)).collect();
         assert_eq!(texts, ["", "<DIR>", "5 B"]);
+        // A folder counted with Alt-Shift-Enter shows its size.
+        let mut counted = entries[1].clone();
+        counted.size = Some(2048);
+        assert_eq!(size.text(&counted, false), format_size(2048));
     }
 
     #[test]

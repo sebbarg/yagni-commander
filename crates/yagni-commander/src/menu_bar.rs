@@ -246,8 +246,8 @@ mod tests {
     #[test]
     fn only_menu_keys_pass_while_open() {
         for k in [
-            "up", "down", "left", "right", "enter", "escape", "f10", "alt", "alt-f", "alt-c",
-            "alt-s", "alt-h",
+            "up", "down", "left", "right", "enter", "escape", "f10", "alt", "alt-f", "alt-m",
+            "alt-c", "alt-s", "alt-h",
         ] {
             assert!(passes(&key(k)), "{k}");
         }

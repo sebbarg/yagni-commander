@@ -3477,8 +3477,8 @@ mod menu_bar {
         cx.simulate_keystrokes("down"); // left cursor on row 1, right on row 0
         cx.simulate_keystrokes("f10");
         assert_eq!(menu_open(cx), Some(0));
-        cx.simulate_keystrokes("right");
-        assert_eq!(menu_open(cx), Some(1));
+        cx.simulate_keystrokes("right right");
+        assert_eq!(menu_open(cx), Some(2));
         // Commands > Swap panels: Down selects the first item, Down again the second.
         cx.simulate_keystrokes("down down enter");
         assert_eq!(menu_open(cx), None);
@@ -3507,21 +3507,23 @@ mod menu_bar {
     }
 
     #[gpui_kit::test]
-    fn alt_c_s_h_open_commands_show_and_help(cx: &mut TestAppContext) {
+    fn alt_m_c_s_h_open_mark_commands_show_and_help(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("b alt-h");
-        assert_eq!(menu_open(cx), Some(3));
+        assert_eq!(menu_open(cx), Some(4));
         assert_eq!(search(&commander, cx), None, "Alt-H ends the quick search");
         // From one open menu straight to another.
         cx.simulate_keystrokes("alt-c");
+        assert_eq!(menu_open(cx), Some(2));
+        cx.simulate_keystrokes("alt-m");
         assert_eq!(menu_open(cx), Some(1));
         cx.simulate_keystrokes("alt-s");
-        assert_eq!(menu_open(cx), Some(2));
+        assert_eq!(menu_open(cx), Some(3));
         cx.simulate_keystrokes("alt-s");
-        assert_eq!(menu_open(cx), Some(2), "no toggle");
+        assert_eq!(menu_open(cx), Some(3), "no toggle");
         // Other Alt letters are still ignored while a menu is open.
         cx.simulate_keystrokes("alt-x");
-        assert_eq!(menu_open(cx), Some(2));
+        assert_eq!(menu_open(cx), Some(3));
         cx.simulate_keystrokes("escape");
         assert_eq!(menu_open(cx), None);
         cx.simulate_keystrokes("down");
@@ -3529,10 +3531,37 @@ mod menu_bar {
     }
 
     #[gpui_kit::test]
+    fn the_mark_menu_names_the_keypad_keys_like_tc(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("alt-m");
+        assert_eq!(menu_open(cx), Some(1));
+        for keys in ["Num +", "Num -", "Num *", "Alt+Num +", "Alt+Num -"] {
+            assert!(bounds(cx, format!("menu-key-{keys}")).is_some(), "{keys}");
+        }
+        // Not gpui's names for them; other items keep gpui-component's key.
+        assert!(bounds(cx, "kbd:ctrl-a".into()).is_some());
+        assert!(bounds(cx, "kbd:add".into()).is_none());
+        // The items still run their actions.
+        cx.simulate_keystrokes("down down down down down enter");
+        assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn mark_deselect_all_clears_the_selection(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("ctrl-a");
+        assert_eq!(selected(&commander, Side::Left, cx), ["a", "b", "f"]);
+        // Mark > Deselect all, the second item.
+        cx.simulate_keystrokes("alt-m down down enter");
+        assert_eq!(menu_open(cx), None);
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+    }
+
+    #[gpui_kit::test]
     fn left_and_right_wrap_between_menus(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         cx.simulate_keystrokes("f10 left");
-        assert_eq!(menu_open(cx), Some(3));
+        assert_eq!(menu_open(cx), Some(4));
         cx.simulate_keystrokes("right");
         assert_eq!(menu_open(cx), Some(0));
     }
@@ -3554,8 +3583,8 @@ mod menu_bar {
     fn menu_rename_opens_the_prompt_with_focus_in_it(cx: &mut TestAppContext) {
         let (tmp, _commander, cx) = open(cx);
         cx.simulate_keystrokes("down"); // on "a"
-        // Files > Rename is the 7th item.
-        cx.simulate_keystrokes("f10 down down down down down down down enter");
+        // Files > Rename is the 8th item.
+        cx.simulate_keystrokes("f10 down down down down down down down down enter");
         cx.run_until_parked();
         assert!(dialog_open(cx));
         cx.simulate_input("z");
@@ -3567,8 +3596,8 @@ mod menu_bar {
     #[gpui_kit::test]
     fn menu_hidden_files_toggles_like_ctrl_dot(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
-        // Show is the 3rd menu, Hidden files its first item.
-        cx.simulate_keystrokes("f10 right right down enter");
+        // Show is the 4th menu, Hidden files its first item.
+        cx.simulate_keystrokes("f10 right right right down enter");
         assert!(commander.read_with(cx, |c, _| c.shows_hidden()));
     }
 
@@ -3576,7 +3605,7 @@ mod menu_bar {
     fn clicking_a_title_opens_and_closes_its_menu(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         click(cx, "menu-Commands", 1);
-        assert_eq!(menu_open(cx), Some(1));
+        assert_eq!(menu_open(cx), Some(2));
         click(cx, "menu-Commands", 1);
         assert_eq!(menu_open(cx), None);
     }
@@ -3611,7 +3640,7 @@ mod menu_bar {
         click(cx, "menu-Files", 1);
         let position = center(cx, "menu-Show");
         cx.simulate_mouse_move(position, None, gpui_kit::Modifiers::default());
-        assert_eq!(menu_open(cx), Some(2));
+        assert_eq!(menu_open(cx), Some(3));
     }
 
     #[gpui_kit::test]
@@ -4384,7 +4413,7 @@ mod hotlist {
         use_hotlist(&tmp, &cfg, &[], cx);
         activate(cx);
         // Commands > Directory hotlist, the fourth item.
-        cx.simulate_keystrokes("f10 right down down down down enter");
+        cx.simulate_keystrokes("f10 right right down down down down enter");
         assert!(hotlist_open(cx), "the closing menu leaves it open");
         cx.simulate_keystrokes("b");
         assert!(!hotlist_open(cx));
@@ -7248,7 +7277,7 @@ mod zoom {
     fn show_menu_zoom_in_raises_the_ui_level(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         // Show is the 3rd menu; Zoom in is third from the end (Up wraps to the last item).
-        cx.simulate_keystrokes("f10 right right up up up enter");
+        cx.simulate_keystrokes("f10 right right right up up up enter");
         assert_eq!(ui_font_size(cx), 17.0);
     }
 
@@ -9819,5 +9848,353 @@ mod user_commands {
         cx.simulate_keystrokes("ctrl-s enter");
         cx.run_until_parked();
         assert!(box_text(cx).starts_with("Commands not saved"));
+    }
+}
+
+mod select_group {
+    use super::tab_order::{assert_focus, assert_order};
+    use super::*;
+
+    /// `open`, plus files `x.rs` and `y.rs`.
+    fn with_rust(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open(cx);
+        for file in ["x.rs", "y.rs"] {
+            std::fs::write(tmp.path().join(file), b"").unwrap();
+        }
+        cx.simulate_keystrokes("ctrl-r");
+        (tmp, commander, cx)
+    }
+
+    fn last_mask(cx: &mut VisualTestContext) -> String {
+        file_manager(cx).read_with(cx, |this, _| this.last_mask.clone())
+    }
+
+    #[gpui_kit::test]
+    fn num_plus_selects_by_mask_and_num_minus_deselects(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = with_rust(cx);
+        assert_eq!(last_mask(cx), "*");
+        cx.simulate_keystrokes("add");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        // The mask is preselected: typing replaces it.
+        cx.simulate_input("*.rs");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(selected(&commander, Side::Left, cx), ["x.rs", "y.rs"]);
+        assert_eq!(last_mask(cx), "*.rs");
+        // Folders by a trailing slash.
+        cx.simulate_keystrokes("add");
+        cx.run_until_parked();
+        cx.simulate_input("*/");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            selected(&commander, Side::Left, cx),
+            ["a", "b", "x.rs", "y.rs"]
+        );
+        // Num- starts with the last mask (`*/`).
+        cx.simulate_keystrokes("subtract enter");
+        cx.run_until_parked();
+        assert_eq!(selected(&commander, Side::Left, cx), ["x.rs", "y.rs"]);
+        // Focus is back on the panels.
+        cx.simulate_keystrokes("home");
+        assert_eq!(cursor(&commander, Side::Left, cx), 0);
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_mask_is_refused_in_the_prompt(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = with_rust(cx);
+        cx.simulate_keystrokes("add");
+        cx.run_until_parked();
+        cx.simulate_input(" ");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box over the prompt");
+        cx.simulate_keystrokes("escape escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+        assert_eq!(last_mask(cx), "*");
+    }
+
+    #[gpui_kit::test]
+    fn num_star_inverts_the_files(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = with_rust(cx);
+        cx.simulate_keystrokes("down space end space multiply");
+        assert_eq!(selected(&commander, Side::Left, cx), ["a", "f", "x.rs"]);
+    }
+
+    #[gpui_kit::test]
+    fn alt_num_plus_and_minus_take_the_cursor_files_extension(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = with_rust(cx);
+        cx.simulate_keystrokes("end alt-add");
+        assert_eq!(selected(&commander, Side::Left, cx), ["x.rs", "y.rs"]);
+        cx.simulate_keystrokes("space alt-subtract");
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn the_prompt_goes_field_cancel_ok(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = with_rust(cx);
+        activate(cx);
+        cx.simulate_keystrokes("add");
+        assert_focus(cx, "Input", &[]);
+        assert_order(
+            cx,
+            "tab",
+            &["button:Cancel", "button:OK", "Input", "button:Cancel"],
+            &[],
+        );
+        assert_order(
+            cx,
+            "shift-tab",
+            &["Input", "button:OK", "button:Cancel", "Input"],
+            &[],
+        );
+    }
+}
+
+mod folder_history {
+    use super::*;
+
+    fn open_side(cx: &mut VisualTestContext) -> Option<Side> {
+        cx.run_until_parked();
+        file_manager(cx).read_with(cx, |this, _| this.history.as_ref().map(|open| open.side))
+    }
+
+    fn highlight(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.history.as_ref().unwrap().popup.read(cx).highlight()
+        })
+    }
+
+    fn under_cursor(commander: &Entity<Commander>, cx: &VisualTestContext) -> String {
+        commander.read_with(cx, |c, _| {
+            c.panel(c.active()).cursor_entry().unwrap().label.clone()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn alt_left_and_alt_right_go_back_and_forward(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down enter");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        cx.simulate_keystrokes("alt-left");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+        assert_eq!(under_cursor(&commander, cx), "a", "where it was");
+        cx.simulate_keystrokes("alt-right");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        // The other side has its own.
+        cx.simulate_keystrokes("tab alt-left");
+        assert_eq!(path(&commander, Side::Right, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn alt_down_lists_the_history_newest_first_and_a_pick_goes_there(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        // tmp, a, tmp, b
+        cx.simulate_keystrokes("down enter backspace down enter");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("b"));
+        cx.simulate_keystrokes("alt-down");
+        assert_eq!(open_side(cx), Some(Side::Left));
+        assert!(bounds(cx, "history-title".into()).is_some());
+        assert!(bounds(cx, "history-row-3".into()).is_some());
+        assert!(bounds(cx, "history-row-4".into()).is_none());
+        assert_eq!(highlight(cx), 0, "on the folder shown");
+        cx.simulate_keystrokes("down down enter");
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        // The places ahead stay: a pick is a move within the history.
+        cx.simulate_keystrokes("alt-down");
+        assert_eq!(highlight(cx), 2);
+        cx.simulate_keystrokes("escape");
+        assert_eq!(open_side(cx), None);
+        cx.simulate_keystrokes("alt-right");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+
+    #[gpui_kit::test]
+    fn a_click_picks_and_other_keys_are_ignored_while_it_is_open(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        cx.simulate_keystrokes("down enter");
+        cx.simulate_keystrokes("alt-down f7 tab x");
+        assert_eq!(open_side(cx), Some(Side::Left));
+        assert!(!dialog_open(cx), "F7 did nothing");
+        commander.read_with(cx, |c, _| assert_eq!(c.active(), Side::Left));
+        assert_eq!(search(&commander, cx), None);
+        click(cx, "history-row-1", 1);
+        assert_eq!(open_side(cx), None);
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path());
+    }
+}
+
+mod folder_sizes {
+    use super::*;
+
+    fn size_of(commander: &Entity<Commander>, label: &str, cx: &VisualTestContext) -> Option<u64> {
+        commander.read_with(cx, |c, _| {
+            c.panel(Side::Left)
+                .entries()
+                .iter()
+                .find(|e| e.label == label)
+                .unwrap()
+                .size
+        })
+    }
+
+    fn counting(cx: &mut VisualTestContext) -> bool {
+        file_manager(cx).read_with(cx, |this, _| this.sizes.is_some())
+    }
+
+    /// `open` with 3 bytes in `a` and 1 in `b`.
+    fn filled(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x"), b"xxx").unwrap();
+        std::fs::write(tmp.path().join("b/y"), b"y").unwrap();
+        (tmp, commander, cx)
+    }
+
+    #[gpui_kit::test]
+    fn alt_shift_enter_counts_every_folder_into_the_size_column(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = filled(cx);
+        cx.simulate_keystrokes("alt-shift-enter");
+        assert!(counting(cx));
+        assert!(bounds(cx, "status-sizes".into()).is_some());
+        wait_until(cx, |cx| !counting(cx));
+        assert_eq!(size_of(&commander, "a", cx), Some(3));
+        assert_eq!(size_of(&commander, "b", cx), Some(1));
+        assert!(bounds(cx, "status-sizes".into()).is_none());
+        let footer = commander.read_with(cx, |c, _| c.panel(Side::Left).summary().bytes);
+        assert_eq!(footer, 4);
+        // Sorted by size, the bigger folder first.
+        cx.update(|window, cx| window.dispatch_action(Box::new(crate::actions::SortBySize), cx));
+        let first = commander.read_with(cx, |c, _| c.panel(Side::Left).entries()[1].label.clone());
+        assert_eq!(first, "a");
+    }
+
+    #[gpui_kit::test]
+    fn escape_stops_the_count(cx: &mut TestAppContext) {
+        let (_tmp, commander, cx) = filled(cx);
+        cx.simulate_keystrokes("alt-shift-enter");
+        let cancel =
+            file_manager(cx).read_with(cx, |this, _| this.sizes.as_ref().map(|s| s.cancelled()));
+        assert_eq!(cancel, Some(false));
+        cx.simulate_keystrokes("escape");
+        assert!(!counting(cx));
+        wait_until(cx, |_| true);
+        assert_eq!(size_of(&commander, "a", cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn leaving_the_folder_stops_the_count(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = filled(cx);
+        cx.simulate_keystrokes("alt-shift-enter down enter");
+        assert_eq!(path(&commander, Side::Left, cx), tmp.path().join("a"));
+        wait_until(cx, |cx| !counting(cx));
+        cx.simulate_keystrokes("backspace");
+        assert_eq!(size_of(&commander, "a", cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn inside_an_archive_it_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        make_zip(&tmp.path().join("pkg.zip"), &[("d/x.txt", "x")]);
+        cx.simulate_keystrokes("ctrl-r end enter alt-shift-enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        assert!(!counting(cx));
+    }
+}
+
+mod copy_here {
+    use super::tab_order::{assert_focus, assert_order};
+    use super::*;
+
+    fn under_cursor(commander: &Entity<Commander>, cx: &VisualTestContext) -> String {
+        commander.read_with(cx, |c, _| {
+            c.panel(Side::Left).cursor_entry().unwrap().label.clone()
+        })
+    }
+
+    #[gpui_kit::test]
+    fn shift_f5_copies_the_cursor_entry_beside_it(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("f"), b"data").unwrap();
+        // A selection elsewhere is ignored, and stays.
+        cx.simulate_keystrokes("down space end shift-f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        // The name is preselected: typing replaces it.
+        cx.simulate_input("g");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("g")).unwrap(), b"data");
+        assert_eq!(std::fs::read(tmp.path().join("f")).unwrap(), b"data");
+        assert!(!tmp.path().join("a/f").exists());
+        assert_eq!(under_cursor(&commander, cx), "g", "on the copy");
+        assert_eq!(selected(&commander, Side::Left, cx), ["a"]);
+    }
+
+    #[gpui_kit::test]
+    fn a_folder_is_copied_whole(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("a/x"), b"x").unwrap();
+        cx.simulate_keystrokes("down shift-f5");
+        cx.run_until_parked();
+        cx.simulate_input("c");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("c/x")).unwrap(), b"x");
+    }
+
+    #[gpui_kit::test]
+    fn the_same_name_is_refused_and_the_parent_entry_does_nothing(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("shift-f5");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "on ..");
+        cx.simulate_keystrokes("end shift-f5 enter");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        assert!(!job_running(cx));
+        cx.simulate_keystrokes("escape escape");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 4);
+    }
+
+    #[gpui_kit::test]
+    fn inside_an_archive_it_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        make_zip(&tmp.path().join("pkg.zip"), &[("x.txt", "x")]);
+        cx.simulate_keystrokes("ctrl-r end enter end shift-f5");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "error box");
+        assert!(box_text(cx).starts_with("Inside an archive"));
+    }
+
+    #[gpui_kit::test]
+    fn the_prompt_goes_field_cancel_ok(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.simulate_keystrokes("end shift-f5");
+        assert_focus(cx, "Input", &[]);
+        assert_order(
+            cx,
+            "tab",
+            &["button:Cancel", "button:OK", "Input", "button:Cancel"],
+            &[],
+        );
+        assert_order(
+            cx,
+            "shift-tab",
+            &["Input", "button:OK", "button:Cancel", "Input"],
+            &[],
+        );
     }
 }

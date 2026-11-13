@@ -12,6 +12,7 @@ use crate::listing::{ArchiveRead, Listing, LoadRequest, read_listing};
 use crate::oplog::OperationLog;
 use crate::panel::{Cancel, Enter, Loading, Navigation, Panel, PanelId, Refresh};
 use crate::quick_search::QuickSearch;
+use crate::select::SelectMask;
 use crate::sort::SortKey;
 use crate::tabs::Tabs;
 
@@ -77,6 +78,17 @@ pub enum Command {
     PrevTab,
     /// A click on a tab: brings that side and tab to the front.
     SelectTab(Side, usize),
+    /// Mark > Deselect all (no key: TC's Ctrl-Num- is Zoom out here).
+    DeselectAll,
+    /// Num*: invert the selection of the files.
+    InvertSelection,
+    /// Alt-Num+ (true) / Alt-Num- (false): select or deselect the files
+    /// with the cursor file's extension.
+    SelectSameExtension(bool),
+    /// Alt-Left (-1) / Alt-Right (1): back or forward in the tab's history.
+    HistoryStep(isize),
+    /// Alt-Down's list: go to that place of the tab's history.
+    HistoryTo(usize),
 }
 
 /// A Shift-move: where the cursor goes while toggling the selection of
@@ -221,6 +233,7 @@ impl Commander {
                     archive: None,
                     results: None,
                     up_if_missing: false,
+                    travel: None,
                 },
                 LoadKind::Startup,
             );
@@ -300,6 +313,7 @@ impl Commander {
             id,
             path: nav.target,
             select: nav.select,
+            travel: nav.travel,
             progress,
             visible: false,
             _cancel: Cancel(cancel),
@@ -417,6 +431,7 @@ impl Commander {
                 archive: None,
                 results: None,
                 up_if_missing: false,
+                travel: None,
             };
             self.request(side, nav, LoadKind::Startup);
         }
@@ -439,7 +454,8 @@ impl Commander {
                     None => panel.cursor_entry().map(|e| e.name.clone()),
                     Some(_) => None,
                 };
-                panel.apply(listing, select.as_deref());
+                // The same folder: counted folder sizes stay.
+                panel.apply_with(listing, select.as_deref(), None, true);
                 // The folder vanished: a quick search there is over.
                 if refresh.gone.is_some() && at == self.visible(self.active) {
                     self.search.clear();
@@ -513,7 +529,7 @@ impl Commander {
         let panel = self.panel_at_mut(at);
         match result {
             Ok(listing) => {
-                panel.apply(listing, loading.select.as_deref());
+                panel.apply_with(listing, loading.select.as_deref(), loading.travel, false);
                 if let Some(dir) = then
                     && in_front
                 {
@@ -601,6 +617,7 @@ impl Commander {
                     archive: None,
                     results: None,
                     up_if_missing: false,
+                    travel: None,
                 },
                 LoadKind::Startup,
             );
@@ -660,6 +677,7 @@ impl Commander {
             archive: None,
             results: None,
             up_if_missing: false,
+            travel: None,
         };
         self.request(side, nav, LoadKind::Navigate);
     }
@@ -704,6 +722,7 @@ impl Commander {
                 archive: None,
                 results: None,
                 up_if_missing: false,
+                travel: None,
             },
             LoadKind::Navigate,
         );
@@ -725,6 +744,7 @@ impl Commander {
             archive: None,
             results: Some(Arc::new(results)),
             up_if_missing: false,
+            travel: None,
         };
         self.request(side, nav, LoadKind::Navigate);
     }
@@ -746,8 +766,67 @@ impl Commander {
             archive: None,
             results: None,
             up_if_missing: true,
+            travel: None,
         };
         self.request(active, nav, LoadKind::Navigate);
+    }
+
+    /// Num+ / Num-: selects (`select`) or deselects what `mask` matches in
+    /// the active panel. Like a command: ignored while it loads, ends the
+    /// quick search.
+    pub fn select_by_mask(&mut self, mask: &SelectMask, select: bool) {
+        let active = self.active;
+        if self.panel(active).loading().is_some() {
+            return;
+        }
+        self.error = None;
+        self.search.clear();
+        self.panel_mut(active).select_matching(mask, select);
+    }
+
+    /// Goes to place `ix` of `side`'s history, with the cursor where it
+    /// was. A folder that is gone falls back to its nearest parent (then a
+    /// new place of the history).
+    fn travel(&mut self, side: Side, ix: usize) {
+        let panel = self.panel(side);
+        let history = panel.history();
+        if ix == history.current() {
+            return;
+        }
+        let Some(place) = history.get(ix).cloned() else {
+            return;
+        };
+        let archive = place.archive.map(|file| ArchiveRead {
+            // Inside the same archive its index is at hand.
+            known: panel
+                .archive()
+                .filter(|index| index.file() == file)
+                .cloned(),
+            file,
+        });
+        let nav = Navigation {
+            target: place.path,
+            select: place.select,
+            up_if_missing: archive.is_none(),
+            archive,
+            results: None,
+            travel: Some(ix),
+        };
+        self.request(side, nav, LoadKind::Navigate);
+    }
+
+    /// Alt-Shift-Enter counted folder `name` of the tab `id` while it
+    /// showed `dir`: shows its size there. Dropped if that tab is gone or
+    /// shows another folder by now.
+    pub fn set_dir_size(&mut self, id: PanelId, dir: &Path, name: &OsStr, bytes: u64) -> bool {
+        let Some(at) = self
+            .all_tabs()
+            .find(|(_, panel)| panel.id() == id && panel.path() == dir)
+            .map(|(at, _)| at)
+        else {
+            return false;
+        };
+        self.panel_at_mut(at).set_dir_size(name, bytes)
     }
 
     /// The home folder (hotlist `~` paths, startup fallback).
@@ -1163,6 +1242,28 @@ impl Commander {
                 panel.select_all();
                 Ok(())
             }
+            Command::DeselectAll => {
+                panel.clear_selection();
+                Ok(())
+            }
+            Command::InvertSelection => {
+                panel.invert_selection();
+                Ok(())
+            }
+            Command::SelectSameExtension(select) => {
+                panel.select_same_extension(select);
+                Ok(())
+            }
+            Command::HistoryStep(step) => {
+                if let Some(ix) = panel.history().step(step) {
+                    self.travel(active, ix);
+                }
+                Ok(())
+            }
+            Command::HistoryTo(ix) => {
+                self.travel(active, ix);
+                Ok(())
+            }
             Command::SwapPanels => {
                 self.tabs.swap(0, 1);
                 Ok(())
@@ -1223,6 +1324,7 @@ impl Commander {
                     archive: panel.archive_read(true),
                     results: panel.results().cloned(),
                     up_if_missing: false,
+                    travel: None,
                 };
                 self.request(active.other(), nav, LoadKind::Navigate);
                 Ok(())
@@ -3767,5 +3869,344 @@ mod remote_tests {
         c.run_loads_now();
         assert_eq!(c.panel(Side::Left).path(), top);
         assert_eq!(c.panel(Side::Right).path(), tmp.path(), "home");
+    }
+}
+
+#[cfg(test)]
+mod select_history_size_tests {
+    use super::*;
+    use crate::test_archives::make_zip;
+    use std::fs;
+
+    fn run(c: &mut Commander, command: Command) -> Outcome {
+        let outcome = c.execute(command);
+        c.run_loads_now();
+        outcome
+    }
+
+    fn put_cursor(c: &mut Commander, label: &str) {
+        let side = c.active();
+        let ix = c
+            .panel(side)
+            .entries()
+            .iter()
+            .position(|e| e.label == label)
+            .unwrap();
+        c.execute(Command::CursorTo(side, ix));
+    }
+
+    fn cursor(c: &Commander) -> String {
+        c.panel(c.active()).cursor_entry().unwrap().label.clone()
+    }
+
+    fn selected(c: &Commander) -> Vec<String> {
+        c.panel(c.active())
+            .selection()
+            .map(|e| e.label.clone())
+            .collect()
+    }
+
+    fn mask(text: &str) -> SelectMask {
+        SelectMask::parse(text).unwrap()
+    }
+
+    /// Folders `src`, `docs`; files `a.rs`, `b.rs`, `c.md`, `Makefile`.
+    fn mixed() -> (tempfile::TempDir, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        for dir in ["src", "docs"] {
+            fs::create_dir(tmp.path().join(dir)).unwrap();
+        }
+        for file in ["a.rs", "b.rs", "c.md", "Makefile"] {
+            fs::write(tmp.path().join(file), b"x").unwrap();
+        }
+        let c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        (tmp, c)
+    }
+
+    #[test]
+    fn a_mask_selects_and_deselects_files_or_folders() {
+        let (_tmp, mut c) = mixed();
+        c.select_by_mask(&mask("*.rs"), true);
+        assert_eq!(selected(&c), ["a.rs", "b.rs"]);
+        c.select_by_mask(&mask("*/"), true);
+        assert_eq!(selected(&c), ["docs", "src", "a.rs", "b.rs"]);
+        c.select_by_mask(&mask("b.rs"), false);
+        assert_eq!(selected(&c), ["docs", "src", "a.rs"]);
+        // ".." is never selected.
+        c.select_by_mask(&mask("/"), false);
+        c.select_by_mask(&mask("*"), true);
+        assert_eq!(selected(&c), ["a.rs", "b.rs", "c.md", "Makefile"]);
+    }
+
+    #[test]
+    fn a_mask_ends_the_quick_search_and_waits_for_a_load() {
+        let (tmp, mut c) = mixed();
+        c.search_type('m');
+        c.select_by_mask(&mask("*.md"), true);
+        assert_eq!(c.search(), None);
+        assert_eq!(selected(&c), ["c.md"]);
+        put_cursor(&mut c, "src");
+        c.execute(Command::Activate); // loading
+        c.select_by_mask(&mask("*"), true);
+        assert_eq!(selected(&c), ["c.md"]);
+        c.run_loads_now();
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("src"));
+    }
+
+    #[test]
+    fn deselect_all_clears_the_active_panel_only() {
+        let (_tmp, mut c) = mixed();
+        c.select_by_mask(&mask("* */"), true);
+        c.execute(Command::SwitchPanel);
+        c.select_by_mask(&mask("*.rs"), true);
+        c.execute(Command::SwitchPanel);
+        c.execute(Command::DeselectAll);
+        assert!(selected(&c).is_empty());
+        assert_eq!(c.panel(Side::Right).selection().count(), 2);
+    }
+
+    #[test]
+    fn invert_flips_the_files_only() {
+        let (_tmp, mut c) = mixed();
+        c.select_by_mask(&mask("src/ a.rs"), true);
+        c.execute(Command::InvertSelection);
+        assert_eq!(selected(&c), ["src", "b.rs", "c.md", "Makefile"]);
+    }
+
+    #[test]
+    fn same_extension_follows_the_cursor_file() {
+        let (tmp, mut c) = mixed();
+        fs::write(tmp.path().join("README"), b"x").unwrap();
+        run(&mut c, Command::Reload);
+        put_cursor(&mut c, "a.rs");
+        c.execute(Command::SelectSameExtension(true));
+        assert_eq!(selected(&c), ["a.rs", "b.rs"]);
+        c.execute(Command::SelectSameExtension(false));
+        assert!(selected(&c).is_empty());
+        // No extension: the files without one.
+        put_cursor(&mut c, "Makefile");
+        c.execute(Command::SelectSameExtension(true));
+        assert_eq!(selected(&c), ["Makefile", "README"]);
+        // On a folder: nothing.
+        c.select_by_mask(&mask("*"), false);
+        put_cursor(&mut c, "src");
+        c.execute(Command::SelectSameExtension(true));
+        assert!(selected(&c).is_empty());
+    }
+
+    /// `a/b/c` below a temporary folder; the left panel at its top.
+    fn nested() -> (tempfile::TempDir, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("a/b/c")).unwrap();
+        fs::write(tmp.path().join("a/b/f"), b"x").unwrap();
+        let c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        (tmp, c)
+    }
+
+    fn enter(c: &mut Commander, label: &str) {
+        put_cursor(c, label);
+        run(c, Command::Activate);
+    }
+
+    #[test]
+    fn back_and_forward_return_with_the_cursor_where_it_was() {
+        let (tmp, mut c) = nested();
+        enter(&mut c, "a");
+        enter(&mut c, "b");
+        put_cursor(&mut c, "f");
+        c.go_to(tmp.path().to_path_buf());
+        c.run_loads_now();
+        let panel = c.panel(Side::Left);
+        assert_eq!(panel.history().places().len(), 4);
+
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a/b"));
+        assert_eq!(cursor(&c), "f");
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(cursor(&c), "b");
+        run(&mut c, Command::HistoryStep(1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a/b"));
+        run(&mut c, Command::HistoryStep(1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        // At the end: nothing.
+        run(&mut c, Command::HistoryStep(1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert_eq!(c.panel(Side::Left).history().current(), 3);
+
+        // A new place drops those ahead.
+        run(&mut c, Command::HistoryTo(1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        enter(&mut c, "..");
+        let paths: Vec<_> = c
+            .panel(Side::Left)
+            .history()
+            .places()
+            .iter()
+            .map(|p| p.path.clone())
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                tmp.path().to_path_buf(),
+                tmp.path().join("a"),
+                tmp.path().to_path_buf()
+            ]
+        );
+    }
+
+    #[test]
+    fn each_tab_has_its_own_history_and_a_new_tab_copies_it() {
+        let (tmp, mut c) = nested();
+        enter(&mut c, "a");
+        run(&mut c, Command::NewTab);
+        enter(&mut c, "b");
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        // The first tab never went to b.
+        run(&mut c, Command::PrevTab);
+        assert_eq!(c.panel(Side::Left).history().places().len(), 2);
+        // The other side's history is its own.
+        assert_eq!(c.panel(Side::Right).history().places().len(), 1);
+    }
+
+    #[test]
+    fn a_vanished_folder_in_the_history_falls_back_to_its_parent() {
+        let (tmp, mut c) = nested();
+        enter(&mut c, "a");
+        enter(&mut c, "b");
+        c.go_to(tmp.path().to_path_buf());
+        c.run_loads_now();
+        fs::remove_dir_all(tmp.path().join("a/b")).unwrap();
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path().join("a"));
+        assert_eq!(c.error(), None);
+        // Landing elsewhere is a new place, after the current one.
+        let history = c.panel(Side::Left).history();
+        assert_eq!(history.places().len(), 5);
+        assert_eq!(history.current(), 4);
+    }
+
+    #[test]
+    fn search_results_are_no_place_in_the_history() {
+        let (tmp, mut c) = nested();
+        enter(&mut c, "a");
+        let results =
+            crate::find::Results::new(tmp.path().to_path_buf(), "f".into(), Arc::default());
+        c.feed(results);
+        c.run_loads_now();
+        assert!(c.panel(Side::Left).in_results());
+        assert_eq!(c.panel(Side::Left).history().places().len(), 2);
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), tmp.path());
+        assert!(!c.panel(Side::Left).in_results());
+    }
+
+    #[test]
+    fn history_goes_back_into_an_archive() {
+        let tmp = tempfile::tempdir().unwrap();
+        let zip = tmp.path().join("pkg.zip");
+        make_zip(&zip, &[("src/main.rs", "m")]);
+        let mut c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        enter(&mut c, "pkg.zip");
+        enter(&mut c, "src");
+        c.go_to(tmp.path().to_path_buf());
+        c.run_loads_now();
+        run(&mut c, Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), zip.join("src"));
+        assert!(c.panel(Side::Left).in_archive());
+        // Within the archive: no read.
+        c.execute(Command::HistoryStep(-1));
+        assert_eq!(c.panel(Side::Left).path(), zip);
+        assert!(c.take_requests().is_empty());
+    }
+
+    /// Folders `big` (3 bytes) and `small` (1 byte), a 2-byte file `f`.
+    fn sized() -> (tempfile::TempDir, Commander) {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir(tmp.path().join("big")).unwrap();
+        fs::create_dir(tmp.path().join("small")).unwrap();
+        fs::write(tmp.path().join("big/x"), b"xxx").unwrap();
+        fs::write(tmp.path().join("small/x"), b"x").unwrap();
+        fs::write(tmp.path().join("f"), b"ff").unwrap();
+        let c = Commander::new(tmp.path(), tmp.path(), false).unwrap();
+        (tmp, c)
+    }
+
+    fn size_of(c: &Commander, side: Side, label: &str) -> Option<u64> {
+        c.panel(side)
+            .entries()
+            .iter()
+            .find(|e| e.label == label)
+            .unwrap()
+            .size
+    }
+
+    fn count_all(c: &mut Commander, tmp: &tempfile::TempDir) {
+        let panel = c.panel(Side::Left);
+        let id = panel.id();
+        for name in panel.dir_names() {
+            let bytes = crate::info::count(
+                &tmp.path().join(&name),
+                &Default::default(),
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .bytes;
+            assert!(c.set_dir_size(id, tmp.path(), &name, bytes));
+        }
+    }
+
+    #[test]
+    fn counted_sizes_show_sort_and_add_to_the_footer() {
+        let (tmp, mut c) = sized();
+        assert_eq!(c.panel(Side::Left).dir_names(), ["big", "small"]);
+        run(&mut c, Command::SortBy(Side::Left, SortKey::Size));
+        c.execute(Command::SortBy(Side::Left, SortKey::Size)); // smallest first
+        count_all(&mut c, &tmp);
+        let labels: Vec<_> = c
+            .panel(Side::Left)
+            .entries()
+            .iter()
+            .map(|e| e.label.as_str())
+            .collect();
+        assert_eq!(labels, ["..", "small", "big", "f"]);
+        assert_eq!(size_of(&c, Side::Left, "big"), Some(3));
+        assert_eq!(c.panel(Side::Left).summary().bytes, 6);
+        put_cursor(&mut c, "big");
+        c.execute(Command::ToggleSelection);
+        assert_eq!(c.panel(Side::Left).summary().selected_bytes, 3);
+        // The other side has none, and a file is no folder.
+        assert_eq!(size_of(&c, Side::Right, "big"), None);
+        let id = c.panel(Side::Left).id();
+        assert!(!c.set_dir_size(id, tmp.path(), "f".as_ref(), 9));
+    }
+
+    #[test]
+    fn sizes_survive_quiet_reads_and_copies_but_not_a_reload_or_leaving() {
+        let (tmp, mut c) = sized();
+        count_all(&mut c, &tmp);
+        c.watch_reload(Side::Left);
+        c.run_loads_now();
+        assert_eq!(size_of(&c, Side::Left, "big"), Some(3));
+        run(&mut c, Command::NewTab);
+        assert_eq!(size_of(&c, Side::Left, "big"), Some(3));
+        run(&mut c, Command::Reload);
+        assert_eq!(size_of(&c, Side::Left, "big"), None);
+        count_all(&mut c, &tmp);
+        enter(&mut c, "big");
+        enter(&mut c, "..");
+        assert_eq!(size_of(&c, Side::Left, "big"), None);
+    }
+
+    #[test]
+    fn a_size_for_a_folder_no_longer_shown_is_dropped() {
+        let (tmp, mut c) = sized();
+        let id = c.panel(Side::Left).id();
+        enter(&mut c, "big");
+        assert!(!c.set_dir_size(id, tmp.path(), "big".as_ref(), 3));
+        assert!(!c.set_dir_size(id, &tmp.path().join("big"), "x".as_ref(), 3));
     }
 }

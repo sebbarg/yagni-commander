@@ -3,6 +3,9 @@
 //! [`mounts::places`]). Like the hotlist popup, our own view: Up/Down wrap,
 //! Enter or a click picks, Escape closes, and a letter moves to the next
 //! entry starting with it, or goes there when it is the only one.
+//!
+//! Alt-Down's folder history is the same popup over other places
+//! ([`MountsPopup::titled`]).
 
 use std::path::PathBuf;
 
@@ -19,7 +22,8 @@ use crate::theme::{Theme, popup_frame, popup_title};
 use crate::zoom::rems_from_px;
 
 pub enum MountsEvent {
-    Pick(PathBuf),
+    /// The row picked and its folder.
+    Pick(usize, PathBuf),
     Dismiss,
 }
 
@@ -27,6 +31,11 @@ pub struct MountsPopup {
     places: Vec<Place>,
     highlight: usize,
     focus: FocusHandle,
+    title: &'static str,
+    /// Starts the debug selectors: `<id>-popup`, `<id>-row-<ix>`.
+    id: &'static str,
+    /// The title's debug selector.
+    title_id: &'static str,
 }
 
 impl EventEmitter<MountsEvent> for MountsPopup {}
@@ -41,10 +50,24 @@ impl MountsPopup {
     /// The highlight starts on `highlight`, the entry holding the panel's
     /// folder.
     pub fn new(places: Vec<Place>, highlight: usize, cx: &mut Context<Self>) -> Self {
+        Self::titled(("Mounts", "mounts", "mounts-title"), places, highlight, cx)
+    }
+
+    /// The same popup with a title, the prefix of its debug selectors and
+    /// the title's.
+    pub fn titled(
+        (title, id, title_id): (&'static str, &'static str, &'static str),
+        places: Vec<Place>,
+        highlight: usize,
+        cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             places,
             highlight,
             focus: cx.focus_handle(),
+            title,
+            id,
+            title_id,
         }
     }
 
@@ -61,7 +84,7 @@ impl MountsPopup {
 
     fn pick(&mut self, row: usize, cx: &mut Context<Self>) {
         if let Some(place) = self.places.get(row) {
-            cx.emit(MountsEvent::Pick(place.path.clone()));
+            cx.emit(MountsEvent::Pick(row, place.path.clone()));
         }
     }
 
@@ -97,14 +120,15 @@ impl Render for MountsPopup {
             }),
             ..Default::default()
         };
+        let id = self.id;
         let rows = self.places.iter().enumerate().map(|(ix, place)| {
             let highlighted = ix == self.highlight;
             let first = place.label.chars().next().map_or(0, char::len_utf8);
             let label =
                 StyledText::new(place.label.clone()).with_highlights([(0..first, underline)]);
             div()
-                .id(("mounts-row", ix))
-                .debug_selector(move || format!("mounts-row-{ix}"))
+                .id((id, ix))
+                .debug_selector(move || format!("{id}-row-{ix}"))
                 // Sized like the hotlist popup's rows (gpui-component's menu items).
                 .h(rems_from_px(26.0))
                 .flex()
@@ -141,7 +165,7 @@ impl Render for MountsPopup {
             .on_action(cx.listener(|_, _: &act::Close, _, cx| cx.emit(MountsEvent::Dismiss)))
             .on_key_down(cx.listener(Self::on_key_down))
             .on_mouse_down_out(cx.listener(|_, _, _, cx| cx.emit(MountsEvent::Dismiss)))
-            .debug_selector(|| "mounts-popup".into())
+            .debug_selector(move || format!("{id}-popup"))
             .occlude()
             .min_w(rems_from_px(260.0))
             .pb(rems_from_px(4.0))
@@ -150,7 +174,7 @@ impl Render for MountsPopup {
             .map(|d| popup_frame(d, &theme))
             .text_sm()
             .text_color(colors.text)
-            .child(popup_title("Mounts", "mounts-title", &theme))
+            .child(popup_title(self.title, self.title_id, &theme))
             .children(rows)
     }
 }

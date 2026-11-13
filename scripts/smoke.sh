@@ -350,8 +350,8 @@ printf o >"$left/cmp1/only"
 keys ctrl+r
 typed cmp1
 keys Escape Insert Insert
-# Compare by content is the 13th Files item.
-keys F10 Down Down Down Down Down Down Down Down Down Down Down Down Down
+# Compare by content is the 14th Files item.
+keys F10 Down Down Down Down Down Down Down Down Down Down Down Down Down Down
 shot 08d-menu-compare
 keys Return
 sleep 1
@@ -375,6 +375,50 @@ keys ctrl+c
 check "properties counted the folder" bash -c 'xclip -o -selection clipboard | grep -qx "Contains: 2 files, 1 folder"'
 check "properties added up the sizes" bash -c 'xclip -o -selection clipboard | grep -qx "Size: 8 bytes (8 B)"'
 keys Escape
+
+echo "Alt-Shift-Enter counts every folder's size into the Size column"
+keys alt+shift+Return
+sleep 1
+shot 08h1-folder-sizes
+
+echo "Shift-F5 copies a file beside itself (the name is preselected)"
+printf twin >"$left/twin.txt"
+keys ctrl+r
+typed twin
+keys Escape shift+F5
+typed twin2
+shot 08h2-copy-here
+keys Return
+check "copied as left/twin2.txt" has "$left/twin2.txt" twin
+
+echo "menu: Alt-M opens Mark (TC's selection menu)"
+keys alt+m
+shot 08h3a-menu-mark
+keys Escape
+
+echo "Num+ selects by a mask, Num* inverts twice, F8 trashes the selection"
+keys KP_Add
+typed "twin*"
+shot 08h3-select-group
+keys Return KP_Multiply KP_Multiply
+shot 08h4-selected
+keys F8 Return
+check "twin.txt trashed" test ! -e "$left/twin.txt"
+check "twin2.txt trashed" test ! -e "$left/twin2.txt"
+check "propdir kept" test -d "$left/propdir"
+
+echo "Alt-Left goes back, Alt-Right forward, Alt-Down lists the folder history"
+typed propdir
+keys Escape Return
+check "into propdir" title_is "$left/propdir"
+keys alt+Left
+check "Alt-Left went back" title_is "$left"
+keys alt+Right
+check "Alt-Right went forward" title_is "$left/propdir"
+keys alt+Down
+shot 08h5-folder-history
+keys Down Return
+check "a pick in the history went there" title_is "$left"
 
 echo "Alt-F7 finds files: by name with an exclude, feed to listbox, F5; by content, go to file"
 mkdir -p "$left/findme/deep" "$left/findme/target"
@@ -445,7 +489,7 @@ shot 07a2-menu-alt-f
 keys Escape
 
 echo "menu: F10, Show > Hidden files"
-keys F10 Right Right
+keys F10 Right Right Right
 shot 07b-menu-show
 keys Down Return
 shot 07c-hidden-from-menu
@@ -833,7 +877,7 @@ shot 12a-zoom-main
 keys F7
 shot 12b-zoom-prompt
 keys Escape
-keys F10 Right Right
+keys F10 Right Right Right
 shot 12c-zoom-menu
 keys Escape
 typed big

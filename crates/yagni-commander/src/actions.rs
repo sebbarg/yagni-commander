@@ -40,6 +40,25 @@ actions!(
         ToggleSelection,
         ToggleAndDown,
         SelectAll,
+        /// Num+ / Num-: select or deselect by a mask.
+        SelectGroup,
+        DeselectGroup,
+        /// Mark menu only; no key by default.
+        DeselectAll,
+        /// Num*: invert the files' selection.
+        InvertSelection,
+        /// Alt-Num+ / Alt-Num-: the cursor file's extension.
+        SelectSameExtension,
+        DeselectSameExtension,
+        /// Alt-Left / Alt-Right: back and forward in the tab's history.
+        Back,
+        Forward,
+        /// Alt-Down: the tab's folder history.
+        FolderHistory,
+        /// Alt-Shift-Enter: count the size of every folder in the panel.
+        CountFolderSizes,
+        /// Shift-F5: copy the cursor entry in its own folder.
+        CopyHere,
         Rename,
         Edit,
         EditNewFile,
@@ -275,7 +294,7 @@ pub fn native_menu_key(key: &str) -> bool {
 }
 
 /// macOS: menu actions whose primary key the native menu can't show (Enter,
-/// Tab; see [`native_menu_key`]). The menu shows an action's first binding,
+/// Tab, the keypad's keys; see [`native_menu_key`]). The menu shows an action's first binding,
 /// and nothing for a key sequence, so a two-key binding in a context that
 /// never exists, registered before the real ones, leaves these items
 /// without a key rather than with a wrong letter. Kept complete by
@@ -285,6 +304,12 @@ pub fn hide_native_menu_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter enter", OpenWith, never),
         KeyBinding::new("enter enter", ShowProperties, never),
+        KeyBinding::new("enter enter", CountFolderSizes, never),
+        KeyBinding::new("enter enter", SelectGroup, never),
+        KeyBinding::new("enter enter", DeselectGroup, never),
+        KeyBinding::new("enter enter", InvertSelection, never),
+        KeyBinding::new("enter enter", SelectSameExtension, never),
+        KeyBinding::new("enter enter", DeselectSameExtension, never),
         KeyBinding::new("tab tab", NextTab, never),
         KeyBinding::new("tab tab", PrevTab, never),
     ]);
@@ -341,6 +366,16 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("space", ToggleSelection, context),
         KeyBinding::new("insert", ToggleAndDown, context),
         KeyBinding::new("ctrl-a", SelectAll, context),
+        // The keypad's keys, like TC.
+        KeyBinding::new("add", SelectGroup, context),
+        KeyBinding::new("subtract", DeselectGroup, context),
+        KeyBinding::new("multiply", InvertSelection, context),
+        KeyBinding::new("alt-add", SelectSameExtension, context),
+        KeyBinding::new("alt-subtract", DeselectSameExtension, context),
+        KeyBinding::new("alt-left", Back, context),
+        KeyBinding::new("alt-right", Forward, context),
+        KeyBinding::new("alt-down", FolderHistory, context),
+        KeyBinding::new("alt-shift-enter", CountFolderSizes, context),
         KeyBinding::new("alt-enter", ShowProperties, context),
         KeyBinding::new("shift-enter", OpenWith, context),
         KeyBinding::new("alt-f7", FindFiles, context),
@@ -373,6 +408,7 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("f4", Edit, context),
         KeyBinding::new("shift-f4", EditNewFile, context),
         KeyBinding::new("f5", Copy, context),
+        KeyBinding::new("shift-f5", CopyHere, context),
         KeyBinding::new("f6", Move, context),
         KeyBinding::new("f7", MakeDirectory, context),
         KeyBinding::new("f8", Trash, context),

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,7 +10,9 @@ use crate::archive::ArchiveIndex;
 use crate::entry::{Entry, EntryKind, is_hidden_name, read_entries};
 use crate::file_ops::Format;
 use crate::find::Results;
+use crate::history::History;
 use crate::listing::{ArchiveRead, Listing};
+use crate::select::SelectMask;
 use crate::sort::{Sort, SortKey, sort_entries};
 
 /// One side of the commander: a directory listing with a cursor.
@@ -59,6 +61,11 @@ pub struct Panel {
     /// A read that failed while this tab was in the background: shown when
     /// it comes to the front.
     pub(crate) error: Option<String>,
+    /// The folders this tab showed (Alt-Left/Right/Down).
+    history: History,
+    /// Folder sizes counted for this listing (Alt-Shift-Enter), by name.
+    /// They survive quiet re-reads only.
+    dir_sizes: HashMap<OsString, u64>,
 }
 
 /// A panel's identity for the session. A Ctrl-T copy gets a new one.
@@ -72,8 +79,8 @@ impl PanelId {
     }
 }
 
-/// Counts and sizes for the panel footer. Directory sizes are unknown, so
-/// byte totals cover files only.
+/// Counts and sizes for the panel footer. Byte totals cover files, and the
+/// folders whose size was counted (Alt-Shift-Enter).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Summary {
     pub dirs: usize,
@@ -107,6 +114,9 @@ pub(crate) struct Navigation {
     pub results: Option<Arc<Results>>,
     /// A missing `target` falls back to its nearest existing parent.
     pub up_if_missing: bool,
+    /// The place in the tab's history this goes to (Alt-Left/Right/Down);
+    /// `None` is a new place.
+    pub travel: Option<usize>,
 }
 
 /// What Enter on the cursor entry leads to.
@@ -128,6 +138,8 @@ pub struct Loading {
     pub(crate) id: u64,
     pub path: PathBuf,
     pub(crate) select: Option<OsString>,
+    /// See [`Navigation::travel`].
+    pub(crate) travel: Option<usize>,
     pub progress: Arc<AtomicUsize>,
     /// Set once the load took long enough to show the indicator.
     pub visible: bool,
@@ -201,11 +213,14 @@ impl Panel {
             results: None,
             modified: None,
             error: None,
+            history: History::default(),
+            dir_sizes: HashMap::new(),
         }
     }
 
-    /// Ctrl-T: a copy of this panel's folder, listing, cursor and sort,
-    /// without its selection or any read in progress.
+    /// Ctrl-T: a copy of this panel's folder, listing, cursor, sort,
+    /// history and folder sizes, without its selection or any read in
+    /// progress.
     pub(crate) fn duplicate(&self) -> Self {
         Self {
             id: PanelId::next(),
@@ -225,6 +240,8 @@ impl Panel {
             results: self.results.clone(),
             modified: self.modified,
             error: None,
+            history: self.history.clone(),
+            dir_sizes: self.dir_sizes.clone(),
         }
     }
 
@@ -307,6 +324,7 @@ impl Panel {
                 archive: self.archive_read(true),
                 results: None,
                 up_if_missing: false,
+                travel: None,
             }),
             // No archives in archives, nothing runs from one or a remote
             // folder.
@@ -320,6 +338,7 @@ impl Panel {
                     archive: Some(ArchiveRead { file, known: None }),
                     results: None,
                     up_if_missing: false,
+                    travel: None,
                 })
             }
             EntryKind::File => Enter::File(self.path.join(&entry.name)),
@@ -337,6 +356,7 @@ impl Panel {
                 results: None,
                 // The folder searched may be gone by now.
                 up_if_missing: true,
+                travel: None,
             });
         }
         // At an archive's root, up leaves the archive.
@@ -349,6 +369,7 @@ impl Panel {
                 archive: None,
                 results: None,
                 up_if_missing: false,
+                travel: None,
             });
         }
         if self.is_remote() {
@@ -358,6 +379,7 @@ impl Panel {
                 archive: None,
                 results: None,
                 up_if_missing: false,
+                travel: None,
             });
         }
         let parent = self.path.parent()?.to_path_buf();
@@ -367,6 +389,7 @@ impl Panel {
             archive: self.archive_read(true),
             results: None,
             up_if_missing: false,
+            travel: None,
         })
     }
 
@@ -381,6 +404,7 @@ impl Panel {
             // Search results are re-checked, never searched again.
             results: self.results.clone(),
             up_if_missing: false,
+            travel: None,
         }
     }
 
@@ -426,7 +450,7 @@ impl Panel {
     /// Shows `nav` inside an archive whose index is at hand: no read.
     pub(crate) fn browse(&mut self, index: Arc<ArchiveIndex>, nav: &Navigation) {
         let listing = crate::archive::listing(index, &nav.target);
-        self.apply(listing, nav.select.as_deref());
+        self.apply_with(listing, nav.select.as_deref(), nav.travel, false);
     }
 
     /// Shows search results: no read.
@@ -436,6 +460,19 @@ impl Panel {
 
     /// Shows a finished read, with the cursor on `select` if it is there.
     pub(crate) fn apply(&mut self, listing: Listing, select: Option<&OsStr>) {
+        self.apply_with(listing, select, None, false);
+    }
+
+    /// [`Panel::apply`] for a read that went to `travel` in the history
+    /// (see [`Navigation::travel`]); with `keep_sizes` (a quiet re-read)
+    /// the counted folder sizes stay.
+    pub(crate) fn apply_with(
+        &mut self,
+        listing: Listing,
+        select: Option<&OsStr>,
+        travel: Option<usize>,
+        keep_sizes: bool,
+    ) {
         let Listing {
             path: target,
             entries,
@@ -444,12 +481,33 @@ impl Panel {
             modified,
         } = listing;
         // The search decided what to show: nothing is hidden there.
-        let (mut entries, hidden) = split_hidden(entries, self.show_hidden || results.is_some());
-        sort_entries(&mut entries, self.sort);
+        let (mut entries, mut hidden) =
+            split_hidden(entries, self.show_hidden || results.is_some());
         // Into or out of search results is a new listing, even at the
         // same path: cursor at the top, nothing selected.
         let same_dir =
             target == self.path && self.loaded && results.is_some() == self.results.is_some();
+        if !(same_dir && keep_sizes) {
+            self.dir_sizes.clear();
+        }
+        for entry in entries.iter_mut().chain(&mut hidden) {
+            if entry.kind == EntryKind::Dir
+                && let Some(&bytes) = self.dir_sizes.get(&entry.name)
+            {
+                entry.size = Some(bytes);
+            }
+        }
+        sort_entries(&mut entries, self.sort);
+        // Search results are no place of the history; leaving them is
+        // arriving at their root.
+        if results.is_none() {
+            if self.loaded && self.results.is_none() && target != self.path {
+                self.history
+                    .leave(self.cursor_entry().map(|e| e.name.clone()));
+            }
+            self.history
+                .arrive(&target, archive.as_ref().map(|a| a.file()), travel);
+        }
         let cursor = select
             .and_then(|name| entries.iter().position(|e| e.name == name))
             .unwrap_or(if same_dir {
@@ -592,9 +650,14 @@ impl Panel {
             let bytes = entry.size.unwrap_or(0);
             match entry.kind {
                 EntryKind::Parent => {}
+                // A folder's bytes once counted (Alt-Shift-Enter).
                 EntryKind::Dir => {
                     summary.dirs += 1;
-                    summary.selected_dirs += usize::from(selected);
+                    summary.bytes += bytes;
+                    if selected {
+                        summary.selected_dirs += 1;
+                        summary.selected_bytes += bytes;
+                    }
                 }
                 EntryKind::File => {
                     summary.files += 1;
@@ -659,6 +722,98 @@ impl Panel {
 
     pub(crate) fn clear_selection(&mut self) {
         self.selection.clear();
+    }
+
+    /// Num+ / Num-: selects (or with `select` false, deselects) every
+    /// entry `mask` matches, by its file name. The rest stay as they are.
+    pub(crate) fn select_matching(&mut self, mask: &SelectMask, select: bool) {
+        for entry in &self.entries {
+            if entry.kind == EntryKind::Parent
+                || !mask.matches(file_name(&entry.label), entry.kind == EntryKind::Dir)
+            {
+                continue;
+            }
+            if select {
+                self.selection.insert(entry.name.clone());
+            } else {
+                self.selection.remove(&entry.name);
+            }
+        }
+    }
+
+    /// Num*: inverts the selection of the files; folders keep theirs, like
+    /// TC.
+    pub(crate) fn invert_selection(&mut self) {
+        for entry in &self.entries {
+            if entry.kind == EntryKind::File && !self.selection.remove(&entry.name) {
+                self.selection.insert(entry.name.clone());
+            }
+        }
+    }
+
+    /// Alt-Num+ / Alt-Num-: selects (or deselects) every file with the
+    /// cursor file's extension; on a file without one, every file without
+    /// one. Nothing on a folder or "..".
+    pub(crate) fn select_same_extension(&mut self, select: bool) {
+        let Some(cursor) = self.cursor_entry().filter(|e| e.kind == EntryKind::File) else {
+            return;
+        };
+        let mask = crate::select::extension_mask(file_name(&cursor.label));
+        let matching: Vec<OsString> = self
+            .entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::File)
+            .filter(|e| {
+                let name = file_name(&e.label);
+                match &mask {
+                    Some(mask) => SelectMask::parse(mask).is_some_and(|m| m.matches(name, false)),
+                    None => crate::select::has_no_extension(name),
+                }
+            })
+            .map(|e| e.name.clone())
+            .collect();
+        for name in matching {
+            if select {
+                self.selection.insert(name);
+            } else {
+                self.selection.remove(&name);
+            }
+        }
+    }
+
+    /// The folders this tab showed.
+    pub fn history(&self) -> &History {
+        &self.history
+    }
+
+    /// Alt-Shift-Enter counted folder `name`: its size shows in the Size
+    /// column, sorts and adds to the footer until the folder is left or
+    /// re-read (quiet re-reads keep it). Whether `name` is a folder here.
+    pub(crate) fn set_dir_size(&mut self, name: &OsStr, bytes: u64) -> bool {
+        let Some(entry) = self
+            .entries
+            .iter_mut()
+            .chain(&mut self.hidden)
+            .find(|e| e.kind == EntryKind::Dir && e.name == name)
+        else {
+            return false;
+        };
+        entry.size = Some(bytes);
+        self.dir_sizes.insert(name.to_os_string(), bytes);
+        if self.sort.key == SortKey::Size {
+            self.resort(self.sort);
+        }
+        true
+    }
+
+    /// The folders of the listing in display order, links to folders left
+    /// out (Alt-Shift-Enter never follows a link).
+    pub fn dir_names(&self) -> Vec<OsString> {
+        self.entries
+            .iter()
+            .filter(|e| e.kind == EntryKind::Dir && !e.is_symlink)
+            .map(|e| e.name.clone())
+            .collect()
     }
 
     /// First entry (in display order, never "..") whose name starts with
@@ -740,6 +895,7 @@ fn split_hidden(entries: Vec<Entry>, show_hidden: bool) -> (Vec<Entry>, Vec<Entr
 impl Panel {
     /// Reads `nav` now and shows it, like a finished load.
     fn follow(&mut self, nav: Navigation) -> io::Result<()> {
+        let travel = nav.travel;
         let listing = crate::listing::read_listing(&crate::listing::LoadRequest {
             id: 0,
             path: nav.target.clone(),
@@ -751,7 +907,7 @@ impl Panel {
             up_if_missing: false,
             quiet: false,
         })?;
-        self.apply(listing, nav.select.as_deref());
+        self.apply_with(listing, nav.select.as_deref(), travel, false);
         Ok(())
     }
 
@@ -784,6 +940,7 @@ impl Panel {
             archive: None,
             results: None,
             up_if_missing: false,
+            travel: None,
         })
     }
 }
@@ -1416,6 +1573,7 @@ mod tests {
             id: 3,
             path: tmp.path().join("beta"),
             select: None,
+            travel: None,
             progress,
             visible: false,
             _cancel: Cancel::default(),

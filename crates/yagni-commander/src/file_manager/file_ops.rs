@@ -238,6 +238,62 @@ impl FileManager {
         );
     }
 
+    /// Shift-F5: copy the entry under the cursor (never the selection) in
+    /// its own folder, under the name typed (the same prompt as F5's, on
+    /// that folder). The cursor goes to the copy.
+    pub(super) fn copy_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active_loading(cx) || self.refuse_in_archive(window, cx) {
+            return;
+        }
+        self.end_search(cx);
+        let (source, is_dir, home) = {
+            let commander = self.commander.read(cx);
+            let panel = commander.panel(commander.active());
+            let Some(entry) = panel.cursor_entry().filter(|e| e.kind != EntryKind::Parent) else {
+                return;
+            };
+            (
+                panel.path().join(&entry.name),
+                entry.kind == EntryKind::Dir,
+                commander.home().to_path_buf(),
+            )
+        };
+        if self.refuse_second_job(window, cx) {
+            return;
+        }
+        // A search result's folder is its own, not the results' root.
+        let Some(dir) = source.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let title = format!("Copy {} to", describe(std::slice::from_ref(&source)));
+        let (initial, selection) = single_target(&dir, &source, is_dir);
+        self.prompt_name(
+            Prompt {
+                title: &title,
+                error_title: "Cannot copy",
+                initial: &initial,
+                selection,
+                width: COPY_PROMPT_WIDTH,
+            },
+            Rc::new(move |this, typed, window, cx| {
+                let sources = vec![source.clone()];
+                let to = destination(&dir, &home, typed, &sources)?;
+                let name = match &to {
+                    Destination::As(path) => path.file_name(),
+                    Destination::Into(_) => source.file_name(),
+                }
+                .map(std::ffi::OsStr::to_os_string);
+                this.start_job(Kind::Copy, Operation::Copy { sources, to }, window, cx)?;
+                if let Some(running) = &mut this.job {
+                    running.select = name;
+                }
+                Ok(())
+            }),
+            window,
+            cx,
+        );
+    }
+
     /// Alt-F5: ask for the zip's path (in the other panel by default), then
     /// pack the selection or the entry under the cursor into it. An
     /// existing zip is replaced only after a confirm box.
@@ -1059,7 +1115,8 @@ impl FileManager {
             return;
         }
         let complete = report.failures.is_empty() && !report.cancelled;
-        if matches!(running.kind, Kind::Copy | Kind::Pack) && complete {
+        // Shift-F5 (a copy with a name to select) ignored the selection.
+        if matches!(running.kind, Kind::Copy | Kind::Pack) && complete && running.select.is_none() {
             self.commander.update(cx, |commander, _| {
                 commander.clear_selection(running.source, &running.source_dir)
             });

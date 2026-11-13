@@ -98,7 +98,7 @@ fn tokens(text: &str, case_sensitive: bool) -> impl Iterator<Item = String> + '_
 }
 
 /// `*` (any run) and `?` (one character), backtracking to the last `*`.
-fn wildcard(pattern: &[char], name: &[char]) -> bool {
+pub(crate) fn wildcard(pattern: &[char], name: &[char]) -> bool {
     let (mut p, mut n) = (0, 0);
     let mut star: Option<(usize, usize)> = None;
     while n < name.len() {

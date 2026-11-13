@@ -3,17 +3,23 @@
 //! and, later, the right-click menu, both through [`popup`]. Items dispatch
 //! the same actions as the keys, so menus show the keys next to them.
 
+use gpui_kit::component::ActiveTheme;
 use gpui_kit::component::menu::PopupMenu;
-use gpui_kit::{Action, App, Entity, FocusHandle, Menu, MenuItem, Window};
+use gpui_kit::{
+    Action, App, Entity, FocusHandle, InteractiveElement, Menu, MenuItem, ParentElement, Styled,
+    Window, div, relative,
+};
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, CheckForUpdates, CloseTab, CompareContents, Connect, Copy, CopyName, CopyParentPath,
-    CopyPath, Delete, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, GoToConfig, GoToLog,
-    MakeDirectory, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenSettings, OpenTerminal,
-    OpenWith, Pack, PrevTab, Quit, Reload, Rename, SelectAll, ShowProperties, SortByModified,
-    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
-    ToggleHidden, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    About, Back, CheckForUpdates, CloseTab, CompareContents, Connect, Copy, CopyHere, CopyName,
+    CopyParentPath, CopyPath, CountFolderSizes, Delete, DeselectAll, DeselectGroup,
+    DeselectSameExtension, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, FolderHistory,
+    Forward, GoToConfig, GoToLog, InvertSelection, MakeDirectory, MountsLeft, MountsRight, Move,
+    NewTab, NextTab, OpenSettings, OpenTerminal, OpenWith, Pack, PrevTab, Quit, Reload, Rename,
+    SelectAll, SelectGroup, SelectSameExtension, ShowProperties, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
+    UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -22,6 +28,9 @@ pub enum MenuEntry {
         label: &'static str,
         action: Box<dyn Action>,
         checked: Option<bool>,
+        /// The key as the in-window menu shows it, in place of gpui's name
+        /// for it (the keypad's `add` would read "Add"; TC writes "Num +").
+        keys: Option<&'static str>,
     },
     Separator,
 }
@@ -33,10 +42,12 @@ impl Clone for MenuEntry {
                 label,
                 action,
                 checked,
+                keys,
             } => Self::Item {
                 label,
                 action: action.boxed_clone(),
                 checked: *checked,
+                keys: *keys,
             },
             Self::Separator => Self::Separator,
         }
@@ -83,6 +94,17 @@ fn item(label: &'static str, action: impl Action) -> MenuEntry {
         label,
         action: Box::new(action),
         checked: None,
+        keys: None,
+    }
+}
+
+/// An item on a keypad key, shown as TC writes it (`Num +`).
+fn keypad(label: &'static str, action: impl Action, keys: &'static str) -> MenuEntry {
+    MenuEntry::Item {
+        label,
+        action: Box::new(action),
+        checked: None,
+        keys: Some(keys),
     }
 }
 
@@ -91,12 +113,13 @@ fn check(label: &'static str, action: impl Action, checked: bool) -> MenuEntry {
         label,
         action: Box::new(action),
         checked: Some(checked),
+        keys: None,
     }
 }
 
 /// The menu bar's titles on Linux, in bar order. macOS adds the app menu
 /// in front and has no Alt-letter keys.
-pub const TITLES: [&str; 4] = ["Files", "Commands", "Show", "Help"];
+pub const TITLES: [&str; 5] = ["Files", "Mark", "Commands", "Show", "Help"];
 
 /// The letter that opens a menu with Alt, underlined in its title: the
 /// first, lowercase.
@@ -125,6 +148,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         item("Open with...", OpenWith),
         item("New file", EditNewFile),
         item("Copy", Copy),
+        item("Copy here...", CopyHere),
         item("Move", Move),
         item("New folder", MakeDirectory),
         item("Rename", Rename),
@@ -134,7 +158,6 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         item("Extract...", Extract),
         item("Compare by content", CompareContents),
         MenuEntry::Separator,
-        item("Select all", SelectAll),
         item("Copy path", CopyPath),
         item("Copy name", CopyName),
         item("Copy parent path", CopyParentPath),
@@ -190,17 +213,38 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
             title: TITLES[0],
             entries: files,
         },
+        // TC's Mark menu.
         MenuDef {
             title: TITLES[1],
+            entries: vec![
+                item("Select all", SelectAll),
+                item("Deselect all", DeselectAll),
+                keypad("Select group...", SelectGroup, "Num +"),
+                keypad("Deselect group...", DeselectGroup, "Num -"),
+                keypad("Invert selection", InvertSelection, "Num *"),
+                keypad("Select same extension", SelectSameExtension, "Alt+Num +"),
+                keypad(
+                    "Deselect same extension",
+                    DeselectSameExtension,
+                    "Alt+Num -",
+                ),
+            ],
+        },
+        MenuDef {
+            title: TITLES[2],
             entries: vec![
                 item("Same folder in other panel", SyncOtherPanel),
                 item("Swap panels", SwapPanels),
                 item("Reload", Reload),
                 item("Directory hotlist", DirectoryHotlist),
+                item("Folder history", FolderHistory),
+                item("Back", Back),
+                item("Forward", Forward),
                 item("Connect...", Connect),
                 item("Mounts left", MountsLeft),
                 item("Mounts right", MountsRight),
                 item("Find files...", FindFiles),
+                item("Count folder sizes", CountFolderSizes),
                 item("Open terminal here", OpenTerminal),
                 item("User commands", UserCommands),
                 MenuEntry::Separator,
@@ -211,7 +255,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
             ],
         },
         MenuDef {
-            title: TITLES[2],
+            title: TITLES[3],
             entries: show,
         },
     ];
@@ -229,7 +273,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         };
         defs.insert(0, app);
         defs.push(MenuDef {
-            title: TITLES[3],
+            title: TITLES[4],
             entries: go_to_items().into(),
         });
     } else {
@@ -240,7 +284,7 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         ];
         help.extend(go_to_items());
         defs.push(MenuDef {
-            title: TITLES[3],
+            title: TITLES[4],
             entries: help,
         });
     }
@@ -256,6 +300,7 @@ pub fn to_gpui(defs: &[MenuDef]) -> Vec<Menu> {
                     label,
                     action,
                     checked,
+                    ..
                 } => MenuItem::Action {
                     name: (*label).into(),
                     action: action.boxed_clone(),
@@ -282,15 +327,42 @@ pub fn popup(
     PopupMenu::build(window, cx, move |mut menu, _, _| {
         for entry in entries {
             menu = match entry {
+                // gpui-component draws no key for an element item: ours,
+                // in its key's look (muted, extra small).
                 MenuEntry::Item {
                     label,
                     action,
                     checked: None,
+                    keys: Some(keys),
+                } => menu.menu_element(action, move |_, cx| {
+                    div()
+                        .w_full()
+                        .flex()
+                        .gap_3()
+                        .items_center()
+                        .justify_between()
+                        .child(label)
+                        .child(
+                            div()
+                                .debug_selector(move || format!("menu-key-{keys}"))
+                                .flex_shrink_0()
+                                .text_xs()
+                                .line_height(relative(1.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(keys),
+                        )
+                }),
+                MenuEntry::Item {
+                    label,
+                    action,
+                    checked: None,
+                    ..
                 } => menu.menu(label, action),
                 MenuEntry::Item {
                     label,
                     action,
                     checked: Some(on),
+                    ..
                 } => menu.menu_with_check(label, on, action),
                 MenuEntry::Separator => menu.separator(),
             };
@@ -332,7 +404,7 @@ mod tests {
     fn linux_menus_are_files_commands_show_help() {
         let defs = menus(STATE, false);
         let titles: Vec<_> = defs.iter().map(|d| d.title).collect();
-        assert_eq!(titles, ["Files", "Commands", "Show", "Help"]);
+        assert_eq!(titles, ["Files", "Mark", "Commands", "Show", "Help"]);
         assert_eq!(
             labels(&defs[0]),
             [
@@ -341,6 +413,7 @@ mod tests {
                 "Open with...",
                 "New file",
                 "Copy",
+                "Copy here...",
                 "Move",
                 "New folder",
                 "Rename",
@@ -350,7 +423,6 @@ mod tests {
                 "Extract...",
                 "Compare by content",
                 "-",
-                "Select all",
                 "Copy path",
                 "Copy name",
                 "Copy parent path",
@@ -364,14 +436,30 @@ mod tests {
         assert_eq!(
             labels(&defs[1]),
             [
+                "Select all",
+                "Deselect all",
+                "Select group...",
+                "Deselect group...",
+                "Invert selection",
+                "Select same extension",
+                "Deselect same extension"
+            ]
+        );
+        assert_eq!(
+            labels(&defs[2]),
+            [
                 "Same folder in other panel",
                 "Swap panels",
                 "Reload",
                 "Directory hotlist",
+                "Folder history",
+                "Back",
+                "Forward",
                 "Connect...",
                 "Mounts left",
                 "Mounts right",
                 "Find files...",
+                "Count folder sizes",
                 "Open terminal here",
                 "User commands",
                 "-",
@@ -382,7 +470,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            labels(&defs[2]),
+            labels(&defs[3]),
             [
                 "Hidden files",
                 "-",
@@ -398,7 +486,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            labels(&defs[3]),
+            labels(&defs[4]),
             [
                 "About yagni-commander",
                 "Check for updates...",
@@ -414,7 +502,7 @@ mod tests {
         let titles: Vec<_> = menus(STATE, false).iter().map(|d| d.title).collect();
         assert_eq!(titles, TITLES);
         let mut letters: Vec<_> = TITLES.iter().map(|t| letter(t)).collect();
-        assert_eq!(letters, ['f', 'c', 's', 'h']);
+        assert_eq!(letters, ['f', 'm', 'c', 's', 'h']);
         letters.sort();
         letters.dedup();
         assert_eq!(letters.len(), TITLES.len());
@@ -426,10 +514,17 @@ mod tests {
         let titles: Vec<_> = defs.iter().map(|d| d.title).collect();
         assert_eq!(
             titles,
-            ["yagni-commander", "Files", "Commands", "Show", "Help"]
+            [
+                "yagni-commander",
+                "Files",
+                "Mark",
+                "Commands",
+                "Show",
+                "Help"
+            ]
         );
         assert_eq!(
-            labels(&defs[4]),
+            labels(&defs[5]),
             ["Go to config file", "Go to operation log"]
         );
         assert_eq!(
@@ -491,15 +586,15 @@ mod tests {
             ..STATE
         };
         let gpui = to_gpui(&menus(state, false));
-        assert_eq!(gpui[2].name.as_ref(), "Show");
-        match &gpui[2].items[0] {
+        assert_eq!(gpui[3].name.as_ref(), "Show");
+        match &gpui[3].items[0] {
             gpui_kit::MenuItem::Action { name, checked, .. } => {
                 assert_eq!(name.as_ref(), "Hidden files");
                 assert!(*checked);
             }
             _ => panic!("expected an action"),
         }
-        assert!(matches!(gpui[2].items[1], gpui_kit::MenuItem::Separator));
+        assert!(matches!(gpui[3].items[1], gpui_kit::MenuItem::Separator));
     }
 
     #[test]
@@ -510,7 +605,7 @@ mod tests {
         };
         let defs = menus(state, false);
         assert_eq!(
-            labels(&defs[2]),
+            labels(&defs[3]),
             [
                 "Hidden files",
                 "-",
