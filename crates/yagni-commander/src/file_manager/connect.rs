@@ -3,12 +3,12 @@
 use std::rc::Rc;
 
 use gpui_kit::component::WindowExt;
-use gpui_kit::{App, AppContext, Context, Focusable, ParentElement, WeakEntity, Window};
+use gpui_kit::{App, AppContext, Context, Focusable, ParentElement, WeakEntity, Window, div};
 use yagni_commander_core::{launch, remote, ssh_config};
 
 use super::FileManager;
 use super::commands::{configured_editor, focus_when_open, show_error, themed_dialog};
-use crate::button_row::{ButtonRow, OnPress};
+use crate::button_row::{ButtonRow, OnPress, dialog_keys};
 use crate::connect_dialog::ConnectDialog;
 
 impl FileManager {
@@ -103,7 +103,7 @@ impl FileManager {
         });
         let buttons = ButtonRow::build(
             [
-                ("Edit ~/.ssh/config", edit_button),
+                ("&Edit ~/.ssh/config", edit_button),
                 ("Cancel", cancel_button),
                 ("Connect", connect_button),
             ],
@@ -118,7 +118,8 @@ impl FileManager {
                 .title("Connect")
                 .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
-                .child(view.clone())
+                // Alt-E from the field and the list too.
+                .child(dialog_keys(div().child(view.clone()), &buttons, None))
                 .footer(buttons.clone())
                 // Enter anywhere in the dialog, a double click on a row.
                 .on_ok(move |_, window, cx| connect(window, cx))

@@ -35,7 +35,7 @@ use super::commands::{
     Prompt, dialog_password_field, focus_when_open, show_error, show_message, show_message_box,
     stem_range,
 };
-use crate::button_row::{ButtonRow, OnPress};
+use crate::button_row::{ButtonRow, OnLetter, OnPress, dialog_keys, marked_label};
 use crate::theme::Theme;
 
 /// How often a running job's events are read.
@@ -844,9 +844,9 @@ impl FileManager {
         let buttons = ButtonRow::build(
             [
                 button("Overwrite", Answer::Overwrite),
-                button("Overwrite all", Answer::OverwriteAll),
-                button("Skip", Answer::Skip),
-                button("Skip all", Answer::SkipAll),
+                button("Overwrite &all", Answer::OverwriteAll),
+                button("&Skip", Answer::Skip),
+                button("S&kip all", Answer::SkipAll),
                 button("Cancel", Answer::Cancel),
             ],
             0,
@@ -911,8 +911,8 @@ impl FileManager {
         let buttons = ButtonRow::build(
             [
                 button("Follow", LinkChoice::Follow),
-                button("Store as link", LinkChoice::Store),
-                button("Leave out", LinkChoice::LeaveOut),
+                button("&Store as link", LinkChoice::Store),
+                button("&Leave out", LinkChoice::LeaveOut),
                 button("Cancel", LinkChoice::Cancel),
             ],
             0,
@@ -923,6 +923,18 @@ impl FileManager {
             let secondary = Theme::get(cx).colors.text_secondary;
             let this_cancel = this.clone();
             let checked = for_all.get();
+            // Alt-R: the box.
+            let toggle: OnLetter = Rc::new({
+                let for_all = for_all.clone();
+                move |letter, window, _| {
+                    if letter != 'r' {
+                        return false;
+                    }
+                    for_all.set(!for_all.get());
+                    window.refresh();
+                    true
+                }
+            });
             let for_all = for_all.clone();
             themed_dialog(dialog, cx)
                 .title("Symbolic link")
@@ -941,12 +953,13 @@ impl FileManager {
                         .child(place.clone()),
                 )
                 .child(
-                    div()
+                    dialog_keys(div(), &buttons, Some(toggle.clone()))
                         .debug_selector(|| "link-all".into())
                         .pt(crate::zoom::rems_from_px(8.0))
                         .child(
                             Checkbox::new("link-all")
-                                .label("Same for the remaining links")
+                                .accessibility_label("Same for the remaining links")
+                                .child(marked_label("Same for the &remaining links"))
                                 .checked(checked)
                                 .on_click(move |on, window, _| {
                                     for_all.set(*on);
@@ -954,7 +967,11 @@ impl FileManager {
                                 }),
                         ),
                 )
-                .footer(buttons.clone())
+                .footer(dialog_keys(
+                    div().child(buttons.clone()),
+                    &buttons,
+                    Some(toggle),
+                ))
                 .on_cancel(move |_, _, cx| {
                     let answer = LinkAnswer {
                         choice: LinkChoice::Cancel,
@@ -1007,7 +1024,7 @@ impl FileManager {
         let buttons = ButtonRow::build(
             [
                 ("OK", ok),
-                ("Skip archive", button(PasswordAnswer::Skip)),
+                ("&Skip archive", button(PasswordAnswer::Skip)),
                 ("Cancel", button(PasswordAnswer::Cancel)),
             ],
             0,
@@ -1039,7 +1056,12 @@ impl FileManager {
                         .text_size(crate::zoom::rems_from_px(13.0))
                         .child("Wrong password.")
                 }))
-                .child(dialog_password_field(&input))
+                // The focus is in the field: Alt-S from there.
+                .child(dialog_keys(
+                    div().child(dialog_password_field(&input)),
+                    &buttons,
+                    None,
+                ))
                 .footer(buttons.clone())
                 // Enter in the field.
                 .on_ok(move |_, _, cx| {

@@ -90,7 +90,7 @@ impl Dropdown {
         self.open
     }
 
-    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.disabled || self.items.is_empty() {
             return;
         }

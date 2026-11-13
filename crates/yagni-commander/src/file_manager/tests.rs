@@ -859,6 +859,21 @@ fn conflict_buttons_follow_arrows_tab_space_and_enter(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn conflict_alt_letters_press_their_buttons(cx: &mut TestAppContext) {
+    let (tmp, _commander, cx) = open_with_target(cx);
+    let target = tmp.path().join("a/f");
+    for (keys, expected) in [("alt-s", "old"), ("alt-a", "new")] {
+        conflict(&tmp, cx);
+        cx.simulate_keystrokes(keys);
+        wait_until(cx, |cx| !job_running(cx));
+        cx.run_until_parked();
+        assert!(!dialog_open(cx), "{keys}");
+        let got = std::fs::read_to_string(&target).unwrap();
+        assert_eq!(got, expected, "{keys}");
+    }
+}
+
+#[gpui_kit::test]
 fn f8_left_then_enter_cancels(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     cx.simulate_keystrokes("end f8");
@@ -3172,16 +3187,69 @@ fn typing_an_editor_saves_it_on_close(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn escape_also_keeps_what_was_typed(cx: &mut TestAppContext) {
+fn escape_drops_what_was_typed(cx: &mut TestAppContext) {
     let (_tmp, _commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
-    use_config(cfg.path(), "", cx);
+    let path = use_config(cfg.path(), "", cx);
     activate(cx);
     open_settings_at_editor(cx);
     cx.simulate_input("zed");
     cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
     assert!(!settings_open(cx));
+    assert_eq!(config(cx).editor, None);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
+}
+
+#[gpui_kit::test]
+fn cancel_puts_back_the_file_and_the_settings(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let original = "# mine\neditor = \"vim\"  # keep this\n";
+    let path = use_config(cfg.path(), original, cx);
+    activate(cx);
+    for leave in ["button-Cancel", "escape"] {
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        // Each applies and saves at once, so it shows while choosing.
+        cx.simulate_keystrokes("alt-i alt-s alt-e");
+        cx.simulate_input("zed");
+        cx.simulate_keystrokes("tab"); // the field saves on leaving it
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("icon-left-1").is_none(), "{leave}");
+        assert!(config(cx).case_sensitive_sort, "{leave}");
+        assert_ne!(std::fs::read_to_string(&path).unwrap(), original);
+        if leave == "escape" {
+            cx.simulate_keystrokes("escape");
+        } else {
+            click(cx, leave, 1);
+        }
+        cx.run_until_parked();
+        assert!(!settings_open(cx), "{leave}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "{leave}");
+        assert!(cx.debug_bounds("icon-left-1").is_some(), "{leave}");
+        assert!(!config(cx).case_sensitive_sort, "{leave}");
+        assert_eq!(config(cx).editor.as_deref(), Some("vim"), "{leave}");
+    }
+}
+
+#[gpui_kit::test]
+fn ok_keeps_the_changes(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-s alt-e");
+    cx.simulate_input("zed");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!settings_open(cx));
+    assert!(config(cx).case_sensitive_sort);
     assert_eq!(config(cx).editor.as_deref(), Some("zed"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("editor = \"zed\""), "{text}");
 }
 
 #[gpui_kit::test]
@@ -3397,7 +3465,7 @@ fn a_save_failing_on_close_shows_its_error_after_closing(cx: &mut TestAppContext
     activate(cx);
     open_settings_at_editor(cx);
     cx.simulate_input("zed");
-    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("enter"); // OK
     cx.run_until_parked();
     assert!(!settings_open(cx));
     assert!(dialog_open(cx), "the error box shows");
@@ -3414,7 +3482,7 @@ fn closing_settings_does_not_undo_a_hand_edit(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-,");
     cx.run_until_parked();
     click(cx, "settings-sort", 1); // saves, and reads the file's other keys
-    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("enter"); // OK
     cx.run_until_parked();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("editor = \"helix\""), "{text}");
@@ -3917,6 +3985,33 @@ mod mounts {
         file_manager(cx).read_with(cx, |this, cx| {
             this.mounts.as_ref().unwrap().popup.read(cx).highlight()
         })
+    }
+
+    #[gpui_kit::test]
+    fn settings_alt_letters_toggle_switches_and_reach_the_fields(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        activate(cx);
+        cx.simulate_keystrokes("ctrl-,");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-i");
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("icon-left-1").is_none());
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "icons = false"), "{text}");
+        // Alt-E: Editor, its text selected; Alt-G from there toggles Git.
+        cx.simulate_keystrokes("alt-e");
+        cx.simulate_input("vi");
+        cx.simulate_keystrokes("alt-g");
+        cx.run_until_parked();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "git = false"), "{text}");
+        let view = file_manager(cx).read_with(cx, |this, _| this.settings.clone().unwrap());
+        assert_eq!(view.read_with(cx, |v, cx| v.editor_text(cx)), "vi");
+        cx.simulate_keystrokes("alt-t");
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |v, cx| v.theme_open(cx)));
     }
 
     #[gpui_kit::test]
@@ -4811,6 +4906,44 @@ mod hotlist {
     }
 
     #[gpui_kit::test]
+    fn alt_letters_reach_the_fields_and_the_buttons(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let file = use_hotlist(&tmp, &cfg, &[], cx);
+        configure(cx);
+        let fields = |cx: &mut VisualTestContext| {
+            file_manager(cx).read_with(cx, |this, cx| {
+                this.hotlist_dialog
+                    .as_ref()
+                    .unwrap()
+                    .read(cx)
+                    .field_texts(cx)
+            })
+        };
+        // No row picked: the fields stay closed.
+        cx.simulate_keystrokes("alt-n");
+        cx.simulate_input("lost");
+        assert_eq!(fields(cx).0, "");
+        cx.simulate_keystrokes("alt-a"); // Add current folder: [Alpha, Beta, folder]
+        assert_eq!(dialog_cursor(cx), 2);
+        cx.simulate_keystrokes("alt-u"); // Move up
+        assert_eq!(dialog_cursor(cx), 1);
+        cx.simulate_keystrokes("alt-d"); // Move down
+        assert_eq!(dialog_cursor(cx), 2);
+        cx.simulate_keystrokes("alt-n");
+        cx.simulate_input("Here");
+        cx.simulate_keystrokes("alt-p");
+        cx.simulate_input("/x");
+        assert_eq!(fields(cx), ("Here".to_owned(), "/x".to_owned()));
+        cx.simulate_keystrokes("alt-r"); // Remove it
+        assert_eq!(names(cx), ["&Alpha", "&Beta"]);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(saved_hotlist(&file).len(), 2);
+    }
+
+    #[gpui_kit::test]
     fn an_empty_list_says_so_and_add_fills_it(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
@@ -5308,6 +5441,22 @@ mod archives {
     }
 
     #[gpui_kit::test]
+    fn alt_r_ticks_the_box_and_alt_s_stores_every_link(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        std::os::unix::fs::symlink("../f", tmp.path().join("b/l1")).unwrap();
+        std::os::unix::fs::symlink("../f", tmp.path().join("b/l2")).unwrap();
+        cx.simulate_keystrokes("home down down alt-f5");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, link_prompt_open);
+        cx.simulate_keystrokes("alt-r alt-s");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!link_prompt_open(cx), "asked once");
+        let zip = tmp.path().join("a/b.zip");
+        assert!(is_link_entry(&zip, "b/l1") && is_link_entry(&zip, "b/l2"));
+    }
+
+    #[gpui_kit::test]
     fn alt_f5_ends_the_quick_search_and_waits_for_a_loading_panel(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = open(cx);
         cx.simulate_keystrokes("f alt-f5");
@@ -5494,6 +5643,17 @@ mod archives {
         wait_until(cx, |cx| !job_running(cx));
         assert_eq!(extracted(&tmp).as_deref(), Some("x"));
         assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn alt_s_in_the_password_field_skips_the_archive(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        extract_locked(&tmp, cx);
+        cx.simulate_input("pw");
+        cx.simulate_keystrokes("alt-s");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!password_prompt_open(cx));
+        assert_eq!(extracted(&tmp), None);
     }
 
     #[gpui_kit::test]
@@ -6911,6 +7071,98 @@ mod find_files {
     }
 
     #[gpui_kit::test]
+    fn alt_t_selects_containing_text_from_a_field_the_list_and_the_buttons(
+        cx: &mut TestAppContext,
+    ) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let view = dialog(cx);
+        let text =
+            |cx: &mut VisualTestContext| view.read_with(cx, |v, cx| v.field(Field::Text, cx));
+        // From Search for, with its text replaced when typed over.
+        cx.simulate_keystrokes("alt-t");
+        cx.simulate_input("old");
+        view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
+        cx.simulate_keystrokes("alt-t");
+        cx.simulate_input("x");
+        assert_eq!(text(cx), "x", "from a field");
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("alt-t");
+        cx.simulate_input("y");
+        assert_eq!(text(cx), "y", "from the list");
+        search(cx, "*.rs");
+        cx.simulate_keystrokes("tab alt-t");
+        cx.simulate_input("z");
+        assert_eq!(text(cx), "z", "from the buttons");
+        assert!(dialog_open(cx), "the dialog stays");
+    }
+
+    #[gpui_kit::test]
+    fn alt_i_selects_search_in(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-i");
+        cx.simulate_input("/x");
+        let view = dialog(cx);
+        assert_eq!(
+            view.read_with(cx, |v, cx| v.field(Field::SearchIn, cx)),
+            "/x"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_letters_toggle_the_option_boxes_and_focus_stays(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let view = dialog(cx);
+        cx.simulate_keystrokes("alt-t alt-c alt-a alt-w alt-r alt-n");
+        assert_eq!(view.read_with(cx, |v, _| v.options()), [true; 5]);
+        cx.simulate_input("q");
+        assert_eq!(view.read_with(cx, |v, cx| v.field(Field::Text, cx)), "q");
+        cx.simulate_keystrokes("alt-a");
+        assert_eq!(
+            view.read_with(cx, |v, _| v.options()),
+            [true, false, true, true, true]
+        );
+    }
+
+    #[gpui_kit::test]
+    fn alt_k_opens_skip_folders_and_another_alt_key_closes_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-k");
+        cx.run_until_parked();
+        assert!(drawn(cx, "find-skip-popup"));
+        cx.simulate_keystrokes("alt-f");
+        cx.run_until_parked();
+        assert!(!drawn(cx, "find-skip-popup"));
+        cx.simulate_input("m");
+        let view = dialog(cx);
+        assert_eq!(view.read_with(cx, |v, cx| v.field(Field::Masks, cx)), "m");
+    }
+
+    #[gpui_kit::test]
+    fn alt_s_searches_and_stops(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        dialog_with_hold(cx);
+        set(cx, Field::Masks, "*.rs");
+        cx.simulate_keystrokes("alt-s");
+        cx.run_until_parked();
+        assert!(running(cx));
+        cx.simulate_keystrokes("alt-s");
+        cx.run_until_parked();
+        assert!(!running(cx), "Stop");
+        cx.simulate_keystrokes("alt-s");
+        wait_until(cx, |cx| !running(cx));
+        assert_eq!(results(cx), ["a/x.rs"]);
+        assert!(dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
     fn alt_g_goes_to_the_selected_result_from_anywhere(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = opened(cx);
         let on_result = |cx: &mut VisualTestContext| {
@@ -7203,6 +7455,21 @@ mod open_terminal {
     fn copy_only_starts_no_terminal(cx: &mut TestAppContext) {
         let (_tmp, _commander, out, command, cx) = on_host(cx);
         cx.simulate_keystrokes("left enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        assert_eq!(clipboard_text(cx).as_deref(), Some(command.as_str()));
+        for _ in 0..10 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+        }
+        assert!(!out.exists());
+    }
+
+    #[gpui_kit::test]
+    fn alt_o_copies_only(cx: &mut TestAppContext) {
+        let (_tmp, _commander, out, command, cx) = on_host(cx);
+        cx.simulate_keystrokes("alt-o");
         cx.run_until_parked();
         assert!(!dialog_open(cx));
         assert_eq!(clipboard_text(cx).as_deref(), Some(command.as_str()));
@@ -8764,6 +9031,39 @@ mod connect {
     }
 
     #[gpui_kit::test]
+    fn alt_e_edits_the_config_from_the_field(cx: &mut TestAppContext) {
+        let (_tmp, home, _commander, cx) = with_hosts(cx);
+        let out = tempfile::tempdir().unwrap();
+        let editor = out.path().join("editor");
+        let got = out.path().join("got");
+        std::fs::write(
+            &editor,
+            format!("#!/bin/sh\necho \"$1\" > '{}'\n", got.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&editor, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        set_editor(&editor.display().to_string(), cx);
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("bo");
+        cx.simulate_keystrokes("alt-e");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        for _ in 0..200 {
+            if got.exists() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let config = home.path().join(".ssh/config");
+        assert_eq!(
+            std::fs::read_to_string(&got).unwrap().trim(),
+            config.display().to_string()
+        );
+    }
+
+    #[gpui_kit::test]
     fn edit_without_an_editor_says_so(cx: &mut TestAppContext) {
         let (_tmp, _home, _commander, cx) = with_hosts(cx);
         cx.simulate_keystrokes("ctrl-f");
@@ -8934,6 +9234,22 @@ mod ssh_questions {
         arrive(cx);
         cx.simulate_keystrokes("left enter");
         cx.run_until_parked();
+        assert_eq!(answer.try_recv().unwrap().as_deref(), Some("yes"));
+    }
+
+    #[gpui_kit::test]
+    fn alt_y_answers_yes_to_a_host_key(cx: &mut TestAppContext) {
+        let (_tmp, send, cx) = asking(cx);
+        let (question, answer) = Question::new("Continue (yes/no)? ", Kind::Confirm);
+        send.send(question).unwrap();
+        arrive(cx);
+        // No has no letter: it is the default, and Escape's answer.
+        cx.simulate_keystrokes("alt-n");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "Alt-N does nothing");
+        cx.simulate_keystrokes("alt-y");
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
         assert_eq!(answer.try_recv().unwrap().as_deref(), Some("yes"));
     }
 
@@ -9345,27 +9661,27 @@ pub(crate) mod tab_order {
         let named = file_manager(cx).read_with(cx, |this, cx| {
             this.settings.as_ref().unwrap().read(cx).tab_stops(cx)
         });
-        assert_focus(cx, "button:Close", &named);
+        assert_focus(cx, "button:OK", &named);
         // The switches have no handle of ours: they show as the dialog.
         let order = [
             "theme",
             "editor",
             // Sort, Check for updates, Log.
-            "Dialog",
-            "Dialog",
-            "Dialog",
+            "DialogKeys",
+            "DialogKeys",
+            "DialogKeys",
             "days",
             // Icons, Git branch, Modified, Owner, Permissions.
-            "Dialog",
-            "Dialog",
-            "Dialog",
-            "Dialog",
-            "Dialog",
-            "button:Close",
+            "DialogKeys",
+            "DialogKeys",
+            "DialogKeys",
+            "DialogKeys",
+            "DialogKeys",
+            "button:Cancel",
         ];
         assert_order(cx, "tab", &order, &named);
         let mut back: Vec<&str> = order.into_iter().rev().skip(1).collect();
-        back.push("button:Close");
+        back.push("button:OK");
         assert_order(cx, "shift-tab", &back, &named);
     }
 
@@ -9383,12 +9699,12 @@ pub(crate) mod tab_order {
             "button:Store as link",
             "button:Leave out",
             "button:Cancel",
-            "Dialog", // the checkbox, which has no handle of ours
+            "DialogKeys", // the checkbox, which has no handle of ours
             "button:Follow",
         ];
         assert_order(cx, "tab", &order, &[]);
         let back = [
-            "Dialog",
+            "DialogKeys",
             "button:Cancel",
             "button:Leave out",
             "button:Store as link",

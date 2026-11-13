@@ -28,11 +28,10 @@ use yagni_commander_core::find::{
 use yagni_commander_core::{Entry, EntryKind, format_count, hotlist};
 
 use crate::actions::{
-    FIND_DIALOG_CONTEXT, FIND_RESULTS_CONTEXT, FIND_SKIP_BUTTON_CONTEXT, FIND_SKIP_CONTEXT,
-    find_results as act,
+    FIND_RESULTS_CONTEXT, FIND_SKIP_BUTTON_CONTEXT, FIND_SKIP_CONTEXT, find_results as act,
 };
 use crate::app_state::AppState;
-use crate::button_row::{ButtonRow, OnPress, focus_ring};
+use crate::button_row::{ButtonRow, OnPress, focus_ring, marked_label};
 use crate::file_manager::commands::{OPENER_POLL, dialog_field, show_error, text_field};
 use crate::theme::Theme;
 
@@ -45,13 +44,14 @@ pub const MIN_WIDTH: f32 = 680.0;
 /// The option boxes, in their tab order; indices below.
 const OPTIONS: [(&str, &str); 5] = [
     // Next to Search for.
-    ("find-case-names", "Case-sensitive"),
+    ("find-case-names", "&Case-sensitive"),
     // Under Containing text.
-    ("find-case", "Case-sensitive"),
-    ("find-regex", "Regular expression"),
-    ("find-words", "Whole words"),
-    ("find-not", "Not containing"),
+    ("find-case", "C&ase-sensitive"),
+    ("find-regex", "&Regular expression"),
+    ("find-words", "&Whole words"),
+    ("find-not", "&Not containing"),
 ];
+
 /// Height of the "Skip folders" control (a text field's).
 const SKIP_CONTROL_HEIGHT: f32 = 30.0;
 /// Width of a column of the text's option boxes.
@@ -166,7 +166,7 @@ impl FindDialog {
         };
         let buttons = ButtonRow::build(
             [
-                ("Search", on(Self::search_or_stop)),
+                ("&Search", on(Self::search_or_stop)),
                 ("Feed to &listbox", on(|v, _, cx| v.feed(cx))),
                 ("Close", on(|v, _, cx| v.close(cx))),
             ],
@@ -276,13 +276,9 @@ impl FindDialog {
             .update(cx, |s, cx| s.set_value(text, window, cx));
     }
 
-    /// Alt-F: Search for, focused with its text selected.
-    pub fn focus_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.input(Field::Masks).clone().update(cx, |s, cx| {
-            let len = s.value().len();
-            s.set_selected_range(0..len, cx);
-            s.focus(window, cx);
-        });
+    /// Alt-F, Alt-I, Alt-T: the field focused with its text selected.
+    pub fn select_field(&mut self, field: Field, window: &mut Window, cx: &mut Context<Self>) {
+        crate::file_manager::commands::select_field(&self.input(field).clone(), window, cx);
     }
 
     #[cfg(test)]
@@ -316,6 +312,33 @@ impl FindDialog {
     #[cfg(test)]
     pub fn held(&self) -> Option<Arc<AtomicBool>> {
         self.held.clone()
+    }
+
+    /// Alt and a marked letter of the body: a field gets focus with its text
+    /// selected, Skip folders opens, an option box toggles (focus stays);
+    /// Alt-G goes to the file under the results' cursor. Whether the letter
+    /// is the body's (the buttons' are `dialog_keys`').
+    pub fn alt(&mut self, letter: char, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !"fiktcawrng".contains(letter) {
+            return false;
+        }
+        if letter != 'k' {
+            self.close_skip(window, cx);
+        }
+        match letter {
+            'f' => self.select_field(Field::Masks, window, cx),
+            'i' => self.select_field(Field::SearchIn, window, cx),
+            'k' => self.open_skip(window, cx),
+            't' => self.select_field(Field::Text, window, cx),
+            'c' => self.toggle(CASE_NAMES, cx),
+            'a' => self.toggle(CASE_TEXT, cx),
+            'w' => self.toggle(WHOLE_WORDS, cx),
+            'r' => self.toggle(REGEX, cx),
+            'n' => self.toggle(NOT_CONTAINING, cx),
+            'g' => self.open(cx),
+            _ => {}
+        }
+        true
     }
 
     fn search_or_stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -518,7 +541,7 @@ impl FindDialog {
         let running = self.running.is_some();
         let can_feed = !running && !self.found.is_empty();
         self.buttons.update(cx, |row, cx| {
-            row.set_label(0, if running { "Stop" } else { "Search" });
+            row.set_label(0, if running { "&Stop" } else { "&Search" });
             row.set_enabled(1, can_feed);
             cx.notify();
         });
@@ -933,7 +956,7 @@ impl Render for FindDialog {
                     div()
                         .flex_none()
                         .w(crate::zoom::rems_from_px(140.0))
-                        .child(label),
+                        .child(marked_label(label)),
                 )
                 .child(div().flex_1().child(field))
         };
@@ -945,12 +968,6 @@ impl Render for FindDialog {
         .track_scroll(&self.scroll)
         .size_full();
         div()
-            .key_context(FIND_DIALOG_CONTEXT)
-            .on_action(cx.listener(|this, _: &act::Feed, _, cx| this.feed(cx)))
-            .on_action(
-                cx.listener(|this, _: &act::FocusSearch, window, cx| this.focus_search(window, cx)),
-            )
-            .on_action(cx.listener(|this, _: &act::GoTo, _, cx| this.open(cx)))
             .relative()
             .flex()
             .flex_col()
@@ -959,11 +976,11 @@ impl Render for FindDialog {
             // Each case box sits by what it applies to: names here, the
             // text's options under its field.
             .child(
-                row("Search for", dialog_field(&self.masks))
+                row("Search &for", dialog_field(&self.masks))
                     .child(self.option_box(CASE_NAMES, window, cx).flex_none()),
             )
-            .child(row("Search in", div().child(text_field(&self.search_in))))
-            .child(row("Skip folders", self.skip_control(window, cx)))
+            .child(row("Search &in", div().child(text_field(&self.search_in))))
+            .child(row("S&kip folders", self.skip_control(window, cx)))
             // Which files above, what's in them below.
             .child(
                 div()
@@ -971,7 +988,7 @@ impl Render for FindDialog {
                     .my(crate::zoom::rems_from_px(4.0))
                     .bg(colors.raised_border),
             )
-            .child(row("Containing text", div().child(text_field(&self.text))))
+            .child(row("Containing &text", div().child(text_field(&self.text))))
             .child(
                 // Two aligned columns under the field.
                 div()

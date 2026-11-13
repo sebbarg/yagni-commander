@@ -109,7 +109,7 @@ impl FileManager {
         if kind == Kind::Confirm {
             // No is the default: accepting a host key should be a choice.
             let buttons =
-                ButtonRow::build([("Yes", press(Some("yes"))), ("No", press(None))], 1, cx);
+                ButtonRow::build([("&Yes", press(Some("yes"))), ("No", press(None))], 1, cx);
             focus_when_open(buttons.focus_handle(cx), window, cx);
             window.open_dialog(cx, move |dialog, _, cx| {
                 let (pending, refocus) = (pending.clone(), refocus.clone());

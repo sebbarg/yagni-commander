@@ -444,7 +444,7 @@ impl FileManager {
         });
         let buttons = ButtonRow::build(
             [
-                ("Copy only", copy_only),
+                ("Copy &only", copy_only),
                 ("Copy and start terminal", copy_and_start),
                 ("Cancel", cancel),
             ],
@@ -877,6 +877,19 @@ pub(crate) fn show_box(
                 restore(&refocus, window, cx);
                 true
             })
+    });
+}
+
+/// Focuses a text field with its text selected (Alt and its label's letter).
+pub(crate) fn select_field(
+    input: &gpui_kit::Entity<InputState>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    input.update(cx, |state, cx| {
+        let len = state.value().len();
+        state.set_selected_range(0..len, cx);
+        state.focus(window, cx);
     });
 }
 

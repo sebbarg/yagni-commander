@@ -11,26 +11,50 @@
 //! left to the dialog (cancel).
 //! In a message box, Ctrl-C / Ctrl-Ins (Cmd-C on macOS) copy its text.
 //! A label may mark one letter with `&` (`Feed to &listbox`), drawn
-//! underlined; the key that goes with it is bound by the dialog.
+//! underlined; Alt and that letter presses it while the row has focus, and
+//! from anywhere in a dialog whose body is wrapped in [`dialog_keys`].
 
 use std::rc::Rc;
 
 use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::{
-    App, ClipboardItem, Context, FocusHandle, Focusable, Global, HighlightStyle,
+    App, ClipboardItem, Context, Div, Entity, FocusHandle, Focusable, Global, HighlightStyle,
     InteractiveElement, IntoElement, Keystroke, ParentElement, Render, SharedString, Styled,
     StyledText, UnderlineStyle, Window, div, prelude::FluentBuilder, px,
 };
 use yagni_commander_core::hotlist;
 
 use crate::actions::{
-    BUTTON_ROW_CONTEXT, CopyText, NextButton, PressButton, PrevButton, TabNext, TabPrev,
+    BUTTON_ROW_CONTEXT, CopyText, DIALOG_KEYS_CONTEXT, DialogAlt, NextButton, PressButton,
+    PrevButton, TabNext, TabPrev,
 };
 use crate::zoom::rems_from_px;
 
 /// What a button does when pressed. It closes the dialog itself if it should.
 pub type OnPress = Rc<dyn Fn(&mut Window, &mut App)>;
+
+/// Alt and a letter for a dialog's own controls (fields, boxes, switches):
+/// whether the letter is theirs.
+pub type OnLetter = Rc<dyn Fn(char, &mut Window, &mut App) -> bool>;
+
+/// `d` (a dialog's body, and its footer when `controls` has letters, since
+/// the row passes on the letters it doesn't mark) takes Alt and a letter:
+/// `controls` first, then the button whose label marks it. A letter neither
+/// has passes on. A dialog of buttons alone needs none: the row has focus.
+pub fn dialog_keys(d: Div, buttons: &Entity<ButtonRow>, controls: Option<OnLetter>) -> Div {
+    let buttons = buttons.clone();
+    d.key_context(DIALOG_KEYS_CONTEXT)
+        .on_action(move |key: &DialogAlt, window, cx| {
+            let letter = key.0;
+            if controls.as_ref().is_some_and(|c| c(letter, window, cx)) {
+                return;
+            }
+            if !buttons.update(cx, |row, cx| row.press_letter(letter, window, cx)) {
+                cx.propagate();
+            }
+        })
+}
 
 /// Whether the last key was Tab (`Some(true)`) or Shift-Tab (`Some(false)`).
 /// gpui says only that focus moved, not why, so a row that gains focus reads
@@ -190,6 +214,23 @@ impl ButtonRow {
 
     /// Presses the button at `index`. The callback runs after this update so
     /// it may close the dialog (which re-renders this row).
+    /// Presses the button whose label marks `letter` (a disabled one does
+    /// nothing); whether one does.
+    pub fn press_letter(
+        &mut self,
+        letter: char,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let marked =
+            |(label, _): &(SharedString, OnPress)| hotlist::label(label).letter == Some(letter);
+        let Some(index) = self.buttons.iter().position(marked) else {
+            return false;
+        };
+        self.press(index, window, cx);
+        true
+    }
+
     fn press(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.select(index, cx);
         if self.disabled.contains(&index) {
@@ -219,6 +260,17 @@ pub fn focus_ring(accent: gpui_kit::Rgba, what: &'static str) -> gpui_kit::Div {
 impl Focusable for ButtonRow {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
+    }
+}
+
+/// A label with `&` marking its Alt letter (`Search &for`), drawn with that
+/// letter underlined, as on the buttons.
+pub fn marked_label(name: &str) -> StyledText {
+    let label = hotlist::label(name);
+    let text = SharedString::from(label.text);
+    match label.underline {
+        Some(range) => underlined(text, range),
+        None => StyledText::new(text),
     }
 }
 
@@ -257,6 +309,12 @@ impl Render for ButtonRow {
             .flex()
             .justify_end()
             .gap(rems_from_px(8.0))
+            // A letter no button marks goes on to the dialog's controls.
+            .on_action(cx.listener(|this, key: &DialogAlt, window, cx| {
+                if !this.press_letter(key.0, window, cx) {
+                    cx.propagate();
+                }
+            }))
             .on_action(cx.listener(move |this, _: &PrevButton, _, cx| {
                 if let Some(ix) = this.enabled_from(this.selected, false) {
                     this.select(ix, cx)

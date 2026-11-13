@@ -16,7 +16,8 @@ use crate::theme::Theme;
 use crate::zoom::rems_from_px;
 
 /// An option box with element id and debug selector `id`. `toggle` runs on
-/// Space and on a click (which also focuses the box).
+/// Space and on a click (which also focuses the box). A `&` in `label` marks
+/// a letter to underline; the dialog binds its key.
 pub fn option_box(
     id: &'static str,
     label: &'static str,
@@ -45,7 +46,7 @@ pub fn option_box(
             toggle(window, cx);
         })
         .child(check_square(checked, &colors))
-        .child(label)
+        .child(crate::button_row::marked_label(label))
         .when(focus.is_focused(window), |d| {
             d.child(focus_ring(colors.accent, id))
         })

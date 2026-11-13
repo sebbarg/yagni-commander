@@ -124,6 +124,12 @@ actions!(
 #[action(namespace = yagni_commander, no_json)]
 pub struct OpenMenu(pub usize);
 
+/// Alt and a letter in a dialog: the control or button whose label has that
+/// letter underlined ([`crate::button_row::dialog_keys`]).
+#[derive(gpui_kit::Action, Clone, PartialEq)]
+#[action(namespace = yagni_commander, no_json)]
+pub struct DialogAlt(pub char);
+
 /// Key context of a viewer window.
 pub const VIEWER_CONTEXT: &str = "Viewer";
 
@@ -202,7 +208,9 @@ pub mod hotlist_list {
 pub const FIND_RESULTS_CONTEXT: &str = "FindResults";
 
 /// Key context of the whole find dialog: its view and its footer.
-pub const FIND_DIALOG_CONTEXT: &str = "FindDialog";
+/// Key context of a dialog's body and buttons, for its Alt letters
+/// ([`crate::button_row::dialog_keys`]).
+pub const DIALOG_KEYS_CONTEXT: &str = "DialogKeys";
 
 /// Key context of the find dialog's "Skip folders" control, and of its
 /// popup.
@@ -216,23 +224,8 @@ pub mod find_results {
     gpui_kit::actions!(
         find_results,
         [
-            Up,
-            Down,
-            PageUp,
-            PageDown,
-            Home,
-            End,
-            Open,
-            View,
-            Toggle,
-            Feed,
-            FocusSearch,
-            GoTo,
-            SkipOpen,
-            SkipUp,
-            SkipDown,
-            SkipToggle,
-            SkipClose
+            Up, Down, PageUp, PageDown, Home, End, Open, View, Toggle, SkipOpen, SkipUp, SkipDown,
+            SkipToggle, SkipClose
         ]
     );
 }
@@ -561,15 +554,16 @@ pub fn bind_default_keys(cx: &mut App) {
         KeyBinding::new("space", find_results::SkipToggle, Some(FIND_SKIP_CONTEXT)),
         KeyBinding::new("enter", find_results::SkipClose, Some(FIND_SKIP_CONTEXT)),
         KeyBinding::new("escape", find_results::SkipClose, Some(FIND_SKIP_CONTEXT)),
-        // TC's "Feed to listbox" key.
-        KeyBinding::new("alt-l", find_results::Feed, Some(FIND_DIALOG_CONTEXT)),
-        KeyBinding::new(
-            "alt-f",
-            find_results::FocusSearch,
-            Some(FIND_DIALOG_CONTEXT),
-        ),
-        KeyBinding::new("alt-g", find_results::GoTo, Some(FIND_DIALOG_CONTEXT)),
     ]);
+    // Alt and a label's underlined letter, in every dialog (Alt-L is TC's
+    // "Feed to listbox"). A letter no label marks passes on.
+    // The button row takes them too: in a dialog of buttons alone the focus
+    // is never anywhere else.
+    for context in [DIALOG_KEYS_CONTEXT, BUTTON_ROW_CONTEXT] {
+        cx.bind_keys(('a'..='z').map(|letter| {
+            KeyBinding::new(&format!("alt-{letter}"), DialogAlt(letter), Some(context))
+        }));
+    }
     let ctx = Some(VIEWER_CONTEXT);
     cx.bind_keys([
         KeyBinding::new("escape", viewer::Close, ctx),

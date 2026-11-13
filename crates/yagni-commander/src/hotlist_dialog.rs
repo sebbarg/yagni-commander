@@ -22,11 +22,11 @@ use yagni_commander_core::hotlist::{self, HotlistEntry};
 use yagni_commander_core::user_commands;
 
 use crate::actions::{HOTLIST_LIST_CONTEXT, hotlist_list as act};
-use crate::button_row::{ButtonRow, OnPress};
+use crate::button_row::{ButtonRow, OnLetter, OnPress, dialog_keys, marked_label};
 use crate::config_state::CurrentConfig;
 use crate::file_manager::FileManager;
 use crate::file_manager::commands::{
-    dialog_input, focus_when_open, show_box, show_error, text_field,
+    dialog_input, focus_when_open, select_field, show_box, show_error, text_field,
 };
 use crate::theme::Theme;
 
@@ -108,6 +108,27 @@ impl HotlistDialog {
     #[cfg(test)]
     pub fn entries(&self) -> &[HotlistEntry] {
         &self.entries
+    }
+
+    /// Alt-N and Alt-P (Alt-C for a command): the field focused with its
+    /// text selected, once a row is picked (until then they're disabled).
+    /// Whether the letter is a field's.
+    pub fn alt(&mut self, letter: char, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let path_letter = match self.kind {
+            Kind::Folders(_) => 'p',
+            Kind::Commands => 'c',
+        };
+        let field = if letter == 'n' {
+            self.name.clone()
+        } else if letter == path_letter {
+            self.path.clone()
+        } else {
+            return false;
+        };
+        if self.cursor.is_some() {
+            select_field(&field, window, cx);
+        }
+        true
     }
 
     #[cfg(test)]
@@ -329,7 +350,7 @@ impl Render for HotlistDialog {
                             .flex_none()
                             .w(crate::zoom::rems_from_px(84.0))
                             .whitespace_nowrap()
-                            .child("Name"),
+                            .child(marked_label("&Name")),
                     )
                     .child(
                         div()
@@ -347,10 +368,10 @@ impl Render for HotlistDialog {
                             .flex_none()
                             .w(crate::zoom::rems_from_px(84.0))
                             .whitespace_nowrap()
-                            .child(match self.kind {
-                                Kind::Folders(_) => "Path",
-                                Kind::Commands => "Command",
-                            }),
+                            .child(marked_label(match self.kind {
+                                Kind::Folders(_) => "&Path",
+                                Kind::Commands => "&Command",
+                            })),
                     )
                     .child(
                         div()
@@ -402,12 +423,12 @@ impl FileManager {
     ) {
         let commands = matches!(kind, Kind::Commands);
         let (title, not_saved, add_label) = if commands {
-            ("User commands", COMMANDS_NOT_SAVED, "New")
+            ("User commands", COMMANDS_NOT_SAVED, "Ne&w")
         } else {
             (
                 "Directory hotlist",
                 "Hotlist not saved",
-                "Add current folder",
+                "&Add current folder",
             )
         };
         let view = cx.new(|cx| HotlistDialog::new(kind, entries, window, cx));
@@ -484,9 +505,9 @@ impl FileManager {
         });
         let [add, remove, up, down, cancel_row, ok_row] = [
             (add_label, on_view(HotlistDialog::add)),
-            ("Remove", on_view(HotlistDialog::remove)),
-            ("Move up", on_view(|v, _, cx| v.shift(-1, cx))),
-            ("Move down", on_view(|v, _, cx| v.shift(1, cx))),
+            ("&Remove", on_view(HotlistDialog::remove)),
+            ("Move &up", on_view(|v, _, cx| v.shift(-1, cx))),
+            ("Move &down", on_view(|v, _, cx| v.shift(1, cx))),
             ("Cancel", cancel_button),
             ("OK", ok_button),
         ];
@@ -495,7 +516,7 @@ impl FileManager {
             let help: OnPress =
                 Rc::new(move |window, cx| show_command_help(refocus.clone(), window, cx));
             let row = ButtonRow::build(
-                [("Help", help), add, remove, up, down, cancel_row, ok_row],
+                [("&Help", help), add, remove, up, down, cancel_row, ok_row],
                 6,
                 cx,
             );
@@ -505,14 +526,26 @@ impl FileManager {
             ButtonRow::build([add, remove, up, down, cancel_row, ok_row], 5, cx)
         };
         focus_when_open(view.read(cx).list_focus.clone(), window, cx);
+        let alt: OnLetter = Rc::new({
+            let view = view.clone();
+            move |letter, window, cx| view.update(cx, |v, cx| v.alt(letter, window, cx))
+        });
         window.open_dialog(cx, move |dialog, _, cx| {
             let (ok, cancel) = (ok.clone(), cancel.clone());
             themed_dialog(dialog, cx)
                 .title(title)
                 .w(crate::zoom::dialog_width(720.0, cx))
                 .close_button(false)
-                .child(view.clone())
-                .footer(buttons.clone())
+                .child(dialog_keys(
+                    div().child(view.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
+                .footer(dialog_keys(
+                    div().child(buttons.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
                 // Enter anywhere in the dialog.
                 .on_ok(move |_, window, cx| ok(window, cx))
                 .on_cancel(move |_, window, cx| {

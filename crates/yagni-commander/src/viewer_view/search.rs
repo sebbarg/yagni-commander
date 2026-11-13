@@ -22,7 +22,7 @@ use yagni_commander_core::find::text::{Text, TextQuery};
 use yagni_commander_core::viewer::{Direction, Highlight, find};
 
 use super::ViewerView;
-use crate::button_row::{ButtonRow, OnPress};
+use crate::button_row::{ButtonRow, OnLetter, OnPress, dialog_keys};
 use crate::file_manager::commands::{OPENER_POLL, dialog_field, show_error, show_message};
 use crate::zoom::{dialog_width, rems_from_px};
 
@@ -133,6 +133,11 @@ impl ViewerView {
             }
         });
         let buttons = ButtonRow::build([("Find", find), ("Cancel", cancel)], 0, cx);
+        // Alt and a box's letter, in the body and in the buttons.
+        let alt: OnLetter = Rc::new({
+            let view = view.clone();
+            move |letter, _, cx| view.update(cx, |v, cx| v.toggle_letter(letter, cx))
+        });
         let input = view.read(cx).input.clone();
         window.defer(cx, move |window, cx| {
             input.update(cx, |state, cx| state.focus(window, cx))
@@ -144,8 +149,16 @@ impl ViewerView {
                 .title("Find")
                 .w(dialog_width(520.0, cx))
                 .close_button(false)
-                .child(view.clone())
-                .footer(buttons.clone())
+                .child(dialog_keys(
+                    div().child(view.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
+                .footer(dialog_keys(
+                    div().child(buttons.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
                 // Enter in the text field.
                 .on_ok(move |_, window, cx| {
                     let done = submit(window, cx);
@@ -429,10 +442,12 @@ pub struct FindView {
 }
 
 const OPTIONS: [(&str, &str); 3] = [
-    ("viewer-find-case", "Case-sensitive"),
-    ("viewer-find-regex", "Regular expression"),
-    ("viewer-find-words", "Whole words"),
+    ("viewer-find-case", "&Case-sensitive"),
+    ("viewer-find-regex", "&Regular expression"),
+    ("viewer-find-words", "&Whole words"),
 ];
+/// The letters marked in `OPTIONS`, in order. Find has none: Enter.
+const OPTION_LETTERS: [char; 3] = ['c', 'r', 'w'];
 
 impl FindView {
     fn new(last: &Text, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -445,6 +460,17 @@ impl FindView {
             options: [last.case_sensitive, last.regex, last.whole_words],
             option_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
         }
+    }
+
+    /// Alt and an option box's letter toggles it; the focus stays.
+    /// Whether the letter is a box's.
+    fn toggle_letter(&mut self, letter: char, cx: &mut Context<Self>) -> bool {
+        let Some(ix) = OPTION_LETTERS.iter().position(|&l| l == letter) else {
+            return false;
+        };
+        self.options[ix] = !self.options[ix];
+        cx.notify();
+        true
     }
 
     fn text(&self, cx: &App) -> Text {

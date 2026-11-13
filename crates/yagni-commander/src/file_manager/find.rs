@@ -4,9 +4,10 @@
 
 use crate::file_manager::commands::themed_dialog;
 use gpui_kit::component::WindowExt;
-use gpui_kit::{AppContext, Context, InteractiveElement, ParentElement, Styled, Window, div};
+use gpui_kit::{AppContext, Context, ParentElement, Styled, Window, div};
 
-use crate::actions::{FIND_DIALOG_CONTEXT, find_results};
+use crate::button_row::{OnLetter, dialog_keys};
+use std::rc::Rc;
 
 use super::FileManager;
 use super::commands::show_error;
@@ -41,6 +42,10 @@ impl FileManager {
         let buttons = view.read(cx).buttons.clone();
         let masks = view.read(cx).masks_focus(cx);
         let focus = self.focus.clone();
+        let alt: OnLetter = Rc::new({
+            let view = view.clone();
+            move |letter, window, cx| view.update(cx, |v, cx| v.alt(letter, window, cx))
+        });
         window.open_dialog(cx, move |dialog, _, cx| {
             let (search, cancel, focus) = (view.clone(), view.clone(), focus.clone());
             let width = view.read(cx).width(cx);
@@ -48,25 +53,13 @@ impl FileManager {
                 .title("Find files")
                 .w(width)
                 .close_button(false)
-                .child(view.clone())
+                .child(dialog_keys(
+                    div().child(view.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
                 .footer(
-                    // The buttons are outside the view: its Alt keys here too.
-                    div()
-                        .key_context(FIND_DIALOG_CONTEXT)
-                        .on_action({
-                            let view = view.clone();
-                            move |_: &find_results::Feed, _, cx| view.update(cx, |v, cx| v.feed(cx))
-                        })
-                        .on_action({
-                            let view = view.clone();
-                            move |_: &find_results::FocusSearch, window, cx| {
-                                view.update(cx, |v, cx| v.focus_search(window, cx))
-                            }
-                        })
-                        .on_action({
-                            let view = view.clone();
-                            move |_: &find_results::GoTo, _, cx| view.update(cx, |v, cx| v.open(cx))
-                        })
+                    dialog_keys(div(), &buttons, Some(alt.clone()))
                         .relative()
                         .child(buttons.clone())
                         .child(crate::find_dialog::grip(&view, cx)),

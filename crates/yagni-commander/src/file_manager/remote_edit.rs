@@ -313,7 +313,7 @@ impl FileManager {
             window.close_dialog(cx);
             focus.focus(window, cx);
         });
-        let buttons = ButtonRow::build([("Upload", upload), ("Don't upload", keep)], 1, cx);
+        let buttons = ButtonRow::build([("&Upload", upload), ("Don't upload", keep)], 1, cx);
         focus_when_open(buttons.focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, _, cx| {
             themed_dialog(dialog, cx)

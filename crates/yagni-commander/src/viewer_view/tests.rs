@@ -407,6 +407,27 @@ mod search {
     }
 
     #[gpui_kit::test]
+    fn alt_letters_toggle_the_options(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
+        cx.update(|_, cx| cx.set_global(LastSearch(Text::default())));
+        cx.simulate_keystrokes("ctrl-f");
+        cx.run_until_parked();
+        cx.simulate_input("line 5");
+        // From the text field: the boxes toggle, the focus stays there.
+        cx.simulate_keystrokes("alt-c alt-r alt-w alt-r");
+        cx.simulate_input("0");
+        // From the buttons: Alt-R again, then Enter (Find has no letter).
+        cx.simulate_keystrokes("tab tab tab tab alt-r alt-r enter");
+        cx.run_until_parked();
+        assert!(!dialog_open(&mut cx));
+        settle(&viewer, &mut cx);
+        let last = cx.update(|_, cx| cx.global::<LastSearch>().0.clone());
+        assert_eq!(last.pattern, "line 50");
+        assert!(last.case_sensitive && !last.regex && last.whole_words);
+        assert!(viewer.read_with(&cx, |v, _| v.current_match()).is_some());
+    }
+
+    #[gpui_kit::test]
     fn a_found_match_becomes_the_selection(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
         find(&viewer, "line 500", &mut cx);

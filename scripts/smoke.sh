@@ -453,7 +453,8 @@ keys Return
 check "found a.rs copied" has "$right/a.rs" "fn a"
 check "found deep/b.rs copied flat" has "$right/b.rs" "a needle"
 check "target/ excluded" test ! -e "$right/c.rs"
-keys BackSpace alt+F7 Tab Tab Tab Tab
+# Alt-T: Containing text, from Search for.
+keys BackSpace alt+F7 alt+t
 typed needle
 keys Return
 sleep 1
@@ -500,14 +501,14 @@ keys F10 Left Down Return
 shot 07d-about
 keys Return
 
-echo "settings: Ctrl-, opens it; Space toggles the sort switch; Escape closes"
+echo "settings: Ctrl-, opens it; Space toggles the sort switch; Enter is OK, Escape cancels"
 cfg=$work/config/yagni-commander/config.toml
 keys ctrl+comma
 shot 07e-settings
-# Close has focus on opening; Tab goes round to Theme, then Editor.
+# OK has focus on opening; Tab goes round to Theme, then Editor.
 keys Tab Tab Tab space
 shot 07f-settings-toggled
-keys Escape
+keys Return
 check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
 check "config comment kept" grep -q "^# smoke config" "$cfg"
 check "other keys kept" grep -q '^editor = "fake-editor"' "$cfg"
@@ -576,27 +577,32 @@ check "back in left after the go-to items" title_is "$left"
 keys ctrl+d Up Return  # Configure...
 shot 07j-hotlist-configure
 keys Escape
-keys ctrl+comma Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab space Return
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab Tab Tab space
+# Alt-O: the Owner switch, by its underlined letter.
+keys ctrl+comma alt+o
 shot 07g-owner-hidden
-keys Escape
+keys Return
 check "show_owner saved" grep -q "^show_owner = false" "$cfg"
+echo "settings: Escape (Cancel) puts the file back"
+cp "$cfg" "$work/config-before"
+keys ctrl+comma alt+g alt+m Escape
+check "cancel restored the config" cmp -s "$cfg" "$work/config-before"
 
 echo "settings: the Icons switch turns icons off and on"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Return
 check "icons = false saved" grep -q "^icons = false" "$cfg"
 shot 07h-icons-off
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Return
 check "icons = true saved" grep -q "^icons = true" "$cfg"
 
 echo "settings: the Git switch hides the branch in the right panel's header"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "git = false saved" grep -q "^git = false" "$cfg"
 shot 07h1-git-off
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Escape
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "git = true saved" grep -q "^git = true" "$cfg"
 
 echo "a big folder loads in the background"
@@ -848,7 +854,7 @@ shot 07t1-theme-dropdown
 keys Down Down Down Down Return  # Classic, the last
 sleep 0.5
 shot 07t2-settings-classic
-keys Escape
+keys Tab Return  # to Editor, then OK
 check "theme saved: classic" grep -q '^theme = "classic"' "$cfg"
 shot 07t3-main-classic
 keys F7
@@ -857,7 +863,7 @@ keys Escape
 keys alt+F7
 shot 07t5-find-classic
 keys Escape
-keys ctrl+comma Tab Return Up Up Up Return Escape  # Classic -> Gruvbox Dark
+keys ctrl+comma Tab Return Up Up Up Return Tab Return  # Classic -> Gruvbox Dark
 sleep 0.5
 check "theme saved" grep -q '^theme = "gruvbox-dark"' "$cfg"
 shot 07t6-main-gruvbox

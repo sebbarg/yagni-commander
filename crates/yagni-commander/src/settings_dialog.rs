@@ -1,6 +1,8 @@
 //! The Settings dialog (Ctrl-,). Every change applies at once and is saved
-//! key by key (`FileManager::change_setting`). The text fields apply when
-//! they lose focus and when the dialog closes (Close, Enter or Escape).
+//! key by key (`FileManager::change_setting`), so it shows while choosing.
+//! The text fields apply when they lose focus and on OK (or Enter). Cancel
+//! (or Escape) puts back the file and the settings the dialog opened with
+//! (`FileManager::revert_settings`).
 
 use crate::file_manager::commands::themed_dialog;
 use std::path::PathBuf;
@@ -14,14 +16,15 @@ use gpui_kit::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
     WeakEntity, Window, div, prelude::FluentBuilder,
 };
-use yagni_commander_core::Setting;
+use yagni_commander_core::config::Config;
 use yagni_commander_core::config::parse_keep_days;
+use yagni_commander_core::{Setting, hotlist};
 
-use crate::button_row::{ButtonRow, OnPress};
+use crate::button_row::{ButtonRow, OnLetter, OnPress, dialog_keys, marked_label};
 use crate::config_state::CurrentConfig;
 use crate::dropdown::{Dropdown, DropdownEvent};
 use crate::file_manager::FileManager;
-use crate::file_manager::commands::{focus_when_open, text_field};
+use crate::file_manager::commands::{focus_when_open, select_field, text_field};
 use crate::theme::{self, Theme};
 
 pub struct SettingsView {
@@ -39,6 +42,9 @@ pub struct SettingsView {
     /// the text it opened with can't undo a hand edit of the file.
     editor_edited: bool,
     days_edited: bool,
+    /// Cancelled: nothing more is saved (a field's blur as the dialog
+    /// closes would undo the revert).
+    cancelled: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -115,6 +121,7 @@ impl SettingsView {
             log_dir_copied: false,
             editor_edited: false,
             days_edited: false,
+            cancelled: false,
             _subscriptions: subscriptions,
         }
     }
@@ -175,6 +182,9 @@ impl SettingsView {
     }
 
     fn change(&self, setting: Setting, window: &mut Window, cx: &mut App) {
+        if self.cancelled {
+            return;
+        }
         let _ = self
             .file_manager
             .update(cx, |fm, cx| fm.change_setting(setting, window, cx));
@@ -204,6 +214,33 @@ impl SettingsView {
         cx.notify();
     }
 
+    /// Alt and a label's letter: Theme opens, a text field gets focus with
+    /// its text selected, a switch toggles (the focus stays). Nothing while
+    /// the file has a problem (the controls are disabled). Whether the
+    /// letter is the body's.
+    pub fn alt(&mut self, letter: char, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let current = cx.global::<CurrentConfig>();
+        let (config, disabled) = (current.config.clone(), current.problem.is_some());
+        let switch = GENERAL_SWITCHES
+            .iter()
+            .chain(&PANEL_SWITCHES)
+            .find(|s| hotlist::label(s.1).letter == Some(letter));
+        if !(switch.is_some() || "ted".contains(letter)) {
+            return false;
+        }
+        if disabled {
+            return true;
+        }
+        match (letter, switch) {
+            (_, Some(&(_, _, value, make))) => self.change(make(!value(&config)), window, cx),
+            ('t', _) => self.theme.update(cx, |d, cx| d.open(window, cx)),
+            ('e', _) => select_field(&self.editor, window, cx),
+            _ => select_field(&self.days, window, cx),
+        }
+        cx.notify();
+        true
+    }
+
     /// Before the dialog closes: saves the edited fields. False while the
     /// days field holds an invalid value.
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -212,6 +249,62 @@ impl SettingsView {
         self.days_error.is_none()
     }
 }
+
+/// A switch: debug selector (also its id), label with its Alt letter, its
+/// value in the config, the setting it saves.
+type SwitchDef = (
+    &'static str,
+    &'static str,
+    fn(&Config) -> bool,
+    fn(bool) -> Setting,
+);
+
+/// The general column's switches, in order (Theme, Editor and the days
+/// field take T, E and D).
+const GENERAL_SWITCHES: [SwitchDef; 3] = [
+    (
+        "settings-sort",
+        "&Sort names case-sensitively",
+        |c| c.case_sensitive_sort,
+        Setting::CaseSensitiveSort,
+    ),
+    (
+        "settings-updates",
+        "Check for &updates at startup",
+        |c| c.check_updates,
+        Setting::CheckUpdates,
+    ),
+    (
+        "settings-log",
+        "&Log file operations",
+        |c| c.log,
+        Setting::Log,
+    ),
+];
+
+/// The Panels column's switches, in order.
+const PANEL_SWITCHES: [SwitchDef; 5] = [
+    ("settings-icons", "&Icons", |c| c.icons, Setting::Icons),
+    ("settings-git", "&Git", |c| c.git, Setting::Git),
+    (
+        "settings-modified",
+        "&Modified",
+        |c| c.show_modified,
+        Setting::ShowModified,
+    ),
+    (
+        "settings-owner",
+        "&Owner",
+        |c| c.show_owner,
+        Setting::ShowOwner,
+    ),
+    (
+        "settings-permissions",
+        "&Permissions",
+        |c| c.show_permissions,
+        Setting::ShowPermissions,
+    ),
+];
 
 /// The dialog's width at 100%: two columns, or one in a narrow window.
 const TWO_COLUMNS_WIDTH: f32 = 640.0;
@@ -243,20 +336,41 @@ impl Render for SettingsView {
         let disabled = problem.is_some();
         let two = two_columns(window, cx);
         let this = cx.entity().downgrade();
-        let switch =
-            |id: &'static str, label: &'static str, on: bool, make: fn(bool) -> Setting| {
-                let this = this.clone();
-                div().debug_selector(move || id.into()).child(
+        // Our own label beside the switch: gpui-component's can't underline
+        // a letter. Clicking it, or the row's empty end, toggles too.
+        let switch = |&(id, label, value, make): &SwitchDef| {
+            let on = value(&config);
+            let this = this.clone();
+            let toggle = move |checked: bool, window: &mut Window, cx: &mut App| {
+                let _ = this.update(cx, |this, cx| this.change(make(checked), window, cx));
+            };
+            let by_label = toggle.clone();
+            div()
+                .debug_selector(move || id.into())
+                .flex()
+                .items_start()
+                .gap(crate::zoom::rems_from_px(8.0))
+                .child(
                     Switch::new(id)
-                        .label(label)
+                        .accessibility_label(hotlist::label(label).text)
                         .checked(on)
                         .disabled(disabled)
-                        .on_click(move |checked, window, cx| {
-                            let _ =
-                                this.update(cx, |this, cx| this.change(make(*checked), window, cx));
-                        }),
+                        .on_click(move |checked, window, cx| toggle(*checked, window, cx)),
                 )
-            };
+                .child(
+                    div()
+                        .id(SharedString::from(format!("{id}-label")))
+                        .flex_1()
+                        .min_w_0()
+                        .line_height(crate::zoom::rems_from_px(20.0))
+                        .when(disabled, |d| d.text_color(colors.text_dim))
+                        .when(!disabled, |d| {
+                            d.cursor_pointer()
+                                .on_click(move |_, window, cx| by_label(!on, window, cx))
+                        })
+                        .child(marked_label(label)),
+                )
+        };
         let column = || div().flex().flex_col().gap(crate::zoom::rems_from_px(12.0));
         let hint = |text: SharedString| {
             div()
@@ -288,7 +402,7 @@ impl Render for SettingsView {
                     .flex()
                     .flex_col()
                     .gap(crate::zoom::rems_from_px(4.0))
-                    .child("Theme")
+                    .child(marked_label("&Theme"))
                     .child(
                         div()
                             .debug_selector(|| "settings-theme".into())
@@ -301,37 +415,20 @@ impl Render for SettingsView {
                     .flex()
                     .flex_col()
                     .gap(crate::zoom::rems_from_px(4.0))
-                    .child("Editor")
+                    .child(marked_label("&Editor"))
                     .child(
                         div()
                             .debug_selector(|| "settings-editor".into())
                             .child(text_field(&self.editor)),
                     ),
             )
-            .child(switch(
-                "settings-sort",
-                "Sort names case-sensitively",
-                config.case_sensitive_sort,
-                Setting::CaseSensitiveSort,
-            ))
-            .child(switch(
-                "settings-updates",
-                "Check for updates at startup",
-                config.check_updates,
-                Setting::CheckUpdates,
-            ))
-            .child(switch(
-                "settings-log",
-                "Log file operations",
-                config.log,
-                Setting::Log,
-            ))
+            .children(GENERAL_SWITCHES.iter().map(switch))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap(crate::zoom::rems_from_px(4.0))
-                    .child("Keep logs for (days)")
+                    .child(marked_label("Keep logs for (&days)"))
                     .child(
                         div()
                             .debug_selector(|| "settings-days".into())
@@ -354,31 +451,7 @@ impl Render for SettingsView {
             .flex_col()
             .gap(crate::zoom::rems_from_px(8.0))
             .child("Panels")
-            .child(switch(
-                "settings-icons",
-                "Icons",
-                config.icons,
-                Setting::Icons,
-            ))
-            .child(switch("settings-git", "Git", config.git, Setting::Git))
-            .child(switch(
-                "settings-modified",
-                "Modified",
-                config.show_modified,
-                Setting::ShowModified,
-            ))
-            .child(switch(
-                "settings-owner",
-                "Owner",
-                config.show_owner,
-                Setting::ShowOwner,
-            ))
-            .child(switch(
-                "settings-permissions",
-                "Permissions",
-                config.show_permissions,
-                Setting::ShowPermissions,
-            ))
+            .children(PANEL_SWITCHES.iter().map(switch))
             .child(hint("Name and Size are always shown.".into()));
 
         column()
@@ -409,7 +482,48 @@ impl Render for SettingsView {
     }
 }
 
+/// The settings and the file's text as the dialog found them, for Cancel.
+#[derive(Clone)]
+pub(crate) struct Snapshot {
+    config: Config,
+    /// `None` without a readable file (then nothing was saved either).
+    text: Option<String>,
+}
+
 impl FileManager {
+    /// Cancel or Escape in the settings dialog: writes the file back as it
+    /// was (only if it changed) and applies its settings. A failed write
+    /// shows an error box.
+    pub(crate) fn revert_settings(
+        &mut self,
+        snapshot: &Snapshot,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = cx.global::<CurrentConfig>();
+        if current.problem.is_some() {
+            return;
+        }
+        if let (Some(path), Some(text)) = (current.path.clone(), &snapshot.text)
+            && std::fs::read_to_string(&path).ok().as_ref() != Some(text)
+            && let Err(e) = yagni_commander_core::storage::write_atomic(&path, text)
+        {
+            // Deferred: the settings dialog is closing, which would close
+            // this box instead.
+            let message = e.to_string();
+            window.defer(cx, move |window, cx| {
+                crate::file_manager::commands::show_error(
+                    "Settings not restored",
+                    message,
+                    None,
+                    window,
+                    cx,
+                )
+            });
+        }
+        self.apply_config(snapshot.config.clone(), cx);
+    }
+
     /// Ctrl-, or the menu: the settings dialog.
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
@@ -418,9 +532,16 @@ impl FileManager {
         let view = cx.new(|cx| SettingsView::new(me.clone(), log_dir, window, cx));
         self.settings = Some(view.clone());
         let focus = self.focus.clone();
-        // Every way out saves the edited fields first, then gives focus
-        // back. Enter and Close stay in the dialog while the days field is
-        // invalid (its error shows); Escape leaves anyway.
+        let current = cx.global::<CurrentConfig>();
+        let snapshot = Snapshot {
+            config: current.config.clone(),
+            text: current
+                .path
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(path).ok()),
+        };
+        // OK saves the edited fields, then gives focus back; while the days
+        // field is invalid it stays in the dialog (its error shows).
         let commit = {
             let view = view.clone();
             move |window: &mut Window, cx: &mut App| view.update(cx, |v, cx| v.commit(window, cx))
@@ -433,7 +554,16 @@ impl FileManager {
                 window.defer(cx, move |window, cx| focus.focus(window, cx));
             }
         };
-        let on_close: OnPress = Rc::new({
+        // Cancel puts everything back, the typed fields dropped.
+        let revert = {
+            let (view, me, closed) = (view.clone(), me.clone(), closed.clone());
+            move |window: &mut Window, cx: &mut App| {
+                view.update(cx, |v, _| v.cancelled = true);
+                let _ = me.update(cx, |fm, cx| fm.revert_settings(&snapshot, window, cx));
+                closed(window, cx);
+            }
+        };
+        let on_ok: OnPress = Rc::new({
             let (commit, closed) = (commit.clone(), closed.clone());
             move |window, cx| {
                 if commit(window, cx) {
@@ -442,19 +572,38 @@ impl FileManager {
                 }
             }
         });
-        let buttons = ButtonRow::build([("Close", on_close)], 0, cx);
-        // Close has focus, so Enter or Space closes at once (owner,
-        // 2026-10-04); Tab reaches the controls.
+        let on_cancel: OnPress = Rc::new({
+            let revert = revert.clone();
+            move |window, cx| {
+                revert(window, cx);
+                window.close_dialog(cx);
+            }
+        });
+        let buttons = ButtonRow::build([("Cancel", on_cancel), ("OK", on_ok)], 1, cx);
+        let alt: OnLetter = Rc::new({
+            let view = view.clone();
+            move |letter, window, cx| view.update(cx, |v, cx| v.alt(letter, window, cx))
+        });
+        // The buttons have focus, OK selected, so Enter or Space closes at
+        // once (owner, 2026-10-04); Tab reaches the controls.
         focus_when_open(buttons.read(cx).focus_handle(cx), window, cx);
         window.open_dialog(cx, move |dialog, window, cx| {
             let (commit_ok, closed_ok) = (commit.clone(), closed.clone());
-            let (commit_cancel, closed_cancel) = (commit.clone(), closed.clone());
+            let revert = revert.clone();
             themed_dialog(dialog, cx)
                 .title("Settings")
                 .w(dialog_width(window, cx))
                 .close_button(false)
-                .child(view.clone())
-                .footer(buttons.clone())
+                .child(dialog_keys(
+                    div().child(view.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
+                .footer(dialog_keys(
+                    div().child(buttons.clone()),
+                    &buttons,
+                    Some(alt.clone()),
+                ))
                 .on_ok(move |_, window, cx| {
                     let valid = commit_ok(window, cx);
                     if valid {
@@ -463,8 +612,7 @@ impl FileManager {
                     valid
                 })
                 .on_cancel(move |_, window, cx| {
-                    commit_cancel(window, cx);
-                    closed_cancel(window, cx);
+                    revert(window, cx);
                     true
                 })
         });
