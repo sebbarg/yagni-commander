@@ -8,7 +8,7 @@ How yagni-commander behaves, and why: keys, dialogs, file operations and the dec
 - **Delete:** F8/Del moves to the system trash (macOS Trash, freedesktop trash on Linux). Permanent delete is not in v1.
 - **Quick search:** prefix match, no search box (see Keyboard).
 - **Function keys on macOS:** assume Fn is held or the system setting "Use F1, F2, etc. keys as standard function keys" is on. No Mac-specific alternatives.
-- **Modifier keys:** the same keymap on all platforms, using Ctrl (not Cmd) on macOS. The only exception is Quit: Cmd-Q on macOS, Alt-F4 on Linux. Revisit if Ctrl turns out to be a problem on macOS.
+- **Modifier keys:** the same keymap on all platforms, with Ctrl. On macOS Cmd works wherever Ctrl does (owner, 2026-11-13; Cmd-F too: find is Alt-F7 here), and the native menus show the Cmd keys; not Ctrl-Tab and Ctrl-Shift-Tab, since Cmd-Tab is the system's app switcher. Text fields keep gpui's own macOS keys (Cmd-C/V/X/A; Ctrl-A goes to the line start). Quit: Cmd-Q on macOS, Alt-F4 on Linux.
 
 ## UI
 

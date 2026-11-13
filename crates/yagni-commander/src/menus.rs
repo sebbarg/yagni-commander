@@ -627,8 +627,7 @@ mod tests {
     #[gpui_kit::test]
     fn native_menu_shows_no_wrong_keys(cx: &mut gpui_kit::TestAppContext) {
         cx.update(|cx| {
-            crate::actions::hide_native_menu_keys(cx);
-            crate::actions::bind_default_keys(cx);
+            crate::actions::bind_keys_for(cx, true);
             let keymap = cx.key_bindings();
             let keymap = keymap.borrow();
             for def in menus(STATE, true) {
@@ -649,6 +648,87 @@ mod tests {
                 }
             }
         });
+    }
+
+    /// macOS: every Ctrl key also works with Cmd, and the native menu
+    /// (the first binding) shows the Cmd one.
+    #[gpui_kit::test]
+    fn the_native_menu_shows_cmd_for_every_ctrl_key(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            crate::actions::bind_keys_for(cx, true);
+            let keymap = cx.key_bindings();
+            let keymap = keymap.borrow();
+            let single = |b: &gpui_kit::KeyBinding| match b.keystrokes() {
+                [k] => Some(k.inner().clone()),
+                _ => None,
+            };
+            for def in menus(STATE, true) {
+                for entry in def.entries {
+                    let MenuEntry::Item { label, action, .. } = entry else {
+                        continue;
+                    };
+                    let keys: Vec<_> = keymap
+                        .bindings_for_action(action.as_ref())
+                        .filter_map(single)
+                        .collect();
+                    let has_ctrl = keys.iter().any(|k| k.modifiers.control && k.key != "tab");
+                    if !has_ctrl {
+                        continue;
+                    }
+                    let first = keymap
+                        .bindings_for_action(action.as_ref())
+                        .next()
+                        .and_then(single)
+                        .unwrap();
+                    assert!(
+                        first.modifiers.platform && !first.modifiers.control,
+                        "{label}: the menu shows {}",
+                        first.unparse()
+                    );
+                }
+            }
+            // Every Ctrl binding has its Cmd twin in the same context, but
+            // Ctrl-Tab and Ctrl-Shift-Tab (Cmd-Tab is the system's).
+            let all: Vec<_> = keymap.bindings().collect();
+            for binding in &all {
+                let Some(k) = single(binding) else { continue };
+                if !k.modifiers.control {
+                    continue;
+                }
+                let twin = all.iter().any(|other| {
+                    single(other).is_some_and(|o| {
+                        o.modifiers.platform
+                            && !o.modifiers.control
+                            && o.modifiers.shift == k.modifiers.shift
+                            && o.modifiers.alt == k.modifiers.alt
+                            && o.key == k.key
+                    }) && other.action().partial_eq(binding.action())
+                        && other.predicate() == binding.predicate()
+                });
+                assert_eq!(twin, k.key != "tab", "{}", k.unparse());
+            }
+        });
+    }
+
+    #[test]
+    fn cmd_twins_only_on_macos_and_never_for_tab() {
+        use crate::actions::{Connect, NextTab, Quit, with_cmd_twins};
+        use gpui_kit::KeyBinding;
+        let bindings = || {
+            [
+                KeyBinding::new("ctrl-f", Connect, None),
+                KeyBinding::new("ctrl-tab", NextTab, None),
+                KeyBinding::new("alt-f4", Quit, None),
+                KeyBinding::new("ctrl-k ctrl-f", Connect, None),
+            ]
+        };
+        assert_eq!(with_cmd_twins(bindings(), false).len(), 4);
+        let mac = with_cmd_twins(bindings(), true);
+        assert_eq!(mac.len(), 5, "one twin: Ctrl-F");
+        let first = mac[0].keystrokes()[0].inner();
+        assert!(first.modifiers.platform && !first.modifiers.control);
+        assert_eq!(first.key, "f");
+        assert!(mac[0].action().partial_eq(&Connect));
     }
 
     #[test]
