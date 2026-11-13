@@ -359,12 +359,18 @@ pub fn connect_unshared(host: &str) -> io::Result<Session> {
 
 /// [`connect`] through `command`.
 fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
-    let mut child = command
+    let child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| io::Error::new(e.kind(), format!("cannot start ssh: {e}")))?;
+    start_session(host, child)
+}
+
+/// Speaks SFTP's first words over `child`'s pipes; a failure is explained
+/// with what it wrote to stderr.
+fn start_session(host: &str, mut child: Child) -> io::Result<Session> {
     let stderr = Arc::new(Mutex::new(Vec::new()));
     let reading = keep_stderr(child.stderr.take().expect("piped"), stderr.clone());
     let reader = child.stdout.take().expect("piped");
@@ -390,10 +396,15 @@ fn connect_with(host: &str, mut command: Command) -> io::Result<Session> {
                 )
             } else if !text.is_empty() {
                 io::Error::new(io::ErrorKind::ConnectionRefused, text)
-            } else if e.kind() == io::ErrorKind::UnexpectedEof {
+            } else if matches!(
+                e.kind(),
+                io::ErrorKind::UnexpectedEof | io::ErrorKind::BrokenPipe
+            ) {
                 // Closed without a word: through a shared connection ssh's
                 // own "subsystem request failed" goes to the background
-                // master, whose error output is /dev/null.
+                // master, whose error output is /dev/null. A broken pipe is
+                // the same close, seen by the first write when ssh was gone
+                // before it.
                 io::Error::new(
                     io::ErrorKind::Unsupported,
                     format!(
@@ -919,6 +930,31 @@ pub(crate) mod tests {
         assert!(
             err.to_string()
                 .starts_with("nas closed the connection before SFTP started. Is SFTP turned on"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn a_close_before_the_first_packet_is_written_asks_the_same() {
+        // The race behind the test above: ssh may be gone before the INIT
+        // packet goes out, and the write then fails with a broken pipe
+        // instead of the read seeing the end. Here it is gone for sure.
+        let mut child = Command::new("sh")
+            .args(["-c", "echo '** WARNING: not post-quantum' >&2; exit 0"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        // Not `wait`, which would close our end of stdin first.
+        while child.try_wait().unwrap().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let err = start_session("nas", child).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported, "{err}");
+        assert!(
+            err.to_string()
+                .starts_with("nas closed the connection before SFTP started"),
             "{err}"
         );
     }
