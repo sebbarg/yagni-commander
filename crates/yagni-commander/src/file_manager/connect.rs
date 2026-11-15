@@ -115,7 +115,7 @@ impl FileManager {
         window.open_dialog(cx, move |dialog, _, cx| {
             let (connect, cancel) = (connect.clone(), cancel.clone());
             themed_dialog(dialog, cx)
-                .title("Connect")
+                .title("SFTP connect")
                 .w(crate::zoom::dialog_width(560.0, cx))
                 .close_button(false)
                 // Alt-E from the field and the list too.

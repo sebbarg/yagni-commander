@@ -1,4 +1,4 @@
-//! The Connect dialog (Ctrl-F, Commands > Connect...): the hosts of
+//! The SFTP connect dialog (Ctrl-F, Commands > SFTP connect...): the hosts of
 //! `~/.ssh/config`, by name, under a field that filters them. Enter opens the
 //! highlighted host's login folder (`sftp://host`) in the active panel; when
 //! the typed text is not exactly an alias it is offered last as a host of

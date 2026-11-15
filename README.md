@@ -74,7 +74,7 @@ A program the editor (F4), a user command or the terminal setting (Ctrl-Shift-T)
 
 ## Remote folders (SFTP)
 
-Ctrl-F (or Commands > Connect...) lists the hosts in your `~/.ssh/config`; pick one, or type `user@host`, and its home folder opens in a new tab, labeled `sftp:`. From there it works like a local folder: copy and move in either direction or between two hosts (F5, F6), delete (F8, permanently: there is no trash on a host), rename (F2), new folder (F7), view (F3). Hotlist entries can point at `sftp://host/path` too.
+Ctrl-F (or Commands > SFTP connect...) lists the hosts in your `~/.ssh/config`; pick one, or type `user@host`, and its home folder opens in a new tab, labeled `sftp:`. From there it works like a local folder: copy and move in either direction or between two hosts (F5, F6), delete (F8, permanently: there is no trash on a host), rename (F2), new folder (F7), view (F3). Hotlist entries can point at `sftp://host/path` too.
 
 - The connection is your own `ssh`, so everything in `~/.ssh/config` (aliases, users, ports, keys, jump hosts), your ssh agent and `known_hosts` work as they do in a terminal. Password, passphrase and new-host-key questions come up in the app, once per host.
 - The host needs an SFTP server. Most Linux servers and macOS (with Remote Login on) have one; routers and other small devices often don't, and the app says so.
