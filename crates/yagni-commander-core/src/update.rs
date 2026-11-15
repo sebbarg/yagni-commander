@@ -611,20 +611,24 @@ mod tests {
         let (tmp, url) = releases("");
         let mark = tmp.path().join("ran on");
         let script = format!(
-            "echo 'downloading big'\n(sleep 2; touch '{0}') &\nsleep 2; touch '{0}'\n",
+            "echo 'downloading big'\n(sleep 5; touch '{0}') &\nsleep 5; touch '{0}'\n",
             mark.display()
         );
         std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
         let cancel = AtomicBool::new(false);
-        let started = std::time::Instant::now();
+        let mut cancelled = None;
         let result = install(&url, Version(1, 2, 3), &cancel, |s| {
             if s == Step::Downloading("big".into()) {
                 cancel.store(true, Ordering::Relaxed);
+                cancelled = Some(std::time::Instant::now());
             }
         });
         assert_eq!(result, Err(InstallError::Cancelled));
-        assert!(started.elapsed() < Duration::from_millis(1500));
-        std::thread::sleep(Duration::from_millis(2500));
+        // Timed from the cancel: starting curl and sh can be slow on a
+        // loaded machine. Well before the script's sleeps end.
+        let cancelled = cancelled.unwrap();
+        assert!(cancelled.elapsed() < Duration::from_secs(3));
+        std::thread::sleep(Duration::from_millis(5500).saturating_sub(cancelled.elapsed()));
         assert!(!mark.exists(), "a child outlived the cancel");
     }
 

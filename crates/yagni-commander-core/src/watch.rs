@@ -499,6 +499,14 @@ mod tests {
         rx.recv_timeout(Duration::from_millis(600)).is_err()
     }
 
+    /// Lets events from before the watch pass and drops them: macOS's
+    /// FSEvents can deliver the test's own setup (the folder made, a file
+    /// written) after the watch is in place.
+    fn settle(rx: &Receiver<()>) {
+        std::thread::sleep(MIN_INTERVAL + Duration::from_millis(500));
+        while rx.try_recv().is_ok() {}
+    }
+
     #[test]
     fn creating_deleting_and_renaming_a_file_fire() {
         let tmp = tempfile::tempdir().unwrap();
@@ -529,6 +537,7 @@ mod tests {
         std::fs::write(tmp.path().join("f"), b"x").unwrap();
         let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
+        settle(&rx);
         let request = crate::LoadRequest {
             id: 1,
             path: tmp.path().to_path_buf(),
@@ -551,6 +560,7 @@ mod tests {
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
         let (mut w, rx) = watcher();
         w.watch_and_wait(tmp.path().to_path_buf());
+        settle(&rx);
         std::fs::write(tmp.path().join("sub/f"), b"").unwrap();
         assert!(quiet(&rx));
     }
@@ -562,6 +572,7 @@ mod tests {
         let (mut w, rx) = watcher();
         w.watch_and_wait(one.path().to_path_buf());
         w.watch_and_wait(two.path().to_path_buf());
+        settle(&rx);
         std::fs::write(one.path().join("f"), b"").unwrap();
         assert!(quiet(&rx), "the old folder");
         std::fs::write(two.path().join("f"), b"").unwrap();

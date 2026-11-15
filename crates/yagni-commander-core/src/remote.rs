@@ -701,13 +701,16 @@ pub(crate) mod tests {
     }
 
     /// Every remote host is this machine, through a local `sftp-server`;
-    /// on host `dies-soon` the server ends after 0.3 s.
+    /// on host `dies-soon` the server is killed after 1 s (by the shell
+    /// it replaces: macOS has no `timeout`).
     pub(crate) fn use_local_server() {
         fn local(host: &str, _share: bool) -> Command {
             let server = crate::sftp::tests::server_program();
             if host == "dies-soon" {
-                let mut command = Command::new("timeout");
-                command.arg("0.3").arg(server);
+                let mut command = Command::new("sh");
+                command
+                    .args(["-c", r#"(sleep 1; kill $$) & exec "$0""#])
+                    .arg(server);
                 return command;
             }
             Command::new(server)
@@ -905,8 +908,10 @@ pub(crate) mod tests {
         // The host answers with a login script's text, not SFTP; ssh warned
         // about the key exchange and said nothing else.
         let mut command = Command::new("sh");
+        // It stays up, as ssh does: one that has already exited makes our
+        // first write fail instead, before its text is read.
         let script = format!(
-            "printf '{}' >&2; echo 'Welcome to the NAS'",
+            "printf '{}' >&2; echo 'Welcome to the NAS'; exec sleep 5",
             PQ_WARNING.replace('"', "\\\"")
         );
         command.args(["-c", &script]);
@@ -1094,7 +1099,7 @@ pub(crate) mod tests {
         let calls = AtomicU32::new(0);
         let result = with_session("dies-soon", |client| {
             calls.fetch_add(1, Ordering::Relaxed);
-            std::thread::sleep(Duration::from_millis(600));
+            std::thread::sleep(Duration::from_millis(2000));
             client.stat(b"/")
         });
         assert!(result.is_err());
