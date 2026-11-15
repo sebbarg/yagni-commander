@@ -245,8 +245,12 @@ impl RunError {
 
 /// Runs `command` in a process group of its own, feeding it `input`, and
 /// hands each line of its output to `line` as it comes. Once `cancel` is
-/// set, the group gets SIGTERM; a child that ignores it (the script while
-/// copying) runs to its end, and its result counts.
+/// set, the group gets SIGTERM, again on every poll until it is gone: a
+/// process forked while the signal was sent can miss it (seen on macOS: a
+/// subshell outlived the cancel and held the output open). A child that
+/// ignores it (the script while copying) runs to its end, and its result
+/// counts. Only while the group's leader is unreaped, so its id can't have
+/// been reused.
 fn run_cancellable(
     mut command: std::process::Command,
     input: Option<Vec<u8>>,
@@ -306,7 +310,7 @@ fn run_cancellable(
         }
     };
     let status = loop {
-        if cancel.load(Ordering::Relaxed) && !signalled {
+        if cancel.load(Ordering::Relaxed) {
             signalled = true;
             let _ = killpg(group, Signal::SIGTERM);
         }
