@@ -1675,6 +1675,7 @@ fn the_zip_never_contains_itself() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "APFS refuses names that aren't UTF-8")]
 fn non_utf8_names_are_packed_lossily() {
     use std::os::unix::ffi::OsStrExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -2172,6 +2173,7 @@ fn setuid_is_dropped_and_links_are_made() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "APFS refuses names that aren't UTF-8")]
 fn non_utf8_tar_names_are_kept() {
     use std::os::unix::ffi::OsStrExt;
     let tmp = tempfile::tempdir().unwrap();
@@ -2388,6 +2390,7 @@ fn an_archive_named_dots_stays_inside_the_folder() {
 }
 
 #[test]
+#[cfg_attr(target_os = "macos", ignore = "APFS refuses names that aren't UTF-8")]
 fn names_that_collide_in_the_zip_keep_the_first() {
     use std::os::unix::ffi::OsStrExt;
     let tmp = tempfile::tempdir().unwrap();

@@ -383,9 +383,11 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "did not run");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        // `pwd` prints the real path: on macOS the temporary folder is
+        // behind a symlink (`/var` is `/private/var`).
         assert_eq!(
             std::fs::read_to_string(&out).unwrap().trim(),
-            folder.display().to_string()
+            folder.canonicalize().unwrap().display().to_string()
         );
         let e = open_terminal(Some("no-such-terminal-here"), &folder).unwrap_err();
         assert!(

@@ -40,6 +40,19 @@ fn window_on(commander: Entity<Commander>, cx: &mut TestAppContext) -> &mut Visu
 /// A file manager window on a directory with dirs `a`, `b`, file `f` and
 /// hidden file `.dot` (not shown), using the default keymap. Directory reads
 /// run inline, so keys take effect at once.
+/// Select all and copy in a text field: gpui-component binds them to Cmd on
+/// macOS, where Ctrl-A is the start of the line, as in every macOS field.
+const FIELD_ALL: &str = if cfg!(target_os = "macos") {
+    "cmd-a"
+} else {
+    "ctrl-a"
+};
+const FIELD_COPY: &str = if cfg!(target_os = "macos") {
+    "cmd-c"
+} else {
+    "ctrl-c"
+};
+
 fn open(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Commander>, &mut VisualTestContext) {
     let tmp = tempfile::tempdir().unwrap();
     std::fs::create_dir(tmp.path().join("a")).unwrap();
@@ -2732,14 +2745,24 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         Some("shift-f8")
     );
     assert_eq!(first(&crate::actions::Quit, cx).as_deref(), Some(quit));
-    assert_eq!(
-        first(&crate::actions::ZoomIn, cx).as_deref(),
-        Some("ctrl-=")
-    );
-    assert_eq!(
-        first(&crate::actions::ZoomOut, cx).as_deref(),
-        Some("ctrl--")
-    );
+    // On macOS a Ctrl key's Cmd twin is registered just before it
+    // (`actions::with_cmd_twins`): first for the native menu, while the
+    // Ctrl key stays the last, gpui-component's.
+    let native = |keys: &str| -> String {
+        let mut keystroke = gpui_kit::Keystroke::parse(keys).unwrap();
+        let modifiers = &mut keystroke.modifiers;
+        if cfg!(target_os = "macos") && modifiers.control && keystroke.key != "tab" {
+            modifiers.control = false;
+            modifiers.platform = true;
+        }
+        keystroke.unparse()
+    };
+    for (action, keys) in [
+        (&crate::actions::ZoomIn as &dyn gpui_kit::Action, "ctrl-="),
+        (&crate::actions::ZoomOut, "ctrl--"),
+    ] {
+        assert_eq!(first(action, cx), Some(native(keys)));
+    }
     for (action, keys) in [
         (&crate::actions::Pack as &dyn gpui_kit::Action, "alt-f5"),
         (&crate::actions::Extract, "alt-f6"),
@@ -2747,30 +2770,14 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
         assert_eq!(first(action, cx).as_deref(), Some(keys));
     }
-    let copy = if cfg!(target_os = "macos") {
-        "cmd-c"
-    } else {
-        "ctrl-c"
-    };
-    assert_eq!(key(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
-    assert_eq!(first(&crate::actions::CopyPath, cx).as_deref(), Some(copy));
-    let (name, parent) = if cfg!(target_os = "macos") {
-        ("cmd-shift-c", "cmd-alt-c")
-    } else {
-        ("ctrl-shift-c", "ctrl-alt-c")
-    };
     for (action, keys) in [
-        (&crate::actions::CopyName as &dyn gpui_kit::Action, name),
-        (&crate::actions::CopyParentPath, parent),
+        (&crate::actions::CopyPath as &dyn gpui_kit::Action, "ctrl-c"),
+        (&crate::actions::CopyName, "ctrl-shift-c"),
+        (&crate::actions::CopyParentPath, "ctrl-alt-c"),
     ] {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
-        assert_eq!(first(action, cx).as_deref(), Some(keys));
+        assert_eq!(first(action, cx), Some(native(keys)));
     }
-    let close_tab = if cfg!(target_os = "macos") {
-        "cmd-w"
-    } else {
-        "ctrl-w"
-    };
     for (action, keys) in [
         (
             &crate::actions::DirectoryHotlist as &dyn gpui_kit::Action,
@@ -2779,10 +2786,10 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         (&crate::actions::MountsLeft, "alt-f1"),
         (&crate::actions::MountsRight, "alt-f2"),
         (&crate::actions::NewTab as &dyn gpui_kit::Action, "ctrl-t"),
-        (&crate::actions::CloseTab, close_tab),
+        (&crate::actions::CloseTab, "ctrl-w"),
     ] {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
-        assert_eq!(first(action, cx).as_deref(), Some(keys));
+        assert_eq!(first(action, cx), Some(native(keys)));
     }
     // macOS's native menu shows no key for these: it can't show Enter or
     // Tab (`actions::hide_native_menu_keys`).
@@ -2954,9 +2961,9 @@ fn ctrl_c_in_a_text_field_copies_its_text_not_the_path(cx: &mut TestAppContext) 
     cx.simulate_keystrokes("down f2");
     cx.run_until_parked();
     // F2 preselects the name.
-    cx.simulate_keystrokes("ctrl-c");
+    cx.simulate_keystrokes(FIELD_COPY);
     assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
-    cx.simulate_keystrokes("end ctrl-a ctrl-insert");
+    cx.simulate_keystrokes(&format!("end {FIELD_ALL} ctrl-insert"));
     assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
@@ -2982,7 +2989,7 @@ fn text_fields_take_the_classic_clipboard_keys(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_input("abc");
     // Shift-Del cuts, Shift-Ins pastes.
-    cx.simulate_keystrokes("ctrl-a shift-delete");
+    cx.simulate_keystrokes(&format!("{FIELD_ALL} shift-delete"));
     let clipboard = |cx: &mut VisualTestContext| {
         cx.read_from_clipboard()
             .and_then(|item| item.text())
@@ -2991,7 +2998,7 @@ fn text_fields_take_the_classic_clipboard_keys(cx: &mut TestAppContext) {
     assert_eq!(clipboard(cx).as_deref(), Some("abc"));
     cx.simulate_keystrokes("shift-insert shift-insert");
     // Ctrl-Ins copies.
-    cx.simulate_keystrokes("ctrl-a ctrl-insert end");
+    cx.simulate_keystrokes(&format!("{FIELD_ALL} ctrl-insert end"));
     assert_eq!(clipboard(cx).as_deref(), Some("abcabc"));
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -3515,13 +3522,13 @@ fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
     activate(cx);
     open_settings_at_editor(cx);
     cx.simulate_keystrokes("tab tab tab tab tab"); // editor -> terminal -> sort -> updates -> log -> days
-    cx.simulate_keystrokes("ctrl-a");
+    cx.simulate_keystrokes(FIELD_ALL);
     cx.simulate_input("0");
     cx.simulate_keystrokes("tab"); // leaving the field checks it
     cx.run_until_parked();
     assert!(cx.debug_bounds("settings-days-error").is_some());
     assert_eq!(config(cx).log_keep_days, 30);
-    cx.simulate_keystrokes("shift-tab ctrl-a");
+    cx.simulate_keystrokes(&format!("shift-tab {FIELD_ALL}"));
     cx.simulate_input("14");
     cx.simulate_keystrokes("tab");
     cx.run_until_parked();
@@ -3625,7 +3632,7 @@ fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
     use_config(cfg.path(), "", cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab tab tab tab tab ctrl-a");
+    cx.simulate_keystrokes(&format!("tab tab tab tab tab {FIELD_ALL}"));
     cx.simulate_input("0");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -4874,7 +4881,7 @@ mod hotlist {
         click(cx, "hotlist-entry-1", 1);
         assert_eq!(picked(cx), Some(1));
         click(cx, "prompt-field", 1);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("~/b");
         assert_eq!(path_text(cx), "~/b");
     }
@@ -4936,11 +4943,11 @@ mod hotlist {
         let file = use_hotlist(&tmp, &cfg, &[], cx);
         configure(cx);
         // List -> Name: select all, type.
-        cx.simulate_keystrokes("down down tab ctrl-a");
+        cx.simulate_keystrokes(&format!("down down tab {FIELD_ALL}"));
         cx.simulate_input("&Bin");
         assert_eq!(names(cx), ["&Alpha", "&Bin"], "the list follows the typing");
         // Name -> Path.
-        cx.simulate_keystrokes("tab ctrl-a");
+        cx.simulate_keystrokes(&format!("tab {FIELD_ALL}"));
         cx.simulate_input("~/bin");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
@@ -4974,7 +4981,7 @@ mod hotlist {
         let file = use_hotlist(&tmp, &cfg, &[], cx);
         let before = std::fs::read_to_string(&file).unwrap();
         configure(cx);
-        cx.simulate_keystrokes("down down tab tab ctrl-a");
+        cx.simulate_keystrokes(&format!("down down tab tab {FIELD_ALL}"));
         cx.simulate_input("relative/path");
         cx.simulate_keystrokes("up"); // in the field: no effect on the list
         cx.simulate_keystrokes("enter");
@@ -5126,7 +5133,7 @@ mod hotlist {
         let cfg = tempfile::tempdir().unwrap();
         let file = use_hotlist(&tmp, &cfg, &[], cx);
         configure(cx);
-        cx.simulate_keystrokes("down down tab tab ctrl-a");
+        cx.simulate_keystrokes(&format!("down down tab tab {FIELD_ALL}"));
         cx.simulate_input(" ~/bin ");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
@@ -5474,7 +5481,7 @@ mod archives {
         let (tmp, _commander, cx) = open_with_target(cx);
         cx.simulate_keystrokes("alt-f5");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("bundle");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -5651,7 +5658,7 @@ mod archives {
         let (tmp, _commander, cx) = open_with_target(cx);
         make_zip(&tmp.path().join("pkg.zip"), &[("pkg/x.txt", "x")]);
         extract_last_with("alt-f6", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("out/here");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -6124,7 +6131,7 @@ mod archive_browsing {
         let (tmp, _commander, cx) = inside_zip(cx);
         cx.simulate_keystrokes("end f5"); // README
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input(&tmp.path().join("a/read.txt").display().to_string());
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -7500,6 +7507,12 @@ mod open_terminal {
         out
     }
 
+    /// `pwd`'s answer for `dir`: on macOS the temporary folder is behind a
+    /// symlink (`/var` is `/private/var`).
+    fn physical(dir: &std::path::Path) -> String {
+        dir.canonicalize().unwrap().display().to_string()
+    }
+
     fn started_in(out: &std::path::Path, cx: &mut VisualTestContext) -> String {
         wait_until(cx, |_| {
             std::fs::read_to_string(out).is_ok_and(|s| s.ends_with('\n'))
@@ -7513,10 +7526,7 @@ mod open_terminal {
         let out = use_recording_terminal(tmp.path(), cx);
         cx.simulate_keystrokes("tab down enter"); // the right panel into a
         cx.simulate_keystrokes("ctrl-shift-t");
-        assert_eq!(
-            started_in(&out, cx),
-            tmp.path().join("a").display().to_string()
-        );
+        assert_eq!(started_in(&out, cx), physical(&tmp.path().join("a")));
         assert!(!dialog_open(cx));
     }
 
@@ -7525,7 +7535,7 @@ mod open_terminal {
         let (tmp, _commander, cx) = open(cx);
         let out = use_recording_terminal(tmp.path(), cx);
         cx.dispatch_action(crate::actions::OpenTerminal);
-        assert_eq!(started_in(&out, cx), tmp.path().display().to_string());
+        assert_eq!(started_in(&out, cx), physical(tmp.path()));
     }
 
     #[gpui_kit::test]
@@ -7533,7 +7543,7 @@ mod open_terminal {
         let (tmp, _commander, cx) = super::archive_browsing::inside_zip(cx);
         let out = use_recording_terminal(tmp.path(), cx);
         cx.simulate_keystrokes("ctrl-shift-t");
-        assert_eq!(started_in(&out, cx), tmp.path().display().to_string());
+        assert_eq!(started_in(&out, cx), physical(tmp.path()));
     }
 
     #[gpui_kit::test]
@@ -7549,8 +7559,9 @@ mod open_terminal {
         use_config(cfg.path(), &command, cx);
         cx.simulate_keystrokes("tab down enter"); // the right panel into a
         cx.simulate_keystrokes("ctrl-shift-t");
-        let dir = tmp.path().join("a").display().to_string();
-        assert_eq!(started_in(&out, cx), format!("{dir} {dir}"));
+        let dir = tmp.path().join("a");
+        let wanted = format!("{} {}", dir.display(), physical(&dir));
+        assert_eq!(started_in(&out, cx), wanted);
         assert!(!dialog_open(cx));
     }
 
@@ -8628,7 +8639,7 @@ mod remote_folders {
         let (tmp, _commander, cx) = on_remote(cx);
         cx.simulate_keystrokes("f5");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("b/copied");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -8659,7 +8670,7 @@ mod remote_folders {
         let (tmp, commander, cx) = on_remote(cx);
         cx.simulate_keystrokes("f2");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("renamed");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -8675,7 +8686,7 @@ mod remote_folders {
         // A taken name fails once the host says so.
         cx.simulate_keystrokes("f2");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("b");
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| !job_running(cx));
@@ -8691,7 +8702,7 @@ mod remote_folders {
         let (_tmp, _commander, cx) = on_remote(cx);
         cx.simulate_keystrokes("f2");
         cx.run_until_parked();
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes(FIELD_ALL);
         cx.simulate_input("a/b");
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();

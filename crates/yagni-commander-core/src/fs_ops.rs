@@ -55,6 +55,9 @@ pub(crate) fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
             result => return result.map_err(io::Error::from),
         }
     }
+    // The source first, as `renameat2` does: a missing source is NotFound
+    // whether or not the target exists.
+    from.symlink_metadata()?;
     if to.symlink_metadata().is_ok() {
         return Err(io::ErrorKind::AlreadyExists.into());
     }

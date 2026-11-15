@@ -440,10 +440,14 @@ b" {MARKER}"#
             "shell",
             r#"[ "$1 $2 $3" = "-i -l -c" ] || exit 1
 echo profile noise
-PATH=/login/bin:/usr/bin exec sh -c "$4""#,
+PATH=/login/bin:/usr/bin:/bin exec sh -c "$4""#,
         );
         let got = read(&shell, &helper_script(dir.path()), Duration::from_secs(10)).unwrap();
-        assert_eq!(value(&got, "PATH"), Some(OsStr::new("/login/bin:/usr/bin")));
+        // `/bin` too: macOS has `sh` only there.
+        assert_eq!(
+            value(&got, "PATH"),
+            Some(OsStr::new("/login/bin:/usr/bin:/bin"))
+        );
         assert_eq!(value(&got, "MULTI"), Some(OsStr::new("a\nb")));
     }
 
