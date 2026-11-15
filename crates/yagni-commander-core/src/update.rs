@@ -611,7 +611,7 @@ mod tests {
         let (tmp, url) = releases("");
         let mark = tmp.path().join("ran on");
         let script = format!(
-            "echo 'downloading big'\n(sleep 5; touch '{0}') &\nsleep 5; touch '{0}'\n",
+            "echo 'downloading big'\n(sleep 8; touch '{0}') &\nsleep 8; touch '{0}'\n",
             mark.display()
         );
         std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
@@ -624,11 +624,15 @@ mod tests {
             }
         });
         assert_eq!(result, Err(InstallError::Cancelled));
-        // Timed from the cancel: starting curl and sh can be slow on a
-        // loaded machine. Well before the script's sleeps end.
+        // Timed from the cancel, with room for a loaded CI runner, yet well
+        // before the script's sleeps end: waiting for them would take 8 s.
         let cancelled = cancelled.unwrap();
-        assert!(cancelled.elapsed() < Duration::from_secs(3));
-        std::thread::sleep(Duration::from_millis(5500).saturating_sub(cancelled.elapsed()));
+        let took = cancelled.elapsed();
+        assert!(
+            took < Duration::from_secs(5),
+            "returned {took:?} after the cancel"
+        );
+        std::thread::sleep(Duration::from_millis(8500).saturating_sub(cancelled.elapsed()));
         assert!(!mark.exists(), "a child outlived the cancel");
     }
 
