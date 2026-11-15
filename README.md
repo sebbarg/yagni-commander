@@ -65,10 +65,11 @@ With Alacritty: `alacritty --hold --working-directory {active_dir} -e {active_pa
 
 ### Windows that open behind yagni-commander
 
-A program the editor (F4) or a user command starts may open its window behind yagni-commander. yagni-commander can't bring another program's window to the front: on macOS only apps launched through Launch Services (Finder, the Dock, `open`) are brought forward, and on Linux the window manager decides. It happens most with a program that is already running, because the command hands the file to the running copy, which stays in the background. Workarounds:
+A program the editor (F4), a user command or the terminal setting (Ctrl-Shift-T) starts may open its window behind yagni-commander. yagni-commander can't bring another program's window to the front: on macOS only apps launched through Launch Services (Finder, the Dock, `open`) are brought forward, and on Linux the window manager decides. It happens most with a program that is already running, because the command hands the file to the running copy, which stays in the background. Workarounds:
 
 - **VS Code:** `editor = "code -n"` opens a new window, which comes to the front.
 - **macOS, any app:** start it with `open -a`, which brings it forward, for example `open -a "DB Browser for SQLite" {active_path}`. An app started this way gets a minimal `PATH`, so give programs it runs by their full path.
+- **macOS, a terminal:** start it through `open -n`, which brings the new instance forward, and pass the folder with `--args`, since `open` doesn't pass on the working folder: `terminal = "open -na WezTerm --args start --cwd {active_dir}"`.
 - **macOS, a running app:** run the command, then `open -a` to bring the app forward: `sh -c 'wezterm start --cwd "$1" lazygit; open -a WezTerm' sh {active_path}`.
 
 ## Remote folders (SFTP)
@@ -153,7 +154,7 @@ The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R
 
 Set `editor` to the command F4 runs, for example `editor = "code --wait"`. If its window opens behind yagni-commander, see [Windows that open behind yagni-commander](#windows-that-open-behind-yagni-commander).
 
-Ctrl-Shift-T opens a terminal in the active panel's folder. On Linux it uses `$TERMINAL`, then your desktop's choice (KDE), then the first common terminal it finds; on macOS, Terminal.app. To pick one yourself, set `terminal` to the command to run, with `{active_dir}` for the folder if the terminal needs it as an argument: `terminal = "wezterm start --cwd {active_dir}"`, `terminal = "kitty --directory {active_dir}"`, or on macOS `terminal = "/Applications/WezTerm.app/Contents/MacOS/wezterm start --cwd {active_dir}"`.
+Ctrl-Shift-T opens a terminal in the active panel's folder. On Linux it uses `$TERMINAL`, then your desktop's choice (KDE), then the first common terminal it finds; on macOS, Terminal.app. To pick one yourself, set `terminal` to the command to run, with `{active_dir}` for the folder if the terminal needs it as an argument: `terminal = "wezterm start --cwd {active_dir}"`, `terminal = "kitty --directory {active_dir}"`, or on macOS `terminal = "open -na WezTerm --args start --cwd {active_dir}"` (through `open`, so its window comes to the front).
 
 Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` (light) or `classic` (light), or pick one in the settings dialog; it switches at once.
 
