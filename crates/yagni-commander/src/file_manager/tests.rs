@@ -2406,13 +2406,110 @@ mod check_for_updates {
         std::fs::read_to_string(file.path()).unwrap()
     }
 
+    /// The log's lines without their times.
+    fn messages(text: &str) -> Vec<String> {
+        text.lines()
+            .map(|l| l.split_once(" update ").map_or(l, |(_, m)| m).to_owned())
+            .collect()
+    }
+
     #[gpui_kit::test]
     fn an_installed_update_is_logged(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
-        let text = logged_update("", cx);
+        let text = logged_update("echo 'downloading app.zip'; echo 'copying /apps'\n", cx);
         let version = env!("CARGO_PKG_VERSION");
-        let wanted = format!(" update installed {version} -> 999.0.0");
-        assert!(text.lines().any(|l| l.ends_with(&wanted)), "{text}");
+        assert_eq!(
+            messages(&text),
+            [
+                format!("started {version} -> 999.0.0"),
+                "downloading install.sh".to_owned(),
+                "downloading app.zip".to_owned(),
+                "copying to /apps".to_owned(),
+                format!("installed {version} -> 999.0.0"),
+            ],
+            "{text}"
+        );
+    }
+
+    /// Logging on and the install box up with `script` running; the log's
+    /// folder and the restarts.
+    fn installing(
+        script: &str,
+        cx: &mut VisualTestContext,
+    ) -> (
+        Vec<tempfile::TempDir>,
+        std::rc::Rc<std::cell::RefCell<Vec<PathBuf>>>,
+    ) {
+        let cfg = tempfile::tempdir().unwrap();
+        let logs = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        use_log_dir(logs.path(), cx);
+        change_setting(Setting::Log(true), cx);
+        let (releases, started) = ready_to_update(script, cx);
+        activate(cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| cx.debug_bounds("update-installing").is_some());
+        (vec![cfg, logs, releases], started)
+    }
+
+    fn log_text(dirs: &[tempfile::TempDir]) -> String {
+        std::fs::read_dir(dirs[1].path())
+            .unwrap()
+            .flatten()
+            .map(|f| std::fs::read_to_string(f.path()).unwrap())
+            .collect()
+    }
+
+    fn wait_for_line(dirs: &[tempfile::TempDir], line: &str, cx: &mut VisualTestContext) {
+        wait_until(cx, |_| messages(&log_text(dirs)).iter().any(|m| m == line));
+    }
+
+    #[gpui_kit::test]
+    fn cancel_stops_the_download(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (dirs, started) = installing("echo 'downloading app.zip'; sleep 30\n", cx);
+        wait_for_line(&dirs, "downloading app.zip", cx);
+        assert!(cx.debug_bounds("button-Cancel").is_some());
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !dialog_open(cx));
+        assert!(started.borrow().is_empty());
+        let version = env!("CARGO_PKG_VERSION");
+        let lines = messages(&log_text(&dirs));
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("cancelled {version} -> 999.0.0")
+        );
+        assert!(button_shown(cx), "it can be tried again");
+    }
+
+    #[gpui_kit::test]
+    fn escape_cancels_too(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (dirs, started) = installing("echo 'downloading app.zip'; sleep 30\n", cx);
+        wait_for_line(&dirs, "downloading app.zip", cx);
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, |cx| !dialog_open(cx));
+        assert!(started.borrow().is_empty());
+        let version = env!("CARGO_PKG_VERSION");
+        wait_for_line(&dirs, &format!("cancelled {version} -> 999.0.0"), cx);
+    }
+
+    #[gpui_kit::test]
+    fn the_copying_cannot_be_cancelled(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (dirs, started) = installing("trap '' TERM; echo 'copying /apps'; sleep 0.5\n", cx);
+        wait_for_line(&dirs, "copying to /apps", cx);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter escape");
+        wait_until(cx, |_| !started.borrow().is_empty());
+        let version = env!("CARGO_PKG_VERSION");
+        let lines = messages(&log_text(&dirs));
+        assert_eq!(
+            lines.last().unwrap(),
+            &format!("installed {version} -> 999.0.0")
+        );
     }
 
     #[gpui_kit::test]
@@ -9713,6 +9810,33 @@ pub(crate) mod tab_order {
         let order = ["button:Not now", "button:Update and restart"];
         assert_order(cx, "tab", &order, &named);
         assert_order(cx, "shift-tab", &order, &named);
+    }
+
+    #[gpui_kit::test]
+    fn the_install_box_keeps_tab_on_cancel(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let releases = tempfile::tempdir().unwrap();
+        std::fs::create_dir(releases.path().join("v999.0.0")).unwrap();
+        std::fs::write(releases.path().join("v999.0.0/install.sh"), "sleep 30\n").unwrap();
+        let url = format!("file://{}", releases.path().display());
+        file_manager(cx).update(cx, |this, cx| {
+            this.updates.available = yagni_commander_core::update::Version::parse("999.0.0");
+            this.updates.app = Some("/installed/app".into());
+            this.updates.releases = url;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        activate(cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| cx.debug_bounds("update-installing").is_some());
+        let named = Vec::new();
+        assert_focus(cx, "button:Cancel", &named);
+        assert_order(cx, "tab", &["button:Cancel"], &named);
+        assert_order(cx, "shift-tab", &["button:Cancel"], &named);
+        cx.simulate_keystrokes("escape");
+        wait_until(cx, |cx| !dialog_open(cx));
     }
 
     #[gpui_kit::test]

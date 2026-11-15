@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
 
 use gpui_kit::component::WindowExt;
@@ -47,6 +49,28 @@ pub(crate) struct Updates {
 struct InstallingView {
     version: update::Version,
     frame: u32,
+    /// The script's last step; `None` before the first.
+    step: Option<update::Step>,
+    cancelling: bool,
+}
+
+impl InstallingView {
+    fn text(&self) -> String {
+        let version = self.version;
+        match (&self.step, self.cancelling) {
+            (Some(update::Step::Copying(_)), _) => format!("Installing {version}..."),
+            (_, true) => "Cancelling...".to_owned(),
+            (Some(update::Step::Downloading(_)), _) | (None, _) => {
+                format!("Downloading {version}...")
+            }
+        }
+    }
+}
+
+/// What the install thread sends.
+enum Installing {
+    Step(update::Step),
+    Done(Result<(), update::InstallError>),
 }
 
 impl Render for InstallingView {
@@ -59,7 +83,11 @@ impl Render for InstallingView {
             .flex_col()
             .gap(rems_from_px(10.0))
             .pb(rems_from_px(4.0))
-            .child(format!("Installing {}...", self.version))
+            .child(
+                div()
+                    .debug_selector(|| "update-installing-text".into())
+                    .child(self.text()),
+            )
             .child(
                 div()
                     .relative()
@@ -238,45 +266,120 @@ impl FileManager {
         });
     }
 
-    /// Installs on a thread behind a box that can't be closed: the restart
-    /// must not catch a file operation started meanwhile.
+    /// Installs on a thread behind a box that only its Cancel (or Escape)
+    /// closes, and only until the copying begins: the restart must not catch
+    /// a file operation started meanwhile.
     fn install_update(
         &mut self,
         version: update::Version,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let log = self.commander.read(cx).log().cloned();
+        if let Some(log) = &log {
+            log.write(format_args!(
+                "update started {} -> {version}",
+                update::Version::current()
+            ));
+        }
         let (tx, rx) = mpsc::channel();
         let releases = self.updates.releases.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send(update::install(&releases, version));
+        let cancel = Arc::new(AtomicBool::new(false));
+        std::thread::spawn({
+            let cancel = cancel.clone();
+            move || {
+                let result = update::install(&releases, version, &cancel, |step| {
+                    let _ = tx.send(Installing::Step(step));
+                });
+                let _ = tx.send(Installing::Done(result));
+            }
         });
-        let view = cx.new(|_| InstallingView { version, frame: 0 });
+        let view = cx.new(|_| InstallingView {
+            version,
+            frame: 0,
+            step: None,
+            cancelling: false,
+        });
         let progress = view.clone();
+        let press_cancel: Rc<dyn Fn(&mut gpui_kit::App)> = Rc::new({
+            let view = view.clone();
+            move |cx| {
+                view.update(cx, |view, cx| {
+                    // Too late once the copying has begun.
+                    if !matches!(view.step, Some(update::Step::Copying(_))) {
+                        cancel.store(true, Ordering::Relaxed);
+                        view.cancelling = true;
+                        cx.notify();
+                    }
+                })
+            }
+        });
+        let on_press: OnPress = Rc::new({
+            let press_cancel = press_cancel.clone();
+            move |_, cx| press_cancel(cx)
+        });
+        let buttons = ButtonRow::build([("Cancel", on_press)], 0, cx);
+        let row = buttons.clone();
         // After the question's close has run.
         window.defer(cx, move |window, cx| {
+            focus_when_open(buttons.focus_handle(cx), window, cx);
             window.open_dialog(cx, move |dialog, _, cx| {
+                let press_cancel = press_cancel.clone();
                 themed_dialog(dialog, cx)
                     .title("Update yagni-commander")
                     .w(crate::zoom::dialog_width(420.0, cx))
                     .close_button(false)
-                    .keyboard(false)
                     .overlay_closable(false)
                     .child(view.clone())
+                    .footer(buttons.clone())
+                    // Escape cancels too, and Enter (the dialog's own OK,
+                    // which would close it), whatever has focus; the box
+                    // closes when the thread ends.
+                    .on_ok({
+                        let press_cancel = press_cancel.clone();
+                        move |_, _, cx| {
+                            press_cancel(cx);
+                            false
+                        }
+                    })
+                    .on_cancel(move |_, _, cx| {
+                        press_cancel(cx);
+                        false
+                    })
             });
         });
         cx.spawn_in(window, async move |this, cx| {
-            let result = loop {
+            let result = 'run: loop {
                 cx.background_executor().timer(FRAME).await;
                 progress.update(cx, |view, cx| {
                     view.frame += 1;
                     cx.notify();
                 });
-                match rx.try_recv() {
-                    Ok(result) => break result,
-                    Err(TryRecvError::Empty) => {}
-                    Err(TryRecvError::Disconnected) => {
-                        break Err("The update stopped unexpectedly.".to_owned());
+                loop {
+                    match rx.try_recv() {
+                        Ok(Installing::Step(step)) => {
+                            if let Some(log) = &log {
+                                log.write(step_log_line(&step));
+                            }
+                            let copying = matches!(step, update::Step::Copying(_));
+                            progress.update(cx, |view, cx| {
+                                view.step = Some(step);
+                                cx.notify();
+                            });
+                            if copying {
+                                row.update(cx, |row, cx| {
+                                    row.set_enabled(0, false);
+                                    cx.notify();
+                                });
+                            }
+                        }
+                        Ok(Installing::Done(result)) => break 'run result,
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            break 'run Err(update::InstallError::Failed(
+                                "The update stopped unexpectedly.".to_owned(),
+                            ));
+                        }
                     }
                 }
             };
@@ -290,7 +393,7 @@ impl FileManager {
     fn update_installed(
         &mut self,
         version: update::Version,
-        result: Result<(), String>,
+        result: Result<(), update::InstallError>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -305,7 +408,11 @@ impl FileManager {
         }
         let refocus = Some(self.focus.clone());
         let failure = match result {
-            Err(e) => ("Update failed", e),
+            Err(update::InstallError::Cancelled) => {
+                self.focus.focus(window, cx);
+                return;
+            }
+            Err(update::InstallError::Failed(e)) => ("Update failed", e),
             Ok(()) => {
                 let app = self.updates.app.clone().unwrap_or_default();
                 match (self.updates.relaunch)(&app) {
@@ -326,15 +433,28 @@ impl FileManager {
     }
 }
 
-/// The operation log's line for an install attempt.
+/// The operation log's line for an install attempt's end.
 fn install_log_line(
     current: update::Version,
     version: update::Version,
-    result: &Result<(), String>,
+    result: &Result<(), update::InstallError>,
 ) -> String {
     match result {
         Ok(()) => format!("update installed {current} -> {version}"),
-        Err(e) => format!("update failed {current} -> {version}: {}", one_line(e)),
+        Err(update::InstallError::Cancelled) => {
+            format!("update cancelled {current} -> {version}")
+        }
+        Err(update::InstallError::Failed(e)) => {
+            format!("update failed {current} -> {version}: {}", one_line(e))
+        }
+    }
+}
+
+/// The operation log's line for a step the installer reported.
+fn step_log_line(step: &update::Step) -> String {
+    match step {
+        update::Step::Downloading(file) => format!("update downloading {}", one_line(file)),
+        update::Step::Copying(place) => format!("update copying to {}", one_line(place)),
     }
 }
 

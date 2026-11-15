@@ -7,6 +7,7 @@ use std::fmt;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// Redirects to the latest release's tag page (`.../releases/tag/v1.2.3`).
@@ -125,49 +126,217 @@ pub fn installed_app(exe: &Path, home: &Path) -> Option<PathBuf> {
     }
 }
 
+/// A step the installer reports while it runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Step {
+    /// Fetching a release file (`install.sh`, `SHA256SUMS`, the app).
+    Downloading(String),
+    /// Replacing the installed copy with the one downloaded, at this place.
+    /// No longer cancellable: the script ignores the signal from here on.
+    Copying(String),
+}
+
+impl Step {
+    /// A line the release's `install.sh` writes to its output; any other
+    /// line (the Linux tarball's own script talks too) is none.
+    fn parse(line: &str) -> Option<Self> {
+        if let Some(file) = line.strip_prefix("downloading ") {
+            Some(Self::Downloading(file.to_owned()))
+        } else {
+            line.strip_prefix("copying ")
+                .map(|place| Self::Copying(place.to_owned()))
+        }
+    }
+}
+
+/// Why an install didn't happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InstallError {
+    /// `cancel` was set before the copying began. Nothing was changed.
+    Cancelled,
+    /// A sentence for the error box.
+    Failed(String),
+}
+
+/// How often a running install looks at `cancel` and at its child.
+const POLL: Duration = Duration::from_millis(50);
+
 /// Installs release `version` as the README's one-liner does: the release's
 /// own `install.sh`, fetched with `curl` and run by `sh`, which checks the
 /// download and replaces the installed copy. Blocks: run it on a thread.
+/// `step` hears each download and the start of the copying.
+///
+/// Setting `cancel` stops it (every process it started, curl included)
+/// until the script says it is copying; from there the script ignores the
+/// signal, so an install can't stop halfway, and it finishes as if `cancel`
+/// had not been set.
 ///
 /// Always through `curl`: macOS quarantines what an app with
 /// `LSFileQuarantineEnabled` writes, and neither curl nor we set that, so
-/// the unnotarized app opens afterwards. The error is a sentence.
-pub fn install(releases: &str, version: Version) -> Result<(), String> {
+/// the unnotarized app opens afterwards.
+pub fn install(
+    releases: &str,
+    version: Version,
+    cancel: &AtomicBool,
+    mut step: impl FnMut(Step),
+) -> Result<(), InstallError> {
     let url = format!("{releases}/v{version}/install.sh");
-    let script = crate::shell_path::command("curl")
-        .args(["-fsSL", "--max-time", "60", &url])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|e| format!("Cannot run curl: {e}"))?;
-    if !script.status.success() {
-        let stderr = String::from_utf8_lossy(&script.stderr);
-        return Err(github_trouble(&stderr)
-            .unwrap_or_else(|| format!("Cannot download the installer: {}", stderr.trim())));
+    step(Step::Downloading("install.sh".to_owned()));
+    let mut curl = crate::shell_path::command("curl");
+    curl.args(["-fsSL", "--max-time", "60", &url]);
+    let script = run_cancellable(curl, None, cancel, |_| {})
+        .map_err(|e| e.or_failed(|e| format!("Cannot run curl: {e}")))?;
+    if !script.success {
+        return Err(InstallError::Failed(
+            github_trouble(&script.stderr).unwrap_or_else(|| {
+                format!("Cannot download the installer: {}", script.stderr.trim())
+            }),
+        ));
     }
-    let mut child = crate::shell_path::command("sh")
-        .arg("-s")
+    let mut sh = crate::shell_path::command("sh");
+    sh.arg("-s")
         .env("YAGNI_COMMANDER_RELEASES", releases)
         // Would move a Linux install away from the copy being replaced.
-        .env_remove("PREFIX")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Cannot run the installer: {e}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        // A script that stops early shows up in its exit status.
-        let _ = stdin.write_all(&script.stdout);
-    }
-    let done = child
-        .wait_with_output()
-        .map_err(|e| format!("The installer stopped unexpectedly: {e}"))?;
-    if done.status.success() {
+        .env_remove("PREFIX");
+    let mut copying = false;
+    let done = run_cancellable(sh, Some(script.stdout), cancel, |line| {
+        if let Some(found) = Step::parse(line) {
+            copying |= matches!(found, Step::Copying(_));
+            step(found);
+        }
+    });
+    let done = match done {
+        Ok(done) => done,
+        // Too late to cancel: a failure while copying is a failure.
+        Err(RunError::Cancelled(done)) if copying => done,
+        Err(e) => return Err(e.or_failed(|e| format!("Cannot run the installer: {e}"))),
+    };
+    if done.success {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&done.stderr);
-        Err(github_trouble(&stderr)
-            .unwrap_or_else(|| format!("The installer failed: {}", stderr.trim())))
+        Err(InstallError::Failed(
+            github_trouble(&done.stderr)
+                .unwrap_or_else(|| format!("The installer failed: {}", done.stderr.trim())),
+        ))
     }
+}
+
+/// What a finished child left.
+struct Finished {
+    success: bool,
+    stdout: Vec<u8>,
+    stderr: String,
+}
+
+enum RunError {
+    /// Signalled and failed: what it left, in case it was too late.
+    Cancelled(Finished),
+    Io(std::io::Error),
+}
+
+impl RunError {
+    fn or_failed(self, sentence: impl FnOnce(std::io::Error) -> String) -> InstallError {
+        match self {
+            Self::Cancelled(_) => InstallError::Cancelled,
+            Self::Io(e) => InstallError::Failed(sentence(e)),
+        }
+    }
+}
+
+/// Runs `command` in a process group of its own, feeding it `input`, and
+/// hands each line of its output to `line` as it comes. Once `cancel` is
+/// set, the group gets SIGTERM; a child that ignores it (the script while
+/// copying) runs to its end, and its result counts.
+fn run_cancellable(
+    mut command: std::process::Command,
+    input: Option<Vec<u8>>,
+    cancel: &AtomicBool,
+    mut line: impl FnMut(&str),
+) -> Result<Finished, RunError> {
+    use nix::sys::signal::{Signal, killpg};
+    use nix::unistd::Pid;
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::sync::mpsc;
+
+    let mut child = command
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .map_err(RunError::Io)?;
+    let group = Pid::from_raw(child.id() as i32);
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let mut out = child.stdout.take().expect("piped");
+    let reader = std::thread::spawn(move || {
+        let mut buf = [0; 8192];
+        while let Ok(n) = out.read(&mut buf) {
+            if n == 0 || tx.send(buf[..n].to_vec()).is_err() {
+                break;
+            }
+        }
+    });
+    let mut err = child.stderr.take().expect("piped");
+    let errors = std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let _ = err.read_to_end(&mut text);
+        String::from_utf8_lossy(&text).into_owned()
+    });
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+        // On a thread: a script that writes before it has read all of its
+        // input must not wait for us. One that stops early shows up in its
+        // exit status.
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
+    let mut stdout = Vec::new();
+    let mut seen = 0;
+    let mut signalled = false;
+    let mut take = |chunk: Vec<u8>, stdout: &mut Vec<u8>, seen: &mut usize| {
+        stdout.extend_from_slice(&chunk);
+        while let Some(end) = stdout[*seen..].iter().position(|&b| b == b'\n') {
+            line(String::from_utf8_lossy(&stdout[*seen..*seen + end]).trim_end());
+            *seen += end + 1;
+        }
+    };
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) && !signalled {
+            signalled = true;
+            let _ = killpg(group, Signal::SIGTERM);
+        }
+        match rx.recv_timeout(POLL) {
+            Ok(chunk) => take(chunk, &mut stdout, &mut seen),
+            // The output closed: the child is ending, or left it to others.
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if let Some(status) = child.try_wait().map_err(RunError::Io)? {
+                    break status;
+                }
+                std::thread::sleep(POLL);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+        }
+    };
+    let _ = reader.join();
+    while let Ok(chunk) = rx.try_recv() {
+        take(chunk, &mut stdout, &mut seen);
+    }
+    let stderr = errors.join().unwrap_or_default();
+    let finished = Finished {
+        success: status.success(),
+        stdout,
+        stderr,
+    };
+    // Signalled and failed: cancelled, whatever else it said.
+    if signalled && !finished.success {
+        return Err(RunError::Cancelled(finished));
+    }
+    Ok(finished)
 }
 
 /// A sentence for curl's error text when the cause is GitHub or the network,
@@ -402,6 +571,165 @@ mod tests {
         (tmp, url)
     }
 
+    /// `install` with no cancel, the steps dropped.
+    fn run_install(url: &str, version: Version) -> Result<(), InstallError> {
+        install(url, version, &AtomicBool::new(false), |_| {})
+    }
+
+    fn failed(result: Result<(), InstallError>) -> String {
+        match result {
+            Err(InstallError::Failed(e)) => e,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_scripts_downloads_and_copying_are_steps() {
+        let (_tmp, url) = releases(
+            "echo 'installing yagni-commander 1.2.3'\n\
+             echo 'downloading SHA256SUMS'\n\
+             echo 'copying /some/place'\n\
+             echo 'installed /some/place/bin'\n",
+        );
+        let mut steps = Vec::new();
+        install(&url, Version(1, 2, 3), &AtomicBool::new(false), |s| {
+            steps.push(s)
+        })
+        .unwrap();
+        assert_eq!(
+            steps,
+            [
+                Step::Downloading("install.sh".into()),
+                Step::Downloading("SHA256SUMS".into()),
+                Step::Copying("/some/place".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn cancel_before_the_copying_stops_every_process() {
+        let (tmp, url) = releases("");
+        let mark = tmp.path().join("ran on");
+        let script = format!(
+            "echo 'downloading big'\n(sleep 2; touch '{0}') &\nsleep 2; touch '{0}'\n",
+            mark.display()
+        );
+        std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
+        let cancel = AtomicBool::new(false);
+        let started = std::time::Instant::now();
+        let result = install(&url, Version(1, 2, 3), &cancel, |s| {
+            if s == Step::Downloading("big".into()) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(result, Err(InstallError::Cancelled));
+        assert!(started.elapsed() < Duration::from_millis(1500));
+        std::thread::sleep(Duration::from_millis(2500));
+        assert!(!mark.exists(), "a child outlived the cancel");
+    }
+
+    #[test]
+    fn cancel_while_copying_comes_too_late() {
+        let (tmp, url) = releases("");
+        let mark = tmp.path().join("copied");
+        let script = format!(
+            "trap '' TERM\necho 'copying x'\nsleep 0.3; touch '{}'\n",
+            mark.display()
+        );
+        std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
+        let cancel = AtomicBool::new(false);
+        let result = install(&url, Version(1, 2, 3), &cancel, |s| {
+            if matches!(s, Step::Copying(_)) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(result, Ok(()));
+        assert!(mark.exists());
+    }
+
+    #[test]
+    fn a_failure_while_copying_is_no_cancel() {
+        let (_tmp, url) =
+            releases("trap '' TERM\necho 'copying x'\nsleep 0.3\necho 'disk full' >&2; exit 1\n");
+        let cancel = AtomicBool::new(false);
+        let result = install(&url, Version(1, 2, 3), &cancel, |s| {
+            if matches!(s, Step::Copying(_)) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        });
+        assert_eq!(failed(result), "The installer failed: disk full");
+    }
+
+    /// The real `install/install.sh` on a release folder whose tarball's
+    /// own `install.sh` is `inner`.
+    #[cfg(target_os = "linux")]
+    fn real_script_release(inner: &str) -> (tempfile::TempDir, String) {
+        let (tmp, url) = releases("");
+        let name = "yagni-commander-1.2.3-linux-x86_64";
+        let dir = tmp.path().join("v1.2.3");
+        let unpacked = tmp.path().join(name);
+        std::fs::create_dir(&unpacked).unwrap();
+        std::fs::write(unpacked.join("install.sh"), inner).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            unpacked.join("install.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let tarball = format!("{name}.tar.gz");
+        let status = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(dir.join(&tarball))
+            .arg("-C")
+            .arg(tmp.path())
+            .arg(name)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let sum = std::process::Command::new("sha256sum")
+            .arg(dir.join(&tarball))
+            .output()
+            .unwrap();
+        let sum = String::from_utf8(sum.stdout).unwrap();
+        let sum = sum.split_whitespace().next().unwrap();
+        std::fs::write(dir.join("SHA256SUMS"), format!("{sum}  {tarball}\n")).unwrap();
+        // Its machine check let through, so this runs on any Linux.
+        let script = include_str!("../../../install/install.sh")
+            .replace("@VERSION@", "1.2.3")
+            .replace(r#"[ "$(uname -m)" = x86_64 ] ||"#, "true ||");
+        std::fs::write(dir.join("install.sh"), script).unwrap();
+        (tmp, url)
+    }
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn the_install_script_reports_its_steps_and_finishes_a_cancelled_copy() {
+        let marks = tempfile::tempdir().unwrap();
+        let mark = marks.path().join("copied");
+        let inner = format!("#!/bin/sh\nsleep 0.5\ntouch '{}'\n", mark.display());
+        let (_tmp, url) = real_script_release(&inner);
+        let cancel = AtomicBool::new(false);
+        let mut steps = Vec::new();
+        let result = install(&url, Version(1, 2, 3), &cancel, |s| {
+            if matches!(s, Step::Copying(_)) {
+                cancel.store(true, Ordering::Relaxed);
+            }
+            steps.push(s);
+        });
+        assert_eq!(result, Ok(()));
+        assert!(mark.exists(), "the copy ran to its end");
+        assert_eq!(steps.len(), 4, "{steps:?}");
+        assert_eq!(
+            steps[..3],
+            [
+                Step::Downloading("install.sh".into()),
+                Step::Downloading("SHA256SUMS".into()),
+                Step::Downloading("yagni-commander-1.2.3-linux-x86_64.tar.gz".into()),
+            ]
+        );
+        assert!(matches!(&steps[3], Step::Copying(_)), "{steps:?}");
+    }
+
     #[test]
     fn install_runs_the_releases_script_and_points_it_at_the_releases() {
         let (tmp, url) = releases("");
@@ -411,14 +739,14 @@ mod tests {
             mark.display()
         );
         std::fs::write(tmp.path().join("v1.2.3/install.sh"), script).unwrap();
-        install(&url, Version(1, 2, 3)).unwrap();
+        run_install(&url, Version(1, 2, 3)).unwrap();
         assert_eq!(std::fs::read_to_string(mark).unwrap().trim(), url);
     }
 
     #[test]
     fn a_failing_script_says_why() {
         let (_tmp, url) = releases("echo 'install.sh: broken' >&2; exit 1\n");
-        let error = install(&url, Version(1, 2, 3)).unwrap_err();
+        let error = failed(run_install(&url, Version(1, 2, 3)));
         assert_eq!(error, "The installer failed: install.sh: broken");
     }
 
@@ -456,14 +784,14 @@ mod tests {
     fn a_script_stopped_by_github_says_so() {
         let (_tmp, url) =
             releases("echo 'curl: (22) The requested URL returned error: 503' >&2; exit 1\n");
-        let error = install(&url, Version(1, 2, 3)).unwrap_err();
+        let error = failed(run_install(&url, Version(1, 2, 3)));
         assert!(error.contains("(HTTP 503)"), "{error}");
     }
 
     #[test]
     fn a_missing_release_runs_nothing() {
         let (_tmp, url) = releases("");
-        let error = install(&url, Version(9, 9, 9)).unwrap_err();
+        let error = failed(run_install(&url, Version(9, 9, 9)));
         assert!(
             error.starts_with("Cannot download the installer: "),
             "{error}"

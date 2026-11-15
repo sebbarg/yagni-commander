@@ -13,6 +13,12 @@
 # macOS opens it although it is not notarized.
 #
 # Everything runs inside main, so a download cut off halfway runs nothing.
+#
+# The app's update button reads two kinds of output lines: "downloading
+# <file>" before each download and "copying <place>" once the installed
+# copy is about to be replaced. From that line on, INT, TERM and HUP are
+# ignored (also by the programs it starts), so a cancel can't leave half an
+# install; before it, they stop the script and remove its work folder.
 
 set -eu
 
@@ -37,8 +43,15 @@ sha256() {
     fi
 }
 
+# Downloads release file $1 into the work folder, unchecked.
+download() {
+    echo "downloading $1"
+    curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/$1" "$base/$1" || fail "could not download $base/$1"
+}
+
 # Downloads release file $1 into the work folder and checks it.
 fetch() {
+    echo "downloading $1"
     curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/$1" "$base/$1" || fail "could not download $base/$1"
     expected=$(awk -v f="$1" '$2 == f || $2 == "*" f { print $1 }' "$work/SHA256SUMS")
     [ -n "$expected" ] || fail "$1 is not in SHA256SUMS"
@@ -64,6 +77,8 @@ main() {
     [ $uninstall = 1 ] || echo "installing $APP $VERSION"
     work=$(mktemp -d)
     trap 'rm -rf "$work"' EXIT
+    # dash runs the EXIT trap on exit, not when a signal ends it.
+    trap 'exit 130' INT TERM HUP
 
     case $(uname -s) in
     Darwin)
@@ -75,9 +90,11 @@ main() {
         fi
         need ditto
         file=$APP-$VERSION-macos.zip
-        curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
+        download SHA256SUMS
         fetch "$file"
         ditto -x -k "$work/$file" "$work"
+        trap '' INT TERM HUP
+        echo "copying $apps/$APP.app"
         mkdir -p "$apps"
         rm -rf "${apps:?}/$APP.app"
         mv "$work/$APP.app" "$apps/"
@@ -87,12 +104,14 @@ main() {
         [ "$(uname -m)" = x86_64 ] || fail "no release for $(uname -m); build it from source (see the README)"
         need tar
         name=$APP-$VERSION-linux-x86_64
-        curl -fsSL --connect-timeout 20 --speed-limit 1024 --speed-time 30 -o "$work/SHA256SUMS" "$base/SHA256SUMS" || fail "could not download $base/SHA256SUMS"
+        download SHA256SUMS
         fetch "$name.tar.gz"
         tar -xzf "$work/$name.tar.gz" -C "$work"
         if [ $uninstall = 1 ]; then
             "$work/$name/install.sh" uninstall
         else
+            trap '' INT TERM HUP
+            echo "copying ${PREFIX:-$HOME/.local}"
             "$work/$name/install.sh"
         fi
         ;;
