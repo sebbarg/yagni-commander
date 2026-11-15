@@ -20,6 +20,9 @@ pub use crate::user_commands::UserCommand;
 pub struct Config {
     /// Command that F4 runs with the file or directory as its argument, e.g. `code`.
     pub editor: Option<String>,
+    /// Command that Ctrl-Shift-T runs instead of the default terminal, with
+    /// `{active_dir}` for the folder (see [`crate::terminal`]).
+    pub terminal: Option<String>,
     /// Sort names case-sensitively (uppercase before lowercase).
     pub case_sensitive_sort: bool,
     /// Log every file the app creates, copies, moves, renames, trashes or
@@ -55,6 +58,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             editor: None,
+            terminal: None,
             case_sensitive_sort: false,
             log: false,
             log_keep_days: 7,
@@ -77,6 +81,11 @@ const TEMPLATE: &str = r#"# yagni-commander settings
 
 # Command that F4 runs with the file or directory as its argument.
 # editor = "code"
+
+# Command that Ctrl-Shift-T runs instead of the system's default terminal.
+# It starts in the panel's folder; {active_dir} is that folder, for
+# terminals that need it as an argument.
+# terminal = "wezterm start --cwd {active_dir}"
 
 # Sort names case-sensitively (uppercase before lowercase).
 case_sensitive_sort = false
@@ -146,6 +155,7 @@ fn unknown_keys(text: &str) -> Vec<String> {
     // Every field, so the list can't fall behind the struct.
     let filled = Config {
         editor: Some(String::new()),
+        terminal: Some(String::new()),
         theme: Some(String::new()),
         ..Config::default()
     };
@@ -166,6 +176,7 @@ fn unknown_keys(text: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Setting {
     Editor(Option<String>),
+    Terminal(Option<String>),
     CaseSensitiveSort(bool),
     Log(bool),
     LogKeepDays(u32),
@@ -183,6 +194,12 @@ impl Setting {
     pub fn editor(text: &str) -> Self {
         let text = text.trim();
         Self::Editor((!text.is_empty()).then(|| text.to_owned()))
+    }
+
+    /// The terminal command as typed, like [`Setting::editor`].
+    pub fn terminal(text: &str) -> Self {
+        let text = text.trim();
+        Self::Terminal((!text.is_empty()).then(|| text.to_owned()))
     }
 }
 
@@ -202,6 +219,7 @@ impl Config {
     pub fn set(&mut self, setting: &Setting) {
         match setting {
             Setting::Editor(editor) => self.editor = editor.clone(),
+            Setting::Terminal(terminal) => self.terminal = terminal.clone(),
             Setting::CaseSensitiveSort(on) => self.case_sensitive_sort = *on,
             Setting::Log(on) => self.log = *on,
             Setting::LogKeepDays(days) => self.log_keep_days = *days,
@@ -249,6 +267,8 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
     match setting {
         Setting::Editor(None) => remove_keeping_comments(&mut doc, "editor"),
         Setting::Editor(Some(editor)) => doc["editor"] = toml_edit::value(editor.as_str()),
+        Setting::Terminal(None) => remove_keeping_comments(&mut doc, "terminal"),
+        Setting::Terminal(Some(command)) => doc["terminal"] = toml_edit::value(command.as_str()),
         Setting::CaseSensitiveSort(on) => doc["case_sensitive_sort"] = toml_edit::value(*on),
         Setting::Log(on) => doc["log"] = toml_edit::value(*on),
         Setting::LogKeepDays(days) => doc["log_keep_days"] = toml_edit::value(i64::from(*days)),
@@ -606,7 +626,7 @@ mod tests {
 
     #[test]
     fn every_known_key_and_the_template_count_as_known() {
-        let text = "editor = \"e\"\ncase_sensitive_sort = true\nlog = true\nlog_keep_days = 1\nshow_modified = true\nshow_owner = true\nshow_permissions = true\nicons = true\ngit = true\ncheck_updates = true\ntheme = \"t\"\n[[hotlist]]\npath = \"/x\"\n[[commands]]\ncommand = \"c\"\n";
+        let text = "editor = \"e\"\nterminal = \"t\"\ncase_sensitive_sort = true\nlog = true\nlog_keep_days = 1\nshow_modified = true\nshow_owner = true\nshow_permissions = true\nicons = true\ngit = true\ncheck_updates = true\ntheme = \"t\"\n[[hotlist]]\npath = \"/x\"\n[[commands]]\ncommand = \"c\"\n";
         assert_eq!(unknown_keys(text), Vec::<String>::new());
         assert_eq!(unknown_keys(TEMPLATE), Vec::<String>::new());
     }
@@ -641,6 +661,7 @@ mod tests {
         let path = tmp.path().join("config.toml");
         let config = Config {
             editor: Some("zed".into()),
+            terminal: Some("wezterm start --cwd {active_dir}".into()),
             case_sensitive_sort: true,
             log: true,
             log_keep_days: 30,
@@ -714,6 +735,28 @@ case_sensitive_sort = false
             text.starts_with("# my settings\n\n# the editor\n"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_terminal_is_saved_and_emptied_like_the_editor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        Config::load_or_create(&path).unwrap(); // the template: `# terminal = ...`
+        let config = save_setting(&path, &Setting::terminal(" kitty ")).unwrap();
+        assert_eq!(config.terminal.as_deref(), Some("kitty"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.lines().any(|l| l == "terminal = \"kitty\""), "{text}");
+        let config = save_setting(&path, &Setting::terminal("")).unwrap();
+        assert_eq!(config.terminal, None);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.lines().any(|l| l.starts_with("terminal")), "{text}");
+        assert!(
+            text.contains("# terminal = \"wezterm"),
+            "comment kept: {text}"
+        );
+        let mut config = Config::default();
+        config.set(&Setting::terminal("foot"));
+        assert_eq!(config.terminal.as_deref(), Some("foot"));
     }
 
     #[test]

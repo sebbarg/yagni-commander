@@ -482,10 +482,12 @@ impl FileManager {
         });
     }
 
-    /// Starts the terminal in `dir`, on a thread: finding the terminal stats
-    /// files, which could hang on a dead mount.
+    /// Starts the terminal in `dir` (the `terminal` setting, else the
+    /// default one), on a thread: finding the terminal stats files, which
+    /// could hang on a dead mount.
     fn start_terminal(&self, dir: std::path::PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let command = self.terminal.clone();
+        let configured = cx.global::<CurrentConfig>().config.terminal.clone();
+        let command = configured.or_else(|| self.terminal.clone());
         let (failed, failure) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
             if let Err(e) = yagni_commander_core::terminal::open_terminal(command.as_deref(), &dir)

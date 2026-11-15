@@ -111,8 +111,9 @@ pub struct FileManager {
     job: Option<file_ops::RunningJob>,
     /// What F8 uses. Tests replace it so they never touch the real trash.
     trash: yagni_commander_core::file_ops::TrashFn,
-    /// The terminal Ctrl-Shift-T starts; `None` finds the default one.
-    /// Tests replace it so they never start a real terminal.
+    /// The terminal Ctrl-Shift-T starts without a `terminal` setting;
+    /// `None` finds the default one. Tests replace it so they never start
+    /// a real terminal.
     pub(crate) terminal: Option<String>,
     /// The program Enter on a file runs with its path (xdg-open, open).
     /// Tests replace it so they never start a real application.

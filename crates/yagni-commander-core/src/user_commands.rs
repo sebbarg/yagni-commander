@@ -245,6 +245,40 @@ pub fn prepare(command: &str, panels: &Panels, home: &Path) -> Result<App, &'sta
     })
 }
 
+const TERMINAL_ONLY: &str = "A terminal command takes no parameter but {active_dir}";
+
+/// The `terminal` setting (Ctrl-Shift-T) as a program to start in `dir`:
+/// split like a user command, `~/` expanded the same way, and
+/// `{active_dir}`, the folder, its only parameter.
+pub fn prepare_terminal(command: &str, dir: &Path, home: &Path) -> Result<App, &'static str> {
+    let unknown = |why| if why == UNKNOWN { TERMINAL_ONLY } else { why };
+    for word in split(command).into_iter().flatten() {
+        let only_dir = pieces(&word).map_err(unknown)?.iter().all(|piece| {
+            matches!(
+                piece,
+                Piece::Text(_)
+                    | Piece::Parameter {
+                        active: true,
+                        part: Part::Dir
+                    }
+            )
+        });
+        if !only_dir {
+            return Err(TERMINAL_ONLY);
+        }
+    }
+    let place = Place {
+        entry: dir.to_owned(),
+        dir: dir.to_owned(),
+    };
+    let panels = Panels {
+        active: place,
+        inactive: None,
+        cwd: dir.to_owned(),
+    };
+    prepare(command, &panels, home)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +466,39 @@ mod tests {
     #[test]
     fn a_bad_command_is_not_prepared() {
         assert!(prepare("a \"b", &panels("/f"), Path::new("/h")).is_err());
+    }
+
+    #[test]
+    fn a_terminal_command_gets_its_folder_as_active_dir() {
+        let (dir, home) = (Path::new("/f/a b"), Path::new("/h"));
+        let app = prepare_terminal("wezterm start --cwd {active_dir}", dir, home).unwrap();
+        assert_eq!(app.program, "wezterm");
+        assert_eq!(app.args, os(&["start", "--cwd", "/f/a b"]));
+        assert_eq!(app.dir, dir);
+        let app = prepare_terminal("~/bin/t --dir={active_dir} 'x y'", dir, home).unwrap();
+        assert_eq!(app.program, "/h/bin/t");
+        assert_eq!(app.args, os(&["--dir=/f/a b", "x y"]));
+        let app = prepare_terminal("awk '{print $1}'", dir, home).unwrap();
+        assert_eq!(app.args, os(&["{print $1}"]), "other braces are text");
+    }
+
+    #[test]
+    fn a_terminal_command_takes_no_other_parameter() {
+        let (dir, home) = (Path::new("/f"), Path::new("/h"));
+        for command in [
+            "t {active_path}",
+            "t {inactive_dir}",
+            "t {activ_dir}",
+            "t {dir}",
+        ] {
+            assert_eq!(
+                prepare_terminal(command, dir, home).unwrap_err(),
+                TERMINAL_ONLY,
+                "{command}"
+            );
+        }
+        assert!(prepare_terminal("t \"x", dir, home).is_err());
+        assert!(prepare_terminal("{active_dir}", dir, home).is_err());
+        assert!(prepare_terminal("  ", dir, home).is_err());
     }
 }

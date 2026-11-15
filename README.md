@@ -153,6 +153,8 @@ The settings dialog (Ctrl-,) edits a TOML file you can also edit by hand; Ctrl-R
 
 Set `editor` to the command F4 runs, for example `editor = "code --wait"`. If its window opens behind yagni-commander, see [Windows that open behind yagni-commander](#windows-that-open-behind-yagni-commander).
 
+Ctrl-Shift-T opens a terminal in the active panel's folder. On Linux it uses `$TERMINAL`, then your desktop's choice (KDE), then the first common terminal it finds; on macOS, Terminal.app. To pick one yourself, set `terminal` to the command to run, with `{active_dir}` for the folder if the terminal needs it as an argument: `terminal = "wezterm start --cwd {active_dir}"`, `terminal = "kitty --directory {active_dir}"`, or on macOS `terminal = "/Applications/WezTerm.app/Contents/MacOS/wezterm start --cwd {active_dir}"`.
+
 Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` (light) or `classic` (light), or pick one in the settings dialog; it switches at once.
 
 ## Development

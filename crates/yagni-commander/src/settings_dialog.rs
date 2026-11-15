@@ -30,6 +30,7 @@ use crate::theme::{self, Theme};
 pub struct SettingsView {
     file_manager: WeakEntity<FileManager>,
     editor: Entity<InputState>,
+    terminal: Entity<InputState>,
     days: Entity<InputState>,
     /// The Theme dropdown: the built-ins' display names.
     theme: Entity<Dropdown>,
@@ -41,6 +42,7 @@ pub struct SettingsView {
     /// Typed into since the last commit. Only an edited field is saved, so
     /// the text it opened with can't undo a hand edit of the file.
     editor_edited: bool,
+    terminal_edited: bool,
     days_edited: bool,
     /// Cancelled: nothing more is saved (a field's blur as the dialog
     /// closes would undo the revert).
@@ -62,6 +64,13 @@ impl SettingsView {
             let mut state = InputState::new(window, cx)
                 .placeholder("e.g. code --wait")
                 .default_value(config.editor.clone().unwrap_or_default());
+            state.set_disabled(disabled, cx);
+            state
+        });
+        let terminal = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("e.g. wezterm start --cwd {active_dir}")
+                .default_value(config.terminal.clone().unwrap_or_default());
             state.set_disabled(disabled, cx);
             state
         });
@@ -102,6 +111,15 @@ impl SettingsView {
                 },
             ),
             cx.subscribe_in(
+                &terminal,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.terminal_edited = true,
+                    InputEvent::Blur => this.commit_terminal(window, cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
                 &days,
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
@@ -114,12 +132,14 @@ impl SettingsView {
         Self {
             file_manager,
             editor,
+            terminal,
             days,
             theme,
             days_error: None,
             log_dir,
             log_dir_copied: false,
             editor_edited: false,
+            terminal_edited: false,
             days_edited: false,
             cancelled: false,
             _subscriptions: subscriptions,
@@ -166,6 +186,7 @@ impl SettingsView {
     pub fn tab_stops(&self, cx: &App) -> Vec<(&'static str, gpui_kit::FocusHandle)> {
         vec![
             ("editor", self.editor.focus_handle(cx)),
+            ("terminal", self.terminal.focus_handle(cx)),
             ("days", self.days.focus_handle(cx)),
             ("theme", self.theme.focus_handle(cx)),
         ]
@@ -174,6 +195,11 @@ impl SettingsView {
     #[cfg(test)]
     pub fn editor_text(&self, cx: &App) -> String {
         self.editor.read(cx).value().to_string()
+    }
+
+    #[cfg(test)]
+    pub fn terminal_text(&self, cx: &App) -> String {
+        self.terminal.read(cx).value().to_string()
     }
 
     #[cfg(test)]
@@ -196,6 +222,14 @@ impl SettingsView {
         }
         let text = self.editor.read(cx).value().to_string();
         self.change(Setting::editor(&text), window, cx);
+    }
+
+    fn commit_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.terminal_edited) {
+            return;
+        }
+        let text = self.terminal.read(cx).value().to_string();
+        self.change(Setting::terminal(&text), window, cx);
     }
 
     fn commit_days(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -225,7 +259,7 @@ impl SettingsView {
             .iter()
             .chain(&PANEL_SWITCHES)
             .find(|s| hotlist::label(s.1).letter == Some(letter));
-        if !(switch.is_some() || "ted".contains(letter)) {
+        if !(switch.is_some() || "terd".contains(letter)) {
             return false;
         }
         if disabled {
@@ -235,6 +269,7 @@ impl SettingsView {
             (_, Some(&(_, _, value, make))) => self.change(make(!value(&config)), window, cx),
             ('t', _) => self.theme.update(cx, |d, cx| d.open(window, cx)),
             ('e', _) => select_field(&self.editor, window, cx),
+            ('r', _) => select_field(&self.terminal, window, cx),
             _ => select_field(&self.days, window, cx),
         }
         cx.notify();
@@ -245,6 +280,7 @@ impl SettingsView {
     /// days field holds an invalid value.
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.commit_editor(window, cx);
+        self.commit_terminal(window, cx);
         self.commit_days(window, cx);
         self.days_error.is_none()
     }
@@ -259,8 +295,8 @@ type SwitchDef = (
     fn(bool) -> Setting,
 );
 
-/// The general column's switches, in order (Theme, Editor and the days
-/// field take T, E and D).
+/// The general column's switches, in order (Theme, Editor, Terminal and
+/// the days field take T, E, R and D).
 const GENERAL_SWITCHES: [SwitchDef; 3] = [
     (
         "settings-sort",
@@ -421,6 +457,22 @@ impl Render for SettingsView {
                             .debug_selector(|| "settings-editor".into())
                             .child(text_field(&self.editor)),
                     ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(crate::zoom::rems_from_px(4.0))
+                    .child(marked_label("Te&rminal"))
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-terminal".into())
+                            .child(text_field(&self.terminal)),
+                    )
+                    .child(hint(
+                        "Empty: the system's default. {active_dir} is the folder it starts in."
+                            .into(),
+                    )),
             )
             .children(GENERAL_SWITCHES.iter().map(switch))
             .child(

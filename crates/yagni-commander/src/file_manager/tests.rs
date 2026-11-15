@@ -3253,6 +3253,37 @@ fn ok_keeps_the_changes(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn typing_a_terminal_saves_it_and_emptying_it_removes_it(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-r");
+    cx.simulate_input("wezterm start --cwd {active_dir}");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!settings_open(cx));
+    let command = "wezterm start --cwd {active_dir}";
+    assert_eq!(config(cx).terminal.as_deref(), Some(command));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains(&format!("terminal = \"{command}\"")),
+        "{text}"
+    );
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    let view = file_manager(cx).read_with(cx, |this, _| this.settings.clone().unwrap());
+    assert_eq!(view.read_with(cx, |v, cx| v.terminal_text(cx)), command);
+    cx.simulate_keystrokes("alt-r backspace enter");
+    cx.run_until_parked();
+    assert_eq!(config(cx).terminal, None);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("terminal ="), "{text}");
+}
+
+#[gpui_kit::test]
 fn keys_reach_the_panels_after_settings_close(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
@@ -3273,7 +3304,7 @@ fn tab_reaches_the_switches_and_space_toggles_them(cx: &mut TestAppContext) {
     use_log_dir(logs.path(), cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab"); // sort switch
+    cx.simulate_keystrokes("tab tab"); // past Terminal to the sort switch
     press(cx, "space");
     assert!(config(cx).case_sensitive_sort);
     cx.simulate_keystrokes("tab tab"); // past Check for updates to the log switch
@@ -3386,7 +3417,7 @@ fn invalid_days_show_an_error_and_are_not_saved(cx: &mut TestAppContext) {
     let path = use_config(cfg.path(), "log_keep_days = 30\n", cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab tab tab tab"); // editor -> sort -> updates -> log -> days
+    cx.simulate_keystrokes("tab tab tab tab tab"); // editor -> terminal -> sort -> updates -> log -> days
     cx.simulate_keystrokes("ctrl-a");
     cx.simulate_input("0");
     cx.simulate_keystrokes("tab"); // leaving the field checks it
@@ -3497,7 +3528,7 @@ fn enter_with_invalid_days_keeps_the_dialog_open(cx: &mut TestAppContext) {
     use_config(cfg.path(), "", cx);
     activate(cx);
     open_settings_at_editor(cx);
-    cx.simulate_keystrokes("tab tab tab tab ctrl-a");
+    cx.simulate_keystrokes("tab tab tab tab tab ctrl-a");
     cx.simulate_input("0");
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
@@ -4009,6 +4040,10 @@ mod mounts {
         assert!(text.lines().any(|l| l == "git = false"), "{text}");
         let view = file_manager(cx).read_with(cx, |this, _| this.settings.clone().unwrap());
         assert_eq!(view.read_with(cx, |v, cx| v.editor_text(cx)), "vi");
+        // Alt-R: Terminal.
+        cx.simulate_keystrokes("alt-r");
+        cx.simulate_input("foot");
+        assert_eq!(view.read_with(cx, |v, cx| v.terminal_text(cx)), "foot");
         cx.simulate_keystrokes("alt-t");
         cx.run_until_parked();
         assert!(view.read_with(cx, |v, cx| v.theme_open(cx)));
@@ -7405,6 +7440,36 @@ mod open_terminal {
     }
 
     #[gpui_kit::test]
+    fn the_terminal_setting_replaces_the_default_and_gets_the_folder(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let out = tmp.path().join("terminal-ran-in");
+        // `$0` is the folder given, then the folder it started in.
+        let command = format!(
+            r#"terminal = "sh -c 'printf \"%s %s\\n\" \"$0\" \"$(pwd)\" > \"$1\"' {{active_dir}} '{}'""#,
+            out.display()
+        );
+        use_config(cfg.path(), &command, cx);
+        cx.simulate_keystrokes("tab down enter"); // the right panel into a
+        cx.simulate_keystrokes("ctrl-shift-t");
+        let dir = tmp.path().join("a").display().to_string();
+        assert_eq!(started_in(&out, cx), format!("{dir} {dir}"));
+        assert!(!dialog_open(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_terminal_setting_with_another_parameter_shows_an_error(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "terminal = \"kitty {active_path}\"\n", cx);
+        cx.simulate_keystrokes("ctrl-shift-t");
+        wait_until(cx, dialog_open);
+        let text = box_text(cx);
+        assert!(text.starts_with("Cannot open a terminal"), "{text}");
+        assert!(text.contains("no parameter but {active_dir}"), "{text}");
+    }
+
+    #[gpui_kit::test]
     fn a_terminal_that_cannot_start_shows_an_error(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         file_manager(cx).update(cx, |this, _| {
@@ -9666,6 +9731,7 @@ pub(crate) mod tab_order {
         let order = [
             "theme",
             "editor",
+            "terminal",
             // Sort, Check for updates, Log.
             "DialogKeys",
             "DialogKeys",

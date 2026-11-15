@@ -5,11 +5,15 @@
 //! terminal chosen in System Settings (`TerminalApplication` in
 //! `kdeglobals`, Konsole when unset); `xdg-terminal-exec`;
 //! `x-terminal-emulator` (Debian's alternatives link); then a list of
-//! common terminals on `PATH`. macOS opens Terminal.app.
+//! common terminals on `PATH`. macOS opens Terminal.app. The `terminal`
+//! setting, a command with `{active_dir}` for the folder, replaces all of
+//! it ([`open_terminal`]).
 
 use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
+
+use crate::user_commands;
 
 /// What the choice depends on, read from the process and the user's files
 /// by [`Env::current`]; tests build their own.
@@ -156,11 +160,19 @@ impl Env {
     }
 }
 
-/// Ctrl-Shift-T: starts `command` (split like a shell would) or else the
-/// default terminal (macOS: Terminal.app), in `dir`, without waiting. Only
-/// failing to start is an error: a shell's exit code is its own business.
+/// Ctrl-Shift-T: starts `command` (the `terminal` setting, see
+/// [`user_commands::prepare_terminal`]) or else the default terminal
+/// (macOS: Terminal.app), in `dir`, without waiting. Only failing to start
+/// is an error: a shell's exit code is its own business.
 pub fn open_terminal(command: Option<&str>, dir: &Path) -> io::Result<()> {
-    let launch = resolve(command, &Env::current(), cfg!(target_os = "macos"), dir)?;
+    let home = crate::storage::home_dir();
+    let launch = resolve(
+        command,
+        &Env::current(),
+        cfg!(target_os = "macos"),
+        dir,
+        &home,
+    )?;
     let mut child = crate::shell_path::command(&launch.program)
         .args(&launch.args)
         .current_dir(dir)
@@ -178,17 +190,18 @@ pub fn open_terminal(command: Option<&str>, dir: &Path) -> io::Result<()> {
 }
 
 /// What [`open_terminal`] starts.
-fn resolve(command: Option<&str>, env: &Env, macos: bool, dir: &Path) -> io::Result<Launch> {
+fn resolve(
+    command: Option<&str>,
+    env: &Env,
+    macos: bool,
+    dir: &Path,
+    home: &Path,
+) -> io::Result<Launch> {
     if let Some(command) = command {
-        let mut words = shlex::split(command)
-            .ok_or_else(|| io::Error::other("the terminal command has unbalanced quotes"))?
-            .into_iter();
-        let program = words
-            .next()
-            .ok_or_else(|| io::Error::other("the terminal command is empty"))?;
+        let app = user_commands::prepare_terminal(command, dir, home).map_err(io::Error::other)?;
         return Ok(Launch {
-            program: program.into(),
-            args: words.map(Into::into).collect(),
+            program: app.program,
+            args: app.args,
         });
     }
     if macos {
@@ -338,20 +351,23 @@ mod tests {
         let empty = bin(&[]);
         let e = env(empty.path());
         let dir = Path::new(DIR);
-        let given = resolve(Some("my-term -x"), &e, true, dir).unwrap();
-        assert_eq!(strings(&given), ["my-term", "-x"]);
-        let mac = resolve(None, &e, true, dir).unwrap();
+        let home = Path::new("/h");
+        let given = resolve(Some("my-term -x {active_dir}"), &e, true, dir, home).unwrap();
+        assert_eq!(strings(&given), ["my-term", "-x", DIR]);
+        let mac = resolve(None, &e, true, dir, home).unwrap();
         assert_eq!(strings(&mac), ["open", "-a", "Terminal", DIR]);
-        let none = resolve(None, &e, false, dir).unwrap_err();
+        let none = resolve(None, &e, false, dir, home).unwrap_err();
         assert_eq!(none.kind(), io::ErrorKind::NotFound);
         assert!(none.to_string().contains("$TERMINAL"));
-        assert!(resolve(Some("'open"), &e, false, dir).is_err());
-        assert!(resolve(Some("  "), &e, false, dir).is_err());
+        assert!(resolve(Some("'open"), &e, false, dir, home).is_err());
+        assert!(resolve(Some("  "), &e, false, dir, home).is_err());
+        let wrong = resolve(Some("t {active_path}"), &e, false, dir, home).unwrap_err();
+        assert!(wrong.to_string().contains("{active_dir}"), "{wrong}");
         let unbalanced = Env {
             terminal: Some("'kitty".into()),
             ..e.clone()
         };
-        assert!(resolve(None, &unbalanced, false, dir).is_err());
+        assert!(resolve(None, &unbalanced, false, dir, home).is_err());
     }
 
     #[test]

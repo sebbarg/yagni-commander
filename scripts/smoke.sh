@@ -42,6 +42,9 @@ export PATH="$work/bin:$PATH"
 printf '#!/bin/sh\npwd >"%s/terminal-ran-in"\n' "$work" >"$work/bin/fake-terminal"
 chmod +x "$work/bin/fake-terminal"
 export TERMINAL=fake-terminal
+# The same for the terminal setting: records its argument too.
+printf '#!/bin/sh\necho "$1 $(pwd)" >"%s/terminal-ran-in"\n' "$work" >"$work/bin/fake-terminal-arg"
+chmod +x "$work/bin/fake-terminal-arg"
 # A stand-in editor: records the file it was given and exits at once.
 printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
 chmod +x "$work/bin/fake-editor"
@@ -505,8 +508,8 @@ echo "settings: Ctrl-, opens it; Space toggles the sort switch; Enter is OK, Esc
 cfg=$work/config/yagni-commander/config.toml
 keys ctrl+comma
 shot 07e-settings
-# OK has focus on opening; Tab goes round to Theme, then Editor.
-keys Tab Tab Tab space
+# OK has focus on opening; Tab goes round to Theme, then Editor, Terminal.
+keys Tab Tab Tab Tab space
 shot 07f-settings-toggled
 keys Return
 check "setting saved" grep -q "^case_sensitive_sort = true" "$cfg"
@@ -577,7 +580,7 @@ check "back in left after the go-to items" title_is "$left"
 keys ctrl+d Up Return  # Configure...
 shot 07j-hotlist-configure
 keys Escape
-keys ctrl+comma Tab Tab Tab space Return
+keys ctrl+comma Tab Tab Tab Tab space Return
 check "setting saved back" grep -q "^case_sensitive_sort = false" "$cfg"
 
 echo "settings: the Owner column switch hides it (and it stays hidden after the restart)"
@@ -592,18 +595,33 @@ keys ctrl+comma alt+g alt+m Escape
 check "cancel restored the config" cmp -s "$cfg" "$work/config-before"
 
 echo "settings: the Icons switch turns icons off and on"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Return
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "icons = false saved" grep -q "^icons = false" "$cfg"
 shot 07h-icons-off
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab space Return
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "icons = true saved" grep -q "^icons = true" "$cfg"
 
 echo "settings: the Git switch hides the branch in the right panel's header"
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "git = false saved" grep -q "^git = false" "$cfg"
 shot 07h1-git-off
-keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab space Return
+keys ctrl+comma Tab Tab Tab Tab Tab Tab Tab Tab Tab space Return
 check "git = true saved" grep -q "^git = true" "$cfg"
+
+echo "settings: the Terminal field replaces \$TERMINAL, with {active_dir} for the folder"
+keys ctrl+comma alt+r
+typed "fake-terminal-arg {active_dir}"
+shot 07h2-settings-terminal
+keys Return
+check "terminal saved" grep -q '^terminal = "fake-terminal-arg {active_dir}"' "$cfg"
+rm -f "$work/terminal-ran-in"
+keys ctrl+shift+t
+check "the configured terminal got the folder and started in it" has "$work/terminal-ran-in" "$left $left"
+keys ctrl+comma alt+r BackSpace Return
+check "terminal emptied" bash -c "! grep -q '^terminal = ' '$cfg'"
+rm -f "$work/terminal-ran-in"
+keys ctrl+shift+t
+check "back to \$TERMINAL" has "$work/terminal-ran-in" "$left"
 
 echo "a big folder loads in the background"
 typed many
