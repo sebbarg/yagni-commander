@@ -82,6 +82,9 @@ pub struct Row {
     /// last entry where the shown bytes end (before a line ending). Hex
     /// rows: empty.
     pub sources: Vec<u32>,
+    /// Source mode's highlights: ranges of `text` with the caller's class,
+    /// sorted, not overlapping. Empty until `set_classes`.
+    pub classes: Vec<(Range<usize>, u16)>,
 }
 
 impl Row {
@@ -94,6 +97,8 @@ impl Row {
         let mut dim = Vec::new();
         // One slot per mark of the row, filled as its characters show.
         let mut marks: Vec<Option<Range<usize>>> = vec![None; self.marks.len()];
+        let mut classes: Vec<(Range<usize>, u16)> = Vec::new();
+        let mut class_ix = 0;
         let mut selection: Vec<Option<Range<usize>>> = vec![None; self.selection.len()];
         let mut col = 0;
         // `self.dim` is sorted, so one pass over it keeps this linear.
@@ -125,6 +130,16 @@ impl Row {
             if let Some(k) = self.selection.iter().position(|s| s.contains(&ix)) {
                 selection[k].get_or_insert(at..at).end = text.len();
             }
+            // Sorted too: one cursor.
+            while self.classes.get(class_ix).is_some_and(|(r, _)| r.end <= ix) {
+                class_ix += 1;
+            }
+            if let Some((_, class)) = self.classes.get(class_ix).filter(|(r, _)| r.start <= ix) {
+                match classes.last_mut() {
+                    Some((r, c)) if c == class && r.end == at => r.end = text.len(),
+                    _ => classes.push((at..text.len(), *class)),
+                }
+            }
         }
         let marks = marks.into_iter().flatten().collect();
         let selection = selection.into_iter().flatten().collect();
@@ -133,6 +148,7 @@ impl Row {
             dim,
             marks,
             selection,
+            classes,
         }
     }
 }
@@ -152,6 +168,12 @@ impl Row {
 }
 
 impl Row {
+    /// Source mode: `spans` (file byte ranges with a class, sorted, not
+    /// overlapping) become [`Self::classes`]. Nothing for hex rows.
+    pub fn set_classes(&mut self, spans: &[(Range<u64>, u16)]) {
+        self.classes = super::syntax::row_classes(&self.text, &self.sources, self.start, spans);
+    }
+
     /// Where the row's shown bytes end: before its line ending.
     pub fn content_end(&self) -> u64 {
         match self.sources.last() {
@@ -234,6 +256,7 @@ pub struct Visible {
     pub dim: Vec<Range<usize>>,
     pub marks: Vec<Range<usize>>,
     pub selection: Vec<Range<usize>>,
+    pub classes: Vec<(Range<usize>, u16)>,
 }
 
 /// Decodes one unit at the start of `bytes`: a valid UTF-8 character and its
@@ -346,6 +369,7 @@ pub(crate) fn layout_row(bytes: &[u8], start: u64, limit: usize, wrap: Wrap, hl:
         marks,
         selection,
         sources,
+        classes: Vec::new(),
     }
 }
 
@@ -693,6 +717,23 @@ mod tests {
         let shown = row.visible(2, 2);
         assert_eq!(shown.selection, vec![0..2]);
         assert!(row.visible(5, 3).selection.is_empty());
+    }
+
+    #[test]
+    fn classes_land_on_the_characters_and_survive_the_cut() {
+        // "\tfn x": the tab shows as spaces up to column 8.
+        let mut row = layout_row(b"\tfn x", 100, 6, Wrap::Off, Highlight::default());
+        assert_eq!(row.text, "        fn x");
+        row.set_classes(&[(101..103, 1), (104..105, 2)]);
+        assert_eq!(row.classes, vec![(8..10, 1), (11..12, 2)]);
+        let shown = row.visible(9, 10);
+        assert_eq!(shown.text, "n x");
+        assert_eq!(shown.classes, vec![(0..1, 1), (2..3, 2)]);
+        assert!(row.visible(0, 8).classes.is_empty());
+        // Hex rows have no characters to color.
+        let mut hex = crate::viewer::hex::hex_row(b"fn", 0, 8, Highlight::default());
+        hex.set_classes(&[(0..2, 1)]);
+        assert!(hex.classes.is_empty());
     }
 
     #[test]

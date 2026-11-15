@@ -105,6 +105,18 @@ pub struct Colors {
     pub warning: Rgba,
     pub success: Rgba,
     pub info: Rgba,
+    /// The F3 viewer's source mode, on `panel_bg` (a diff's added and
+    /// removed lines use `success` and `error`).
+    pub syntax_keyword: Rgba,
+    pub syntax_string: Rgba,
+    pub syntax_comment: Rgba,
+    pub syntax_type: Rgba,
+    pub syntax_function: Rgba,
+    /// Numbers, booleans and named constants.
+    pub syntax_constant: Rgba,
+    /// Keys and fields: properties, attributes, YAML and TOML keys.
+    pub syntax_property: Rgba,
+    pub syntax_punctuation: Rgba,
 }
 
 impl Global for Theme {}
@@ -439,6 +451,15 @@ mod tests {
                 text_on(c.warning, &[c.panel_bg, c.dialog_bg]),
                 text_on(c.success, &[c.panel_bg, c.dialog_bg]),
                 text_on(c.info, &[c.panel_bg, c.dialog_bg]),
+                // The viewer's source mode.
+                text_on(c.syntax_keyword, &[c.panel_bg]),
+                text_on(c.syntax_string, &[c.panel_bg]),
+                text_on(c.syntax_comment, &[c.panel_bg]),
+                text_on(c.syntax_type, &[c.panel_bg]),
+                text_on(c.syntax_function, &[c.panel_bg]),
+                text_on(c.syntax_constant, &[c.panel_bg]),
+                text_on(c.syntax_property, &[c.panel_bg]),
+                text_on(c.syntax_punctuation, &[c.panel_bg]),
                 // The active side's folder glyph.
                 vec![(c.accent, c.header_active_bg, 3.0)],
             ]

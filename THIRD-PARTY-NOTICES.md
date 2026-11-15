@@ -33,3 +33,14 @@ The font contains glyphs from these icon sets, each under its own license:
 ## nvim-web-devicons
 
 `crates/yagni-commander-core/src/icons/table.rs` is generated from nvim-web-devicons v0.100 (https://github.com/nvim-tree/nvim-web-devicons) by `scripts/gen-icons.py`. MIT License, Copyright (c) 2023 nvim-tree.
+
+## Highlight queries
+
+`crates/yagni-commander/assets/queries/` holds tree-sitter highlight queries that the F3 viewer's source mode registers in place of gpui-component's:
+
+| File | Source | License |
+|---|---|---|
+| `csharp-highlights.scm` | tree-sitter-c-sharp 0.23.5 (https://github.com/tree-sitter/tree-sitter-c-sharp), `queries/highlights.scm`, unchanged. Copyright (c) 2014-2023 Max Brunsfeld, Damien Guard, Amaan Qureshi, and contributors | MIT |
+| `proto-highlights.scm` | tree-sitter-proto 0.2.0 (https://github.com/coder3101/tree-sitter-proto), `queries/highlights.scm`, unchanged | MIT |
+| `swift-highlights.scm` | tree-sitter-swift 0.7.4 (https://github.com/alex-pinkus/tree-sitter-swift), `queries/highlights.scm`, unchanged. Copyright (c) 2021 alex-pinkus | MIT |
+| `kotlin-highlights.scm` | gpui-component 0.7.0 (https://github.com/longbridge/gpui-kit), `src/highlighter/languages/kotlin/highlights.scm`. Modified: four patterns the grammar has no nodes for are left out (see the file's header) | Apache 2.0 |

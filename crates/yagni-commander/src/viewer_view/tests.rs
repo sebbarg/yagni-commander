@@ -2646,3 +2646,194 @@ mod image_mode {
         assert_eq!(cx.windows().len(), before - 1);
     }
 }
+
+mod source_mode {
+    use super::*;
+    use gpui_kit::component::WindowExt;
+    use yagni_commander_core::find::text::Text;
+    use yagni_commander_core::viewer::SOURCE_CAP;
+
+    fn view_named(
+        name: &str,
+        bytes: &[u8],
+        search: Option<Text>,
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<ViewerView>, VisualTestContext) {
+        setup(cx);
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(name);
+        std::fs::write(&path, bytes).unwrap();
+        cx.update(|cx| open(path, main_bounds(), None, search, cx))
+            .unwrap();
+        let window = *cx.windows().last().unwrap();
+        let viewer = viewer_in(window, cx).unwrap();
+        (tmp, viewer, VisualTestContext::from_window(window, cx))
+    }
+
+    /// Lets the parse (and a search) end and their results arrive.
+    fn settle(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) {
+        for _ in 0..400 {
+            cx.executor()
+                .advance_clock(crate::file_manager::commands::OPENER_POLL);
+            cx.run_until_parked();
+            let done = viewer.read_with(cx, |v, _| {
+                !v.searching() && v.source().is_none_or(|s| s.parsed())
+            });
+            if done {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        panic!("the parse never ended");
+    }
+
+    /// The colored parts of the rows on screen, each with its role's name
+    /// (by the theme's color).
+    fn colored(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Vec<(String, String)> {
+        settle(viewer, cx);
+        let c = Theme::default().colors;
+        let roles = [
+            ("keyword", c.syntax_keyword),
+            ("string", c.syntax_string),
+            ("comment", c.syntax_comment),
+            ("type", c.syntax_type),
+            ("function", c.syntax_function),
+            ("constant", c.syntax_constant),
+            ("property", c.syntax_property),
+            ("punctuation", c.syntax_punctuation),
+            ("added", c.success),
+            ("removed", c.error),
+        ];
+        viewer.read_with(cx, |v, _| {
+            v.shown_colored()
+                .iter()
+                .flatten()
+                .map(|(text, color)| {
+                    let role = roles
+                        .iter()
+                        .find(|(_, rgba)| gpui_kit::Hsla::from(*rgba) == *color)
+                        .map_or("?", |(name, _)| name);
+                    (text.clone(), role.to_owned())
+                })
+                .collect()
+        })
+    }
+
+    fn has(parts: &[(String, String)], text: &str, role: &str) -> bool {
+        parts.iter().any(|(t, r)| t == text && r == role)
+    }
+
+    fn status(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> String {
+        settle(viewer, cx);
+        viewer.update(cx, |v, cx| v.status_text(cx))
+    }
+
+    fn dialog_open(cx: &mut VisualTestContext) -> bool {
+        cx.update(|window, cx| window.has_active_dialog(cx))
+    }
+
+    const RUST: &[u8] = b"fn main() {\n    let s = \"hi\"; // done\n}\n";
+
+    #[gpui_kit::test]
+    fn a_file_with_a_grammar_opens_in_source_mode_with_colors(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+        let parts = colored(&viewer, &mut vcx);
+        assert!(has(&parts, "fn", "keyword"), "{parts:?}");
+        assert!(has(&parts, "main", "function"), "{parts:?}");
+        assert!(has(&parts, "\"hi\"", "string"), "{parts:?}");
+        assert!(has(&parts, "// done", "comment"), "{parts:?}");
+        assert!(parts.iter().all(|(_, role)| role != "?"), "{parts:?}");
+        assert!(status(&viewer, &mut vcx).contains(" · Rust · no wrap · "));
+        // The rows are the text view's.
+        assert_eq!(shown(&viewer, &mut vcx)[1], "    let s = \"hi\"; // done");
+    }
+
+    #[gpui_kit::test]
+    fn t_shows_plain_text_and_s_the_colors_again(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+        assert!(!colored(&viewer, &mut vcx).is_empty());
+        vcx.simulate_keystrokes("t");
+        assert!(colored(&viewer, &mut vcx).is_empty());
+        assert!(!status(&viewer, &mut vcx).contains("Rust"));
+        vcx.simulate_keystrokes("h s");
+        assert!(!viewer.read_with(&vcx, |v, _| v.hex()));
+        assert!(has(&colored(&viewer, &mut vcx), "fn", "keyword"));
+    }
+
+    #[gpui_kit::test]
+    fn s_on_a_file_without_a_grammar_says_why_and_stays(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("notes.txt", b"fn x\n", None, cx);
+        settle(&viewer, &mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+        vcx.simulate_keystrokes("s");
+        vcx.run_until_parked();
+        assert!(dialog_open(&mut vcx));
+        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+    }
+
+    #[gpui_kit::test]
+    fn a_file_over_the_cap_opens_as_text_without_a_box(cx: &mut TestAppContext) {
+        let big = vec![b'a'; SOURCE_CAP as usize + 1];
+        let (_tmp, viewer, mut vcx) = view_named("big.rs", &big, None, cx);
+        settle(&viewer, &mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+        assert!(!dialog_open(&mut vcx));
+        vcx.simulate_keystrokes("s");
+        vcx.run_until_parked();
+        assert!(dialog_open(&mut vcx), "asked for, it says why");
+    }
+
+    #[gpui_kit::test]
+    fn a_script_without_an_extension_goes_by_its_first_line(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("run", b"#!/bin/sh\necho hi\n", None, cx);
+        assert!(status(&viewer, &mut vcx).contains(" · Bash · "));
+    }
+
+    #[gpui_kit::test]
+    fn a_markdown_file_opens_rendered_and_s_shows_its_source(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("README.md", b"# Title\n", None, cx);
+        settle(&viewer, &mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_some()));
+        vcx.simulate_keystrokes("s");
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_none()));
+        assert!(status(&viewer, &mut vcx).contains(" · Markdown · "));
+        assert!(!colored(&viewer, &mut vcx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_search_from_find_files_opens_in_source_mode_at_the_match(cx: &mut TestAppContext) {
+        let text = Text {
+            pattern: "\"hi\"".into(),
+            ..Text::default()
+        };
+        let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, Some(text), cx);
+        settle(&viewer, &mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.source().is_some()));
+        assert_eq!(
+            viewer.read_with(&vcx, |v, _| v.current_match()),
+            Some(24..28)
+        );
+        // Marked on top of the string's color (`highlight_runs` draws the
+        // mark over a class).
+        assert_eq!(
+            viewer.read_with(&vcx, |v, _| v.shown_marks()[1].clone()),
+            ["\"hi\""]
+        );
+        assert!(has(&colored(&viewer, &mut vcx), "\"hi\"", "string"));
+    }
+
+    #[gpui_kit::test]
+    fn a_reload_parses_again_and_past_the_cap_falls_back_to_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+        assert!(has(&colored(&viewer, &mut vcx), "fn", "keyword"));
+        let path = viewer.read_with(&vcx, |v, _| v.path.clone());
+        std::fs::write(&path, b"struct Added;\n").unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        assert!(has(&colored(&viewer, &mut vcx), "struct", "keyword"));
+        std::fs::write(&path, vec![b'a'; SOURCE_CAP as usize + 1]).unwrap();
+        vcx.simulate_keystrokes("ctrl-r");
+        settle(&viewer, &mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+        assert!(dialog_open(&mut vcx));
+    }
+}

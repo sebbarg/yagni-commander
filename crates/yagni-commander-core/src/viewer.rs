@@ -10,6 +10,7 @@ mod lines;
 mod picture;
 mod search;
 mod source;
+mod syntax;
 
 pub use copy::{COPY_CAP, Copy, TooLarge};
 pub use document::Document;
@@ -20,3 +21,4 @@ pub use lines::{LineIndex, count_lines};
 pub use picture::{PICTURE_PIXELS, PICTURE_SIDE, Picture, is_picture_name, read_picture};
 pub use search::{Direction, find};
 pub use source::{FileSource, FileStamp, Source};
+pub use syntax::{LANGUAGES, Role, SOURCE_CAP, display_name, language, role, row_classes};

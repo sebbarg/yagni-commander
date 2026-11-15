@@ -18,7 +18,39 @@ yagni-commander-core = { path = "crates/yagni-commander-core" }
 
 # gpui-kit (Longbridge) re-exports gpui (the `gpui-pre` snapshot of a Zed commit),
 # the platform layer and gpui-component. Import everything through `gpui_kit`.
-gpui-kit = "0.7"
+# The F3 viewer's source mode: one feature per language (each grammar is C,
+# built by `cc` and linked statically; JSON comes with `tree-sitter`). Sizes
+# and the owner's choice of languages: SPEC, F3 viewer.
+gpui-kit = { version = "0.7", features = [
+    "tree-sitter",
+    "tree-sitter-bash",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-csharp",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-ejs",
+    "tree-sitter-erb",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-java",
+    "tree-sitter-javascript",
+    "tree-sitter-jsdoc",
+    "tree-sitter-kotlin",
+    "tree-sitter-lua",
+    "tree-sitter-make",
+    "tree-sitter-markdown",
+    "tree-sitter-proto",
+    "tree-sitter-python",
+    "tree-sitter-ruby",
+    "tree-sitter-rust",
+    "tree-sitter-sql",
+    "tree-sitter-swift",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 dirs = "7"
 env_logger = "0.11"
 # Already in the tree via gpui: same version, no new crate.

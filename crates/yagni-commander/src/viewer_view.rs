@@ -27,7 +27,7 @@ use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, Help, LineDown, LineUp,
     PageDown, PageUp, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowImage, ShowMarkdown,
-    ShowText, Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
+    ShowSource, ShowText, Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::file_manager::commands::{configured_editor, show_error, show_message};
@@ -41,6 +41,7 @@ mod picture;
 mod reload;
 mod search;
 mod select;
+mod source;
 
 use markdown::{Markdown, Scroll};
 use picture::PictureMode;
@@ -75,7 +76,9 @@ pub fn window_title(path: &Path) -> String {
 /// with the window.
 /// `search`: Alt-F7's text, searched for from the start of the file.
 /// A Markdown file or an image (by the extension) opens in that mode, unless
-/// it is opened for a search, whose match is in the file's text.
+/// it is opened for a search, whose match is in the file's text; a file with
+/// a grammar opens in source mode (also for a search: its rows are the
+/// text's).
 pub fn open(
     path: PathBuf,
     main: WindowBounds,
@@ -95,13 +98,14 @@ pub fn open(
             let markdown = search.is_none() && markdown::is_markdown_name(&path);
             let picture = search.is_none() && is_picture_name(&path);
             let mut view = ViewerView::new(path, source, temp, window, cx);
+            // Over the limits a mode isn't taken, quietly: nobody asked.
+            if picture {
+                view.show_picture(window, cx);
+            } else if !(markdown && view.try_markdown(cx).is_ok()) {
+                let _ = view.try_source(window, cx);
+            }
             if let Some(text) = search {
                 view.search_from_start(text, window, cx);
-            } else if markdown {
-                // Over the limits it stays text, quietly: nobody asked.
-                let _ = view.try_markdown(cx);
-            } else if picture {
-                view.show_picture(window, cx);
             }
             view
         })
@@ -127,6 +131,8 @@ pub struct ViewerView {
     hex: bool,
     /// Markdown mode (`M`), over the text or hex mode kept below it.
     markdown: Option<Markdown>,
+    /// Source mode (`S`): the text mode, with syntax colors.
+    source: Option<source::SourceMode>,
     /// Image mode (`I`), over whatever mode is kept below it.
     picture: Option<PictureMode>,
     /// The last image read started, so a stale poll stops.
@@ -214,6 +220,7 @@ impl ViewerView {
             wrap: cx.try_global::<Wrapping>().is_some_and(|w| w.0),
             hex: false,
             markdown: None,
+            source: None,
             picture: None,
             next_picture: 0,
             top: 0,
@@ -332,6 +339,7 @@ impl ViewerView {
     fn show_bytes(&mut self, hex: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_picture(window, cx);
         self.markdown = None;
+        self.source = None;
         if self.hex != hex {
             self.hex = hex;
             self.relayout(cx);
@@ -516,7 +524,12 @@ impl ViewerView {
                 self.top
             );
         }
-        let mode = if self.wrap { "wrap" } else { "no wrap" };
+        let mode = match (self.source_name(), self.wrap) {
+            (Some(language), true) => format!("{language} · wrap"),
+            (Some(language), false) => format!("{language} · no wrap"),
+            (None, true) => "wrap".to_owned(),
+            (None, false) => "no wrap".to_owned(),
+        };
         let line = match &self.lines {
             None => "counting lines...".to_owned(),
             Some(index) => {
@@ -556,6 +569,16 @@ impl ViewerView {
     #[cfg(test)]
     fn markdown(&self) -> Option<&Markdown> {
         self.markdown.as_ref()
+    }
+
+    #[cfg(test)]
+    fn source(&self) -> Option<&source::SourceMode> {
+        self.source.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shown_colored(&self) -> &[Vec<(String, gpui_kit::Hsla)>] {
+        &self.shown.colored
     }
 
     #[cfg(test)]
@@ -618,6 +641,8 @@ struct Shown {
     rows: Vec<String>,
     marks: Vec<Vec<String>>,
     selection: Vec<Vec<String>>,
+    /// Source mode's colored parts and their colors.
+    colored: Vec<Vec<(String, gpui_kit::Hsla)>>,
 }
 
 #[cfg(test)]
@@ -761,7 +786,8 @@ impl Render for ViewerView {
                 self.top = self.doc.row_start_at(self.top, self.layout());
             }
         }
-        let visible = self.layout_rows(rows);
+        let mut visible = self.layout_rows(rows);
+        let class_styles = self.color_rows(&mut visible, cx);
         self.shown_end = visible.last().map_or(self.top, |r| r.end);
         self.widest = visible.iter().map(|r| r.width).max().unwrap_or(0);
 
@@ -791,25 +817,39 @@ impl Render for ViewerView {
                 dim: dims,
                 marks,
                 selection,
+                classes,
             } = if self.wraps_rows() {
                 Visible {
                     text: row.text.clone(),
                     dim: row.dim.clone(),
                     marks: row.marks.clone(),
                     selection: row.selection.clone(),
+                    classes: row.classes.clone(),
                 }
             } else {
                 row.visible(self.h_offset, self.cols)
             };
             #[cfg(test)]
-            self.shown.push(&text, &marks, &selection);
-            let highlights: Vec<_> = select::highlight_runs(&dims, &selection, &marks)
+            {
+                self.shown.push(&text, &marks, &selection);
+                self.shown.colored.push(
+                    classes
+                        .iter()
+                        .map(|(r, c)| {
+                            let color = class_styles[*c as usize].color.unwrap_or_default();
+                            (text[r.clone()].to_owned(), color)
+                        })
+                        .collect(),
+                );
+            }
+            let highlights: Vec<_> = select::highlight_runs(&dims, &selection, &marks, &classes)
                 .into_iter()
                 .map(|(range, run)| {
                     let style = match run {
                         Run::Dim => dim,
                         Run::Selected => selected,
                         Run::Marked => marked,
+                        Run::Class(class) => class_styles[class as usize],
                     };
                     (range, style)
                 })
@@ -873,6 +913,7 @@ impl Render for ViewerView {
             .on_action(
                 cx.listener(|this, _: &ShowMarkdown, window, cx| this.show_markdown(window, cx)),
             )
+            .on_action(cx.listener(|this, _: &ShowSource, window, cx| this.show_source(window, cx)))
             .on_action(cx.listener(|this, _: &Help, _, cx| this.toggle_help(cx)))
             .on_action(cx.listener(|this, _: &Reload, window, cx| this.reload(window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))

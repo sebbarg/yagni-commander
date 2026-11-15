@@ -799,6 +799,30 @@ rm "$left/photo.png"
 keys ctrl+r
 sleep 0.5
 
+echo "a .rs file opens in source mode; T shows it plain, S colored again"
+printf '// A sample.\nfn main() {\n    let answer: u32 = 42;\n    println!("{answer} is \\"it\\"");\n}\n' >"$left/sample.rs"
+keys ctrl+r
+typed sample
+keys Escape F3
+xdotool windowfocus "$(xdotool search --name "sample.rs - yagni-commander" | head -1)"
+sleep 1.5
+shot 10h-viewer-source
+keys ctrl+a ctrl+c
+check "source mode copies the file's text" bash -c "xclip -o -selection clipboard | grep -qx '    let answer: u32 = 42;'"
+keys t
+sleep 0.3
+shot 10h1-viewer-source-as-text
+keys s
+sleep 1
+shot 10h2-viewer-source-again
+keys Escape
+check "source viewer closed" bash -c '! xdotool search --name "sample.rs - yagni-commander"'
+xdotool windowfocus "$window"
+sleep 0.5
+rm "$left/sample.rs"
+keys ctrl+r
+sleep 0.5
+
 echo "Enter opens a zip; F3 views an entry; F5 copies entries out"
 mkdir -p "$work/browse/docs"
 printf one >"$work/browse/docs/readme.txt"

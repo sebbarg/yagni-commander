@@ -71,6 +71,7 @@ pub(crate) fn hex_row(bytes: &[u8], start: u64, digits: usize, hl: Highlight) ->
         marks,
         selection,
         sources: Vec::new(),
+        classes: Vec::new(),
     }
 }
 

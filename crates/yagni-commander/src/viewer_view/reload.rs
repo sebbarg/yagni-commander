@@ -130,8 +130,15 @@ impl ViewerView {
                     }
                 }
                 // It grew past the limits: the text view shows it.
-                Err(message) => show_message("Markdown", message, "OK", back, window, cx),
+                Err(message) => show_message("Markdown", message, "OK", back.clone(), window, cx),
             }
+        }
+        if self.source.is_some()
+            && let Err(message) = self.start_source(window, cx)
+        {
+            // It grew past the limits: plain text shows it.
+            self.source = None;
+            show_message("Source", message, "OK", back, window, cx);
         }
         if self.picture.is_some() {
             self.read_picture(window, cx);

@@ -48,20 +48,25 @@ pub(super) enum Run {
     Dim,
     Selected,
     Marked,
+    /// Source mode's colors: an index into the styles of the rows' classes.
+    Class(u16),
 }
 
 /// Non-overlapping, ordered highlight runs over a row's text: a mark wins
-/// over the selection, the selection over a dim placeholder. Each list is
-/// sorted and non-overlapping, so one cursor per list keeps this linear.
+/// over the selection, the selection over a dim placeholder, and all of
+/// them over source mode's colors. Each list is sorted and non-overlapping,
+/// so one cursor per list keeps this linear.
 pub(super) fn highlight_runs(
     dims: &[Range<usize>],
     selection: &[Range<usize>],
     marks: &[Range<usize>],
+    classes: &[(Range<usize>, u16)],
 ) -> Vec<(Range<usize>, Run)> {
     let mut edges: Vec<usize> = dims
         .iter()
         .chain(selection)
         .chain(marks)
+        .chain(classes.iter().map(|(r, _)| r))
         .flat_map(|r| [r.start, r.end])
         .collect();
     edges.sort_unstable();
@@ -72,6 +77,7 @@ pub(super) fn highlight_runs(
         (dims, Run::Dim),
     ];
     let mut cursors = [0; 3];
+    let mut class = 0;
     let mut runs: Vec<(Range<usize>, Run)> = Vec::new();
     for pair in edges.windows(2) {
         let (from, to) = (pair[0], pair[1]);
@@ -84,6 +90,15 @@ pub(super) fn highlight_runs(
                 found = Some(*run);
             }
         }
+        while classes.get(class).is_some_and(|(r, _)| r.end <= from) {
+            class += 1;
+        }
+        let found = found.or_else(|| {
+            classes
+                .get(class)
+                .filter(|(r, _)| r.start <= from)
+                .map(|&(_, c)| Run::Class(c))
+        });
         let Some(run) = found else {
             continue;
         };
@@ -362,9 +377,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn source_colors_show_under_everything_else() {
+        let classes = [(0..4, 1), (4..10, 2)];
+        let one = |r: Range<usize>| std::iter::once(r).collect::<Vec<_>>();
+        let runs = highlight_runs(&one(9..10), &one(2..3), &one(5..6), &classes);
+        assert_eq!(
+            runs,
+            vec![
+                (0..2, Run::Class(1)),
+                (2..3, Run::Selected),
+                (3..4, Run::Class(1)),
+                (4..5, Run::Class(2)),
+                (5..6, Run::Marked),
+                (6..9, Run::Class(2)),
+                (9..10, Run::Dim),
+            ]
+        );
+    }
+
+    #[test]
     fn marks_win_over_the_selection_and_the_selection_over_dims() {
         let one = |r: Range<usize>| std::iter::once(r).collect::<Vec<_>>();
-        let runs = highlight_runs(&[0..1, 5..6], &one(0..8), &one(3..4));
+        let runs = highlight_runs(&[0..1, 5..6], &one(0..8), &one(3..4), &[]);
         assert_eq!(
             runs,
             [
@@ -373,7 +407,7 @@ mod tests {
                 (4..8, Run::Selected),
             ]
         );
-        let runs = highlight_runs(&[0..1, 5..6], &[], &[]);
+        let runs = highlight_runs(&[0..1, 5..6], &[], &[], &[]);
         assert_eq!(runs, [(0..1, Run::Dim), (5..6, Run::Dim)]);
     }
 
@@ -383,7 +417,7 @@ mod tests {
         // character between each, nothing selected or marked.
         let dims: Vec<Range<usize>> = (0..10_000).map(|i| 3 * i..3 * i + 2).collect();
         let start = std::time::Instant::now();
-        let runs = highlight_runs(&dims, &[], &[]);
+        let runs = highlight_runs(&dims, &[], &[], &[]);
         assert_eq!(runs.len(), 10_000);
         // Quadratic takes seconds here in a debug build; linear ~1 ms.
         assert!(start.elapsed() < std::time::Duration::from_millis(100));
@@ -394,7 +428,7 @@ mod tests {
         let dims: Vec<Range<usize>> = vec![0..2, 4..6, 8..10];
         let one = |r: Range<usize>| std::iter::once(r).collect::<Vec<_>>();
         assert_eq!(
-            highlight_runs(&dims, &one(3..7), &[]),
+            highlight_runs(&dims, &one(3..7), &[], &[]),
             [(0..2, Run::Dim), (3..7, Run::Selected), (8..10, Run::Dim)]
         );
     }

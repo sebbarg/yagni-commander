@@ -28,6 +28,8 @@ pub(super) enum Needs {
     NotHex,
     /// Another mode than Markdown (`M`).
     NotMarkdown,
+    /// Another mode than source (`S`).
+    NotSource,
     /// Another mode than image (`I`), and the keys that work on text.
     NotImage,
     /// The file itself, not a private copy of an archive entry or a remote
@@ -41,6 +43,8 @@ pub(super) struct Modes {
     pub hex: bool,
     pub markdown: bool,
     pub image: bool,
+    /// Source mode, under hex, Markdown and image mode when they show.
+    pub source: bool,
     /// A picture zoomed away from fit.
     pub zoomed: bool,
     pub sideways: bool,
@@ -54,9 +58,10 @@ impl Needs {
             Needs::Sideways => (m.sideways && !m.markdown && !m.image) || (m.image && m.zoomed),
             Needs::Moves => !m.image || m.zoomed,
             Needs::Text => !m.hex && !m.markdown && !m.image,
-            Needs::NotText => m.hex || m.markdown || m.image,
+            Needs::NotText => m.hex || m.markdown || m.image || m.source,
             Needs::NotHex => !m.hex || m.markdown || m.image,
             Needs::NotMarkdown => !m.markdown || m.image,
+            Needs::NotSource => !m.source || m.hex || m.markdown || m.image,
             Needs::NotImage => !m.image,
             Needs::File => !m.archive,
         }
@@ -90,6 +95,7 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
             "View",
             &[
                 entry(&["t"], "Text", Needs::NotText),
+                entry(&["s"], "Source, with colors", Needs::NotSource),
                 entry(&["h"], "Hex", Needs::NotHex),
                 entry(&["m"], "Markdown", Needs::NotMarkdown),
                 entry(&["i"], "Image", Needs::NotImage),
@@ -184,6 +190,7 @@ impl ViewerView {
             hex: self.hex,
             markdown: self.markdown.is_some(),
             image: self.picture.is_some(),
+            source: self.source.is_some(),
             zoomed: self.picture.as_ref().is_some_and(|p| p.is_zoomed()),
             sideways: !self.wraps_rows(),
             archive: self.temp.is_some(),
