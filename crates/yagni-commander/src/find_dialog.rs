@@ -85,6 +85,8 @@ pub enum FindEvent {
     /// F3 on a result, with the text searched for (to show its first
     /// match); the dialog stays.
     View(PathBuf, Option<Text>),
+    /// F4 on a result: open it in the editor; the dialog stays.
+    Edit(PathBuf),
     /// Show the results in the active panel; close the dialog.
     Feed(Results),
     /// The Close button.
@@ -588,6 +590,14 @@ impl FindDialog {
         }
     }
 
+    /// F4: the result under the cursor in the editor, a folder too, as F4
+    /// in a panel.
+    fn edit(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self.cursor_path() {
+            cx.emit(FindEvent::Edit(path));
+        }
+    }
+
     fn view(&mut self, cx: &mut Context<Self>) {
         let Some(entry) = self.found.get(self.cursor) else {
             return;
@@ -1021,6 +1031,7 @@ impl Render for FindDialog {
                     .on_action(cx.listener(|this, _: &act::End, _, cx| this.step(isize::MAX, cx)))
                     .on_action(cx.listener(|this, _: &act::Open, _, cx| this.open(cx)))
                     .on_action(cx.listener(|this, _: &act::View, _, cx| this.view(cx)))
+                    .on_action(cx.listener(|this, _: &act::Edit, _, cx| this.edit(cx)))
                     .mt(crate::zoom::rems_from_px(4.0))
                     .h(crate::zoom::dialog_width(LIST_HEIGHT, cx) + self.grown.height)
                     .border_1()

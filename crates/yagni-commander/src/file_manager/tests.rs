@@ -7363,6 +7363,48 @@ mod find_files {
         assert!(dialog_open(cx));
     }
 
+    #[gpui_kit::test]
+    fn f4_on_a_result_opens_the_editor_and_the_dialog_stays(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        let out = tempfile::tempdir().unwrap();
+        let got = out.path().join("got");
+        // The path comes last, so it is the script's `$0`.
+        set_editor(&format!("sh -c 'echo \"$0\" > {}'", got.display()), cx);
+        search(cx, "*.txt");
+        cx.simulate_keystrokes("f4");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        for _ in 0..200 {
+            if std::fs::read_to_string(&got).is_ok_and(|t| t.ends_with('\n')) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            std::fs::read_to_string(&got).unwrap().trim(),
+            tmp.path().join("b/y.txt").display().to_string()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn f4_on_a_result_without_an_editor_says_so_over_the_dialog(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        search(cx, "*.txt");
+        cx.simulate_keystrokes("f4");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot open editor\nNo editor configured: set `editor` in config.toml."
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        // The error box gave the keys back to the list.
+        cx.simulate_keystrokes("f3");
+        cx.run_until_parked();
+        assert_eq!(viewers(cx), 1);
+    }
+
     /// The match the viewer opened by F3 on a result shows, once its
     /// search ends.
     fn viewer_match(cx: &mut VisualTestContext) -> Option<std::ops::Range<u64>> {

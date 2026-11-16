@@ -225,8 +225,8 @@ pub mod find_results {
     gpui_kit::actions!(
         find_results,
         [
-            Up, Down, PageUp, PageDown, Home, End, Open, View, Toggle, SkipOpen, SkipUp, SkipDown,
-            SkipToggle, SkipClose
+            Up, Down, PageUp, PageDown, Home, End, Open, View, Edit, Toggle, SkipOpen, SkipUp,
+            SkipDown, SkipToggle, SkipClose
         ]
     );
 }
@@ -605,6 +605,7 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("end", find_results::End, results),
             KeyBinding::new("enter", find_results::Open, results),
             KeyBinding::new("f3", find_results::View, results),
+            KeyBinding::new("f4", find_results::Edit, results),
             KeyBinding::new("space", find_results::Toggle, Some(FIND_OPTION_CONTEXT)),
             KeyBinding::new(
                 "space",

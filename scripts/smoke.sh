@@ -462,6 +462,9 @@ typed needle
 keys Return
 sleep 1
 shot 08k-find-content
+# F4 on a result opens the editor; the dialog stays.
+keys F4
+check "F4 on a result opened the editor" last_line "$work/edited" "$left/findme/deep/b.rs"
 keys Return
 check "go to file opened its folder" title_is "$left/findme/deep"
 # Closing the results tab shows the tab searched from, still in findme.

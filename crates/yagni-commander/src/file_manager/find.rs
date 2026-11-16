@@ -1,6 +1,6 @@
 //! Alt-F7: opens the find dialog (`crate::find_dialog`) and carries out
-//! what it asks for: go to a result, view it, or feed the results to the
-//! active panel.
+//! what it asks for: go to a result, view or edit it, or feed the results
+//! to the active panel.
 
 use crate::file_manager::commands::themed_dialog;
 use gpui_kit::component::WindowExt;
@@ -10,8 +10,9 @@ use crate::button_row::{OnLetter, dialog_keys};
 use std::rc::Rc;
 
 use super::FileManager;
-use super::commands::show_error;
+use super::commands::{configured_editor, show_error};
 use crate::find_dialog::{FindDialog, FindEvent};
+use yagni_commander_core::launch;
 
 impl FileManager {
     /// Alt-F7: the find dialog, with the last search. Ignored while the
@@ -98,6 +99,15 @@ impl FileManager {
                 if let Err(e) = crate::viewer_view::open(path.clone(), main, None, text, cx) {
                     let back = window.focused(cx);
                     show_error("Cannot view file", e.to_string(), back, window, cx);
+                }
+            }
+            FindEvent::Edit(path) => {
+                let back = window.focused(cx);
+                let Some(editor) = configured_editor(back.clone(), window, cx) else {
+                    return;
+                };
+                if let Err(e) = launch::open_in_editor(&editor, path) {
+                    show_error("Cannot open editor", e.to_string(), back, window, cx);
                 }
             }
             FindEvent::Feed(results) => {
