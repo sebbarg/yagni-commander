@@ -375,24 +375,21 @@ fn typing_jumps_to_matching_name_and_ignores_misses(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn up_and_down_step_through_search_matches(cx: &mut TestAppContext) {
+fn up_and_down_end_the_search_and_move_from_the_match(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
     std::fs::create_dir(tmp.path().join("bb")).unwrap();
     std::fs::write(tmp.path().join("b.txt"), b"").unwrap();
     // .., a, b, bb, b.txt, f
-    cx.simulate_keystrokes("ctrl-r b");
-    assert_eq!(cursor(&commander, Side::Left, cx), 2);
-    cx.simulate_keystrokes("down");
+    cx.simulate_keystrokes("ctrl-r b b");
     assert_eq!(cursor(&commander, Side::Left, cx), 3);
     cx.simulate_keystrokes("down");
-    assert_eq!(cursor(&commander, Side::Left, cx), 4);
-    cx.simulate_keystrokes("down");
-    assert_eq!(cursor(&commander, Side::Left, cx), 2, "wraps");
-    cx.simulate_keystrokes("up");
-    assert_eq!(cursor(&commander, Side::Left, cx), 4, "wraps back");
+    assert_eq!(search(&commander, cx), None, "Down ends the search");
+    assert_eq!(cursor(&commander, Side::Left, cx), 4, "the entry after bb");
     cx.simulate_keystrokes("b down");
-    assert_eq!(cursor(&commander, Side::Left, cx), 3, "only bb matches bb");
-    assert_eq!(search(&commander, cx).as_deref(), Some("bb"));
+    assert_eq!(cursor(&commander, Side::Left, cx), 3, "the entry after b");
+    cx.simulate_keystrokes("f up");
+    assert_eq!(search(&commander, cx), None, "Up ends the search");
+    assert_eq!(cursor(&commander, Side::Left, cx), 4, "the entry before f");
 }
 
 #[gpui_kit::test]

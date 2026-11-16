@@ -1071,14 +1071,12 @@ impl Render for FileManager {
             .on_action(cx.listener(|_, _: &ZoomIn, _, cx| crate::zoom::change_ui(1.0, cx)))
             .on_action(cx.listener(|_, _: &ZoomOut, _, cx| crate::zoom::change_ui(-1.0, cx)))
             .on_action(cx.listener(|_, _: &ZoomReset, _, cx| crate::zoom::reset_ui(cx)))
-            // While a quick search is open, Up/Down step through its matches
-            // and Backspace shortens it.
-            .on_action(cx.listener(|this, _: &CursorUp, _, cx| {
-                this.search_or(|c| c.search_step(false), Command::CursorUp, cx)
-            }))
-            .on_action(cx.listener(|this, _: &CursorDown, _, cx| {
-                this.search_or(|c| c.search_step(true), Command::CursorDown, cx)
-            }))
+            // While a quick search is open, Backspace shortens it. Up/Down
+            // end it and move from the match, like every other command.
+            .on_action(cx.listener(|this, _: &CursorUp, _, cx| this.execute(Command::CursorUp, cx)))
+            .on_action(
+                cx.listener(|this, _: &CursorDown, _, cx| this.execute(Command::CursorDown, cx)),
+            )
             .on_action(cx.listener(|this, _: &CancelSearch, _, cx| this.escape(cx)))
             .on_action(
                 cx.listener(|this, _: &CursorHome, _, cx| this.execute(Command::CursorHome, cx)),

@@ -243,7 +243,7 @@ A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some
 ### Quick search
 
 - Typing any printable character except space (letters, digits, `.`, `-`, ...) opens a small box in the active panel's footer showing the typed text, and moves the cursor to the first entry whose name starts with it, case-insensitively.
-- While the box is open, Down and Up move to the next and previous match, wrapping around at the ends. Backspace removes the last character (removing the last one closes the box); Escape closes it.
+- While the box is open, Backspace removes the last character (removing the last one closes the box); Escape closes it. Up and Down close it and move one row from the match, like PageUp, PageDown, Home and End (owner, 2026-11-16: type to jump, then navigate; there is no stepping between matches).
 - If no entry matches the longer text, the keystroke is ignored: the box and the cursor stay as they are.
 - Any other key, and any mouse click in a panel, closes the box. Enter closes it and opens the entry as usual. There is no timeout.
 

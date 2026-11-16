@@ -948,20 +948,6 @@ impl Commander {
         true
     }
 
-    /// Down/Up while searching: the next or previous match, wrapping around.
-    /// Returns false if no search is open.
-    pub fn search_step(&mut self, forward: bool) -> bool {
-        let Some(prefix) = self.search.prefix() else {
-            return false;
-        };
-        let prefix = prefix.to_owned();
-        let panel = self.panel_mut(self.active);
-        if let Some(index) = panel.find_prefix_from(&prefix, panel.cursor(), forward) {
-            panel.set_cursor(index);
-        }
-        true
-    }
-
     /// Backspace while searching: drops the last character; the cursor stays.
     /// Returns false if no search is open.
     pub fn search_backspace(&mut self) -> bool {
@@ -1708,25 +1694,19 @@ mod tests {
     }
 
     #[test]
-    fn search_steps_through_matches_until_a_command_ends_it() {
+    fn a_command_ends_the_search_and_moves_from_the_match() {
         let (tmp, mut c) = commander();
         fs::create_dir(tmp.path().join("bb")).unwrap();
         run(&mut c, Command::Reload);
-        assert!(!c.search_step(true), "no search open");
         c.search_type('b');
         assert_eq!(under_cursor(&c, Side::Left), "b");
-        assert!(c.search_step(true));
-        assert_eq!(under_cursor(&c, Side::Left), "bb");
-        c.search_step(true);
-        assert_eq!(under_cursor(&c, Side::Left), "b", "wraps");
-        c.search_step(false);
-        assert_eq!(under_cursor(&c, Side::Left), "bb");
         assert!(c.search_cancel());
         assert!(!c.search_cancel());
 
-        c.search_type('a');
+        c.search_type('b');
         c.execute(Command::CursorDown);
         assert_eq!(c.search(), None, "any command ends the search");
+        assert_eq!(under_cursor(&c, Side::Left), "bb");
     }
 
     #[test]
@@ -3112,12 +3092,6 @@ mod results_tests {
         assert_eq!(
             c.panel(Side::Left).cursor_entry().unwrap().label,
             "src/sub/lib.rs"
-        );
-        assert!(c.search_step(true));
-        assert_eq!(
-            c.panel(Side::Left).cursor_entry().unwrap().label,
-            "src/sub/lib.rs",
-            "the only match"
         );
         c.search_cancel();
         assert!(!c.search_type('s'), "src/ is a folder, not the name");
