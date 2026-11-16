@@ -28,6 +28,7 @@ use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{Direction, Images, find, has_scheme};
 
 use super::search::PREFILL_MAX;
+use super::source::code_colors;
 use crate::zoom::{Zoom, scaled};
 
 /// Larger files are refused: the whole file is read and laid out on the
@@ -123,6 +124,17 @@ impl Markdown {
         let images = self.images.clone();
         TextView::new(&self.state)
             .style(text_style(cx))
+            // Undocumented: `shared_code_block_highlighter` is public but
+            // `#[doc(hidden)]` in gpui-base 0.7.0 (gpui-component's own
+            // wrapper uses it the same way). The documented
+            // `code_block_highlighter` wraps its closure in a new `Arc` on
+            // every call, and gpui-base keeps a code block's colors only
+            // while the highlighter is the same `Arc`, so built here on
+            // every frame it would parse every code block on every frame.
+            // `code_colors` hands out one `Arc` per theme. If an upgrade
+            // removes it, the build fails; don't fall back to the
+            // documented one without caching (see `code_colors`).
+            .shared_code_block_highlighter(code_colors(cx))
             .image_source(move |url| image_source(&images, url))
             .selectable(true)
             .scrollable(true)

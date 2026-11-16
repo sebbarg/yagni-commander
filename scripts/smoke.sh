@@ -100,7 +100,7 @@ chmod +x "$left/run.sh"
 seq 1 200000 | sed 's/^/line /' >"$left/big.txt"
 mkdir -p "$left/yc-pics"
 cp "$root/app-icon/hicolor/48x48/apps/yagni-commander.png" "$left/yc-pics/logo.png"
-printf '# Guide\n\nSome **bold** text and a [link](https://example.com).\n\nLogo: ![logo](yc-pics/logo.png) Badge: ![remote badge](https://example.com/b.svg)\n\n## Second heading\n\n- one\n- two\n\n| Key | Action |\n|-----|--------|\n| F3  | View   |\n\n```\ncode block\n```\n' >"$left/guide.md"
+printf '# Guide\n\nSome **bold** text and a [link](https://example.com).\n\nLogo: ![logo](yc-pics/logo.png) Badge: ![remote badge](https://example.com/b.svg)\n\n## Second heading\n\n- one\n- two\n\n| Key | Action |\n|-----|--------|\n| F3  | View   |\n\n```rust\nfn main() { let s = "code block"; }\n```\n' >"$left/guide.md"
 head -c 300000 /dev/zero | tr '\0' 'x' >"$left/oneline.txt"
 mkdir -p "$left/many"
 (cd "$left/many" && seq 1 150000 | xargs touch)

@@ -3,11 +3,16 @@
 //! are the text view's own; a parse of the whole file (gpui-component's
 //! tree-sitter highlighter) adds colors to the rows on screen.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
+use gpui_kit::base::input::Rope;
+use gpui_kit::base::text::CodeBlock;
 use gpui_kit::component::highlighter::{LanguageRegistry, SyntaxHighlighter};
-use gpui_kit::{Context, HighlightStyle, Window};
+use gpui_kit::{App, Context, HighlightStyle, SharedString, Window};
 use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{Role, Row, SOURCE_CAP, display_name, language, role};
 
@@ -93,6 +98,60 @@ impl gpui_kit::base::input::HighlightStyleResolver for Palette {
             ..Default::default()
         })
     }
+}
+
+/// Colors a Markdown code block: its ranges and their styles.
+pub(super) type CodeColors =
+    dyn Fn(&CodeBlock) -> Vec<(Range<usize>, HighlightStyle)> + Send + Sync;
+
+/// Markdown mode's code block colors for the theme in use, the same as
+/// source mode's (gpui-component's own colors are its `highlight_theme`,
+/// which we don't set: a light one, unreadable on dark themes). The same
+/// `Arc` while the theme stays: gpui-base keeps a block's colors only while
+/// it is handed the same highlighter (`Arc::ptr_eq`), and the view is built
+/// on every frame, so a new one would parse every block on every frame.
+pub(super) fn code_colors(cx: &App) -> Arc<CodeColors> {
+    thread_local! {
+        static SHARED: RefCell<Option<(String, Arc<CodeColors>)>> = const { RefCell::new(None) };
+    }
+    let theme = Theme::get(cx);
+    SHARED.with(|shared| {
+        let mut shared = shared.borrow_mut();
+        if let Some((name, colors)) = shared.as_ref()
+            && *name == theme.name
+        {
+            return colors.clone();
+        }
+        register_queries();
+        let palette = Palette(theme.colors.clone());
+        let colors: Arc<CodeColors> = Arc::new(move |block| color_code(block, &palette));
+        *shared = Some((theme.name.clone(), colors.clone()));
+        colors
+    })
+}
+
+/// `block`'s colors by its fence's language (none without one, or for a
+/// language without a grammar). One highlighter per language, reused: making
+/// one compiles its queries.
+fn color_code(block: &CodeBlock, palette: &Palette) -> Vec<(Range<usize>, HighlightStyle)> {
+    thread_local! {
+        static HIGHLIGHTERS: RefCell<HashMap<SharedString, SyntaxHighlighter>> =
+            RefCell::new(HashMap::new());
+    }
+    let Some(lang) = block.lang() else {
+        return Vec::new();
+    };
+    let code = block.code();
+    HIGHLIGHTERS.with(|highlighters| {
+        let mut highlighters = highlighters.borrow_mut();
+        let highlighter = highlighters
+            .entry(lang.clone())
+            .or_insert_with(|| SyntaxHighlighter::new(&lang));
+        // `None`: the change is unknown, so the new text is parsed as if
+        // inserted before the old tree, which leaves nothing to reuse.
+        highlighter.update(None, &Rope::from(code.as_ref()), None);
+        highlighter.styles(&(0..code.len()), palette)
+    })
 }
 
 /// Why `bytes` (all of a file of `len` bytes named `name`) can't be shown in
@@ -336,6 +395,81 @@ mod tests {
             }
         }
         assert!(colorless.is_empty(), "these color nothing: {colorless:?}");
+    }
+
+    /// The style `colors` gives the first `word` in `code`.
+    fn style_of(
+        colors: &[(Range<usize>, HighlightStyle)],
+        code: &str,
+        word: &str,
+    ) -> Option<gpui_kit::Hsla> {
+        let at = code.find(word).unwrap();
+        colors
+            .iter()
+            .find(|(range, _)| range.start <= at && at < range.end)
+            .and_then(|(_, style)| style.color)
+    }
+
+    #[test]
+    fn code_blocks_take_the_themes_syntax_colors() {
+        let theme = Theme::builtin("gruvbox-dark").unwrap();
+        let palette = Palette(theme.colors.clone());
+        let keyword = Some(theme.colors.syntax_keyword.into());
+        let first = "fn main() {}\n";
+        let block = CodeBlock::from_code(first, Some("rust"));
+        assert_eq!(
+            style_of(&color_code(&block, &palette), first, "fn"),
+            keyword
+        );
+
+        // The language's highlighter is reused: a second block is parsed on
+        // its own, not as an edit of the first.
+        let second = "// note\nstruct A;\nfn b() {}\n";
+        let colors = color_code(&CodeBlock::from_code(second, Some("rust")), &palette);
+        assert_eq!(style_of(&colors, second, "fn"), keyword);
+        assert_eq!(
+            style_of(&colors, second, "note"),
+            Some(theme.colors.syntax_comment.into())
+        );
+        assert!(colors.iter().all(|(range, _)| range.end <= second.len()));
+
+        // An alias as fences write it.
+        let shell = "echo hi # note\n";
+        let colors = color_code(&CodeBlock::from_code(shell, Some("sh")), &palette);
+        assert_eq!(
+            style_of(&colors, shell, "note"),
+            Some(theme.colors.syntax_comment.into())
+        );
+    }
+
+    #[test]
+    fn code_blocks_without_a_known_language_stay_plain() {
+        let palette = Palette(Theme::default().colors);
+        let code = "fn main() {}\n";
+        let none: Option<&str> = None;
+        assert!(color_code(&CodeBlock::from_code(code, none), &palette).is_empty());
+        let colors = color_code(&CodeBlock::from_code(code, Some("no-such")), &palette);
+        assert!(colors.iter().all(|(_, style)| style.color.is_none()));
+    }
+
+    /// One highlighter per theme: gpui-base keeps a block's colors only
+    /// while it gets the same `Arc`.
+    #[gpui_kit::test]
+    fn code_colors_stay_the_same_until_the_theme_changes(cx: &mut gpui_kit::TestAppContext) {
+        cx.update(|cx| {
+            cx.set_global(Theme::builtin("tokyo-night").unwrap());
+            let first = code_colors(cx);
+            assert!(Arc::ptr_eq(&first, &code_colors(cx)));
+
+            let theme = Theme::builtin("gruvbox-dark").unwrap();
+            let keyword = Some(theme.colors.syntax_keyword.into());
+            cx.set_global(theme);
+            let second = code_colors(cx);
+            assert!(!Arc::ptr_eq(&first, &second));
+            let code = "fn main() {}\n";
+            let colors = second(&CodeBlock::from_code(code, Some("rust")));
+            assert_eq!(style_of(&colors, code, "fn"), keyword);
+        });
     }
 
     #[test]
