@@ -135,7 +135,7 @@ pub(super) fn code_colors(cx: &App) -> Arc<CodeColors> {
 /// one compiles its queries.
 fn color_code(block: &CodeBlock, palette: &Palette) -> Vec<(Range<usize>, HighlightStyle)> {
     thread_local! {
-        static HIGHLIGHTERS: RefCell<HashMap<SharedString, SyntaxHighlighter>> =
+        static HIGHLIGHTERS: RefCell<HashMap<SharedString, Option<SyntaxHighlighter>>> =
             RefCell::new(HashMap::new());
     }
     let Some(lang) = block.lang() else {
@@ -144,14 +144,27 @@ fn color_code(block: &CodeBlock, palette: &Palette) -> Vec<(Range<usize>, Highli
     let code = block.code();
     HIGHLIGHTERS.with(|highlighters| {
         let mut highlighters = highlighters.borrow_mut();
-        let highlighter = highlighters
+        let entry = highlighters
             .entry(lang.clone())
-            .or_insert_with(|| SyntaxHighlighter::new(&lang));
+            .or_insert_with(|| highlighter_for(&lang));
+        let Some(highlighter) = entry else {
+            return Vec::new();
+        };
         // `None`: the change is unknown, so the new text is parsed as if
         // inserted before the old tree, which leaves nothing to reuse.
         highlighter.update(None, &Rope::from(code.as_ref()), None);
         highlighter.styles(&(0..code.len()), palette)
     })
+}
+
+/// A highlighter for a fence's language, if the registry knows it. Not
+/// `SyntaxHighlighter::new` alone: for an unknown name (` ```mermaid `) it
+/// logs a warning and falls back to plain text, which colors nothing anyway.
+fn highlighter_for(lang: &str) -> Option<SyntaxHighlighter> {
+    LanguageRegistry::singleton()
+        .language(lang)
+        .is_some()
+        .then(|| SyntaxHighlighter::new(lang))
 }
 
 /// Why `bytes` (all of a file of `len` bytes named `name`) can't be shown in
@@ -432,6 +445,13 @@ mod tests {
             Some(theme.colors.syntax_comment.into())
         );
         assert!(colors.iter().all(|(range, _)| range.end <= second.len()));
+
+        // A language without a grammar: plain, and no highlighter is made
+        // (making one for an unknown name logs a warning).
+        assert!(highlighter_for("mermaid").is_none());
+        let diagram = "graph TD; A-->B\n";
+        let block = CodeBlock::from_code(diagram, Some("mermaid"));
+        assert!(color_code(&block, &palette).is_empty());
 
         // An alias as fences write it.
         let shell = "echo hi # note\n";
