@@ -1466,6 +1466,152 @@ mod markdown_mode {
         assert_eq!(now.item_ix, top.item_ix);
     }
 
+    /// Lets a mode change's scroll land: it waits for the blocks, then for
+    /// the top block's height.
+    fn land(cx: &mut VisualTestContext) {
+        settle(cx);
+        for _ in 0..5 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(10));
+            settle(cx);
+        }
+    }
+
+    fn markdown_top(
+        viewer: &Entity<ViewerView>,
+        cx: &mut VisualTestContext,
+    ) -> gpui_kit::ListOffset {
+        viewer.read_with(cx, |v, cx| v.markdown().unwrap().top(cx))
+    }
+
+    /// The number in the top row's `<word> <n>`, or the next row's when
+    /// the top one is blank.
+    fn top_number(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> usize {
+        let rows = shown(viewer, cx);
+        let row = rows.iter().find(|r| !r.trim().is_empty()).unwrap();
+        row.split_whitespace().last().unwrap().parse().unwrap()
+    }
+
+    /// Places are found by block index, so our blocks must be the view's:
+    /// fails if a gpui-base upgrade lists blocks another way.
+    #[gpui_kit::test]
+    fn our_blocks_are_the_blocks_the_view_lists(cx: &mut TestAppContext) {
+        let text = "\
+---
+title: not front matter, a rule and a heading
+---
+
+# Heading
+
+Setext heading
+==============
+
+A paragraph with *emphasis*, `code`, $x^2$, a [link](https://x) and a
+remote ![image](https://example.com/x.png), which becomes its alt text,
+and a footnote[^1].
+
+- a list
+  - nested
+- [ ] a task
+
+1. ordered
+2. list
+
+> a quote
+> > nested
+
+```rust
+fn code() {}
+```
+
+    indented code
+
+| a | b |
+|---|---|
+| 1 | 2 |
+
+<div>
+an HTML block
+</div>
+
+***
+
+$$
+math
+$$
+
+[ref]: https://x
+[^1]: The footnote.
+
+Last paragraph.
+";
+        let (_tmp, viewer, mut vcx) = view_named("blocks.md", text.as_bytes(), None, cx);
+        settle(&mut vcx);
+        let (ours, listed) = viewer.read_with(&vcx, |v, cx| v.markdown().unwrap().block_counts(cx));
+        assert!(listed > 15, "{listed} blocks listed");
+        assert_eq!(ours, listed);
+    }
+
+    #[gpui_kit::test]
+    fn switching_modes_keeps_the_place(cx: &mut TestAppContext) {
+        let text: String = (1..=200).map(|n| format!("Paragraph {n}\n\n")).collect();
+        let (_tmp, viewer, mut vcx) = view_named("long.md", text.as_bytes(), None, cx);
+        land(&mut vcx);
+        vcx.simulate_keystrokes("pagedown pagedown");
+        settle(&mut vcx);
+        let top = markdown_top(&viewer, &mut vcx).item_ix;
+        assert!(top > 0);
+
+        vcx.simulate_keystrokes("t");
+        assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_none()));
+        let paragraph = top_number(&viewer, &mut vcx);
+        assert!(
+            paragraph == top + 1 || paragraph == top + 2,
+            "block {top} on top in Markdown, paragraph {paragraph} in text"
+        );
+
+        vcx.simulate_keystrokes("pagedown pagedown pagedown");
+        let paragraph = top_number(&viewer, &mut vcx);
+        vcx.simulate_keystrokes("m");
+        land(&mut vcx);
+        let top = markdown_top(&viewer, &mut vcx).item_ix;
+        assert!(
+            top + 1 == paragraph || top + 2 == paragraph,
+            "paragraph {paragraph} on top in text, block {top} in Markdown"
+        );
+
+        // Source mode, like text mode.
+        vcx.simulate_keystrokes("s");
+        settle(&mut vcx);
+        assert!(viewer.read_with(&vcx, |v, _| v.source.is_some()));
+        let paragraph = top_number(&viewer, &mut vcx);
+        assert!(paragraph == top + 1 || paragraph == top + 2);
+    }
+
+    #[gpui_kit::test]
+    fn the_place_inside_a_long_block_is_kept(cx: &mut TestAppContext) {
+        let lines: String = (1..=300).map(|n| format!("line {n}\n")).collect();
+        let text = format!("# Code\n\n```\n{lines}```\n\nAfter\n");
+        let (_tmp, viewer, mut vcx) = view_named("code.md", text.as_bytes(), None, cx);
+        land(&mut vcx);
+        vcx.simulate_keystrokes("t");
+        for _ in 0..5 {
+            vcx.simulate_keystrokes("pagedown");
+        }
+        let line = top_number(&viewer, &mut vcx);
+        assert!(line > 100, "line {line}");
+
+        vcx.simulate_keystrokes("m");
+        land(&mut vcx);
+        let top = markdown_top(&viewer, &mut vcx);
+        assert_eq!(top.item_ix, 1, "the code block");
+        assert!(top.offset_in_item > px(0.0), "scrolled into it");
+
+        vcx.simulate_keystrokes("t");
+        let back = top_number(&viewer, &mut vcx);
+        assert!(back.abs_diff(line) <= 10, "line {line}, then line {back}");
+    }
+
     #[gpui_kit::test]
     fn a_reload_past_the_limits_falls_back_to_text(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut vcx) = view_named("doc.md", b"# Title\n", None, cx);

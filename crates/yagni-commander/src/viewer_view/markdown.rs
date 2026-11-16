@@ -25,7 +25,7 @@ use gpui_kit::{
 };
 use yagni_commander_core::find::text::TextQuery;
 use yagni_commander_core::format_size;
-use yagni_commander_core::viewer::{Direction, Images, find, has_scheme};
+use yagni_commander_core::viewer::{Blocks, Direction, Images, find, has_scheme};
 
 use super::search::PREFILL_MAX;
 use super::source::code_colors;
@@ -83,7 +83,8 @@ fn longest_paragraph(bytes: &[u8]) -> u64 {
     longest
 }
 
-/// How often, and how many times, a reload looks for the parsed blocks.
+/// How often, and how many times, a reload or a mode change looks for the
+/// parsed blocks (and then for the top block's height).
 const RESTORE_POLL: Duration = Duration::from_millis(10);
 const RESTORE_TRIES: u32 = 500;
 
@@ -105,6 +106,8 @@ pub(super) struct Markdown {
     pub(super) current: Option<Range<usize>>,
     /// The file of each image shown, by its URL.
     images: Arc<HashMap<String, PathBuf>>,
+    /// Where each block starts in the file.
+    blocks: Blocks,
 }
 
 impl Markdown {
@@ -117,6 +120,7 @@ impl Markdown {
             state,
             current: None,
             images: Arc::new(images.paths),
+            blocks: images.blocks,
         }
     }
 
@@ -166,30 +170,84 @@ impl Markdown {
         self.state.read(cx).list_state().logical_scroll_top()
     }
 
+    /// The file byte at the top of the view: the top block's start, plus
+    /// the share of it scrolled past as that share of its bytes. `None`
+    /// until the blocks are listed.
+    pub(super) fn top_byte(&self, cx: &App) -> Option<usize> {
+        let list = self.state.read(cx).list_state();
+        if list.item_count() == 0 {
+            return None;
+        }
+        let top = list.logical_scroll_top();
+        let height = list
+            .bounds_for_item(top.item_ix)
+            .map_or(0.0, |bounds| f32::from(bounds.size.height));
+        let share = if height > 0.0 {
+            f32::from(top.offset_in_item) / height
+        } else {
+            0.0
+        };
+        Some(self.blocks.byte_of(top.item_ix, share))
+    }
+
+    /// Puts file byte `at` at the top, as near as blocks allow: its block,
+    /// scrolled by the share of its bytes before `at`.
+    pub(super) fn go_to_byte(&self, at: usize, cx: &mut App) {
+        if let Some((item_ix, share)) = self.blocks.place_of(at)
+            && (item_ix, share) != (0, 0.0)
+        {
+            let top = ListOffset {
+                item_ix,
+                offset_in_item: px(0.0),
+            };
+            self.restore_top(top, share, cx);
+        }
+    }
+
     /// Goes to `top` once the new text is parsed and its blocks are listed:
     /// until then the view has nothing to scroll, and listing them resets
-    /// the list to the start.
-    pub(super) fn restore_top(&self, top: ListOffset, cx: &mut App) {
+    /// the list to the start. A `share` above 0 then also scrolls that
+    /// share into the block, once it has been laid out and has a height.
+    pub(super) fn restore_top(&self, top: ListOffset, share: f32, cx: &mut App) {
         let state = self.state.downgrade();
         let list = self.state.read(cx).list_state().clone();
         let timer = cx.background_executor().clone();
         cx.spawn(async move |cx| {
+            let mut placed = None;
             for _ in 0..RESTORE_TRIES {
                 timer.timer(RESTORE_POLL).await;
                 let count = list.item_count();
                 if count == 0 {
                     continue;
                 }
-                list.scroll_to(if top.item_ix < count {
-                    top
-                } else {
-                    ListOffset {
-                        item_ix: count - 1,
-                        offset_in_item: px(0.0),
+                let Some(top) = placed else {
+                    let top = if top.item_ix < count {
+                        top
+                    } else {
+                        ListOffset {
+                            item_ix: count - 1,
+                            offset_in_item: px(0.0),
+                        }
+                    };
+                    list.scroll_to(top);
+                    let _ = state.update(cx, |_, cx| cx.notify());
+                    if share <= 0.0 {
+                        break;
                     }
-                });
-                let _ = state.update(cx, |_, cx| cx.notify());
-                break;
+                    placed = Some(top);
+                    continue;
+                };
+                if list.logical_scroll_top().item_ix != top.item_ix {
+                    break; // scrolled meanwhile
+                }
+                if let Some(bounds) = list.bounds_for_item(top.item_ix) {
+                    list.scroll_to(ListOffset {
+                        item_ix: top.item_ix,
+                        offset_in_item: bounds.size.height * share.min(1.0),
+                    });
+                    let _ = state.update(cx, |_, cx| cx.notify());
+                    break;
+                }
             }
         })
         .detach();
@@ -219,6 +277,13 @@ impl Markdown {
     /// own copy does; empty without one.
     pub(super) fn selected_text(&self, cx: &App) -> String {
         self.state.read(cx).selected_text().trim().to_owned()
+    }
+
+    /// Tests: the blocks we found and the blocks the view lists.
+    #[cfg(test)]
+    pub(super) fn block_counts(&self, cx: &App) -> (usize, usize) {
+        let listed = self.state.read(cx).list_state().item_count();
+        (self.blocks.count(), listed)
     }
 
     /// Tests: the images shown and their files.

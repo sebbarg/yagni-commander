@@ -191,13 +191,14 @@ fn grammar_for(
 }
 
 impl ViewerView {
-    /// `S`: source mode, out of any other mode. A file it can't show stays
-    /// in its mode, with a box saying why.
+    /// `S`: source mode, out of any other mode (from Markdown mode at the
+    /// place it showed). A file it can't show stays in its mode, with a box
+    /// saying why.
     pub(super) fn show_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.try_source(window, cx) {
             Ok(()) => {
                 self.leave_picture(window, cx);
-                self.markdown = None;
+                self.leave_markdown(cx);
                 if self.hex {
                     self.hex = false;
                     self.relayout(cx);

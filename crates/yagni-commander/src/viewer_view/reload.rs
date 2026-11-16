@@ -126,7 +126,7 @@ impl ViewerView {
             match self.try_markdown(cx) {
                 Ok(()) => {
                     if let Some(markdown) = &self.markdown {
-                        markdown.restore_top(top, cx);
+                        markdown.restore_top(top, 0.0, cx);
                     }
                 }
                 // It grew past the limits: the text view shows it.

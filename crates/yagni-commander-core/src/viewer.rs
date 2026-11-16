@@ -15,7 +15,7 @@ mod syntax;
 pub use copy::{COPY_CAP, Copy, TooLarge};
 pub use document::Document;
 pub use hex::{HEX_ROW, offset_digits};
-pub use images::{IMAGE_CAP, Images, has_scheme, local_image};
+pub use images::{Blocks, IMAGE_CAP, Images, has_scheme, local_image};
 pub use layout::{BLOCK, HexColumn, Highlight, MAX_ROW_CHARS, ROW_WINDOW, Row, Visible, Wrap};
 pub use lines::{LineIndex, count_lines};
 pub use picture::{PICTURE_PIXELS, PICTURE_SIDE, Picture, is_picture_name, read_picture};

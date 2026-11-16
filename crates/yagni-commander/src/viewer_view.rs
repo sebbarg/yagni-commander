@@ -301,12 +301,18 @@ impl ViewerView {
         self.relayout(cx);
     }
 
-    /// `M`: Markdown mode, over the text or hex mode, which stays below it.
-    /// A file too large or with a paragraph too long stays in its mode,
-    /// with a box saying why.
+    /// `M`: Markdown mode, over the text or hex mode, which stays below it,
+    /// at the place the text showed. A file too large or with a paragraph
+    /// too long stays in its mode, with a box saying why.
     fn show_markdown(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let entering = self.markdown.is_none();
         match self.try_markdown(cx) {
-            Ok(()) => self.leave_picture(window, cx),
+            Ok(()) => {
+                if entering && let Some(markdown) = &self.markdown {
+                    markdown.go_to_byte(self.top as usize, cx);
+                }
+                self.leave_picture(window, cx);
+            }
             Err(message) => {
                 let back = Some(self.focus.clone());
                 show_message("Markdown", message, "OK", back, window, cx);
@@ -334,11 +340,28 @@ impl ViewerView {
         Ok(())
     }
 
+    /// Out of Markdown mode, if in it, with the text's top row at the place
+    /// it showed.
+    pub(super) fn leave_markdown(&mut self, cx: &mut Context<Self>) {
+        let Some(markdown) = self.markdown.take() else {
+            return;
+        };
+        if let Some(at) = markdown.top_byte(cx) {
+            let layout = self.layout();
+            let top = self
+                .doc
+                .row_start_at((at as u64).min(self.doc.len()), layout);
+            let last = self.doc.last_top(self.screen_rows, layout);
+            self.set_top(top.min(last), cx);
+        }
+    }
+
     /// `T` (`hex` false) and `H` (true): the text or hex view, also out of
-    /// Markdown or image mode. Text comes back in the wrap mode it had.
+    /// Markdown or image mode, at the place Markdown mode showed. Text comes
+    /// back in the wrap mode it had.
     fn show_bytes(&mut self, hex: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.leave_picture(window, cx);
-        self.markdown = None;
+        self.leave_markdown(cx);
         self.source = None;
         if self.hex != hex {
             self.hex = hex;

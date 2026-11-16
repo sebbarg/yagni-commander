@@ -4,6 +4,9 @@
 //! with the parser the view uses (`markdown`, by source position): `![]()`,
 //! reference images (rewritten inline, as the view has no references) and
 //! HTML `<img>` tags.
+//!
+//! Also where each of the view's blocks starts in the source (`Blocks`), so
+//! switching between Markdown mode and the text modes keeps the place.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -28,6 +31,8 @@ const EXTENSIONS: [&str; 12] = [
 pub struct Images {
     pub text: String,
     pub paths: HashMap<String, PathBuf>,
+    /// Where the view's blocks start in `source`.
+    pub blocks: Blocks,
 }
 
 impl Images {
@@ -46,20 +51,25 @@ impl Images {
             find: &find,
         };
         // Only MDX syntax can fail to parse; without a tree nothing changes.
-        if let Ok(root) = markdown::to_mdast(source, &options()) {
-            collect_definitions(&root, &mut found.definitions);
-            found.walk(&root, false);
+        let root = markdown::to_mdast(source, &options()).ok();
+        if let Some(root) = &root {
+            collect_definitions(root, &mut found.definitions);
+            found.walk(root, false);
         }
         let mut edits = found.edits;
         edits.sort_by_key(|(range, _)| range.start);
         let mut text = String::with_capacity(source.len());
         let mut at = 0;
+        // Each replacement made: its range in `text`, then in `source`.
+        let mut applied = Vec::new();
         for (range, replacement) in edits {
             if range.start < at || range.end > source.len() {
                 continue; // overlapping or out of range: leave as is
             }
             text.push_str(&source[at..range.start]);
+            let start = text.len();
             text.push_str(&replacement);
+            applied.push((start..text.len(), range.clone()));
             at = range.end;
         }
         text.push_str(&source[at..]);
@@ -68,7 +78,114 @@ impl Images {
             .into_iter()
             .filter_map(|url| find(&url).map(|path| (url, path)))
             .collect();
-        Self { text, paths }
+        // The view parses `text`; without replacements that is `source`,
+        // already parsed.
+        let starts = if applied.is_empty() {
+            root.as_ref().map(block_starts).unwrap_or_default()
+        } else {
+            markdown::to_mdast(&text, &options())
+                .map(|root| block_starts(&root))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|at| in_source(at, &applied))
+                .collect()
+        };
+        let blocks = Blocks {
+            starts,
+            len: source.len(),
+        };
+        Self {
+            text,
+            paths,
+            blocks,
+        }
+    }
+}
+
+/// The start of each of the root's children: the view lists one block per
+/// child (gpui-base `ast_to_document`).
+fn block_starts(root: &Node) -> Vec<usize> {
+    let Some(children) = root.children() else {
+        return Vec::new();
+    };
+    children
+        .iter()
+        .filter_map(|child| child.position().map(|p| p.start.offset))
+        .collect()
+}
+
+/// Byte `at` of the shown text as a byte of the source, through the
+/// replacements `applied` (sorted); inside one, its start.
+fn in_source(at: usize, applied: &[(Range<usize>, Range<usize>)]) -> usize {
+    let mut shift = (0, 0); // the end of the last replacement before `at`
+    for (shown, source) in applied {
+        if at < shown.start {
+            break;
+        }
+        if at < shown.end {
+            return source.start;
+        }
+        shift = (shown.end, source.end);
+    }
+    at - shift.0 + shift.1
+}
+
+/// Where each of Markdown mode's blocks starts in the file: the place in one
+/// mode found in the other. Bytes before the first block go with it, those
+/// between two blocks with the one before.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct Blocks {
+    starts: Vec<usize>,
+    /// The source's length: where the last block ends.
+    len: usize,
+}
+
+impl Blocks {
+    /// How many blocks: as many as the view lists, or the places are off.
+    pub fn count(&self) -> usize {
+        self.starts.len()
+    }
+
+    /// The block holding byte `at`, and how far into it (0 to 1); `None`
+    /// without blocks.
+    pub fn place_of(&self, at: usize) -> Option<(usize, f32)> {
+        let ix = self
+            .starts
+            .partition_point(|&start| start <= at)
+            .saturating_sub(1);
+        let span = self.span(ix)?;
+        let into = at.clamp(span.start, span.end) - span.start;
+        Some((ix, share(into, span.len())))
+    }
+
+    /// The byte `share` (0 to 1) of the way into block `ix`; the end for a
+    /// block past the last, 0 without blocks.
+    pub fn byte_of(&self, ix: usize, share: f32) -> usize {
+        match self.span(ix) {
+            Some(span) => {
+                let into = (span.len() as f32 * share.clamp(0.0, 1.0)) as usize;
+                span.start + into.min(span.len())
+            }
+            None if self.starts.is_empty() => 0,
+            None => self.len,
+        }
+    }
+
+    /// Block `ix`'s bytes, up to the next block's start; the first one from
+    /// the start of the file.
+    fn span(&self, ix: usize) -> Option<Range<usize>> {
+        self.starts.get(ix)?;
+        let start = if ix == 0 { 0 } else { self.starts[ix] };
+        let end = self.starts.get(ix + 1).copied().unwrap_or(self.len);
+        Some(start..end.max(start))
+    }
+}
+
+fn share(part: usize, whole: usize) -> f32 {
+    if whole == 0 {
+        0.0
+    } else {
+        part as f32 / whole as f32
     }
 }
 
@@ -328,6 +445,62 @@ mod tests {
 
     fn text(source: &str) -> String {
         prepare(source).text
+    }
+
+    #[test]
+    fn blocks_start_where_the_view_lists_them() {
+        let source = "\n# Title\n\nPara one\nline two\n\n```\ncode\n```\n";
+        let blocks = prepare(source).blocks;
+        let para = source.find("Para").unwrap();
+        let code = source.find("```").unwrap();
+        assert_eq!(blocks.starts, [1, para, code]);
+        assert_eq!(blocks.len, source.len());
+        // Lists and quotes are one block each, as in the view.
+        let blocks = prepare("- a\n- b\n\n> q\n> r\n").blocks;
+        assert_eq!(blocks.starts, [0, 9]);
+    }
+
+    #[test]
+    fn blocks_are_found_in_the_source_through_replacements() {
+        let source = "![gone](https://r/x.png) and [![x][r]][r]\n\nNext\n\n[r]: ok/x.png\n";
+        let images = prepare(source);
+        assert_ne!(images.text, source, "both images were rewritten");
+        let next = source.find("Next").unwrap();
+        let definition = source.find("[r]:").unwrap();
+        assert_eq!(images.blocks.starts, [0, next, definition]);
+    }
+
+    #[test]
+    fn a_byte_maps_to_a_block_and_a_share_of_it_and_back() {
+        let blocks = Blocks {
+            starts: vec![2, 10, 20],
+            len: 40,
+        };
+        assert_eq!(blocks.count(), 3);
+        assert_eq!(blocks.place_of(0), Some((0, 0.0)), "before the first");
+        assert_eq!(blocks.place_of(5), Some((0, 0.5)), "the first from 0");
+        assert_eq!(blocks.place_of(10), Some((1, 0.0)));
+        assert_eq!(blocks.place_of(15), Some((1, 0.5)), "up to the next");
+        assert_eq!(blocks.place_of(30), Some((2, 0.5)), "the last to the end");
+        assert_eq!(blocks.place_of(99), Some((2, 1.0)));
+        assert_eq!(blocks.byte_of(0, 0.0), 0);
+        assert_eq!(blocks.byte_of(1, 0.5), 15);
+        assert_eq!(blocks.byte_of(2, 2.0), 40, "a share is at most 1");
+        assert_eq!(blocks.byte_of(2, -1.0), 20);
+        assert_eq!(blocks.byte_of(3, 0.0), 40, "past the last block: the end");
+        for at in [0, 5, 12, 25, 39] {
+            let (ix, share) = blocks.place_of(at).unwrap();
+            assert_eq!(blocks.byte_of(ix, share), at, "{at} round trip");
+        }
+        let none = Blocks::default();
+        assert_eq!(none.count(), 0);
+        assert_eq!(none.place_of(3), None);
+        assert_eq!(none.byte_of(0, 0.5), 0);
+        let empty_last = Blocks {
+            starts: vec![0, 4],
+            len: 4,
+        };
+        assert_eq!(empty_last.place_of(4), Some((1, 0.0)), "an empty block");
     }
 
     #[test]
