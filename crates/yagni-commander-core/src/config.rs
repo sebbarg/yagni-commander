@@ -38,7 +38,8 @@ pub struct Config {
     pub icons: bool,
     /// The Git branch in the path header (see [`crate::git`]).
     pub git: bool,
-    /// Ask GitHub for a newer release at startup (see [`crate::update`]).
+    /// Ask GitHub for a newer release at startup and every hour (see
+    /// [`crate::update`]).
     pub check_updates: bool,
     /// The theme's id (`tokyo-night`, `gruvbox-dark`, `everforest-dark`,
     /// `catppuccin-latte`, `classic`); none
@@ -67,7 +68,7 @@ impl Default for Config {
             show_permissions: true,
             icons: true,
             git: true,
-            check_updates: false,
+            check_updates: true,
             theme: None,
             hotlist: Vec::new(),
             commands: Vec::new(),
@@ -109,9 +110,9 @@ icons = true
 # upstream and a dot when something changed.
 git = true
 
-# Ask GitHub for a newer release at startup; a button in the status bar
-# then offers to install it.
-check_updates = false
+# Ask GitHub for a newer release at startup and every hour; a button in the
+# status bar then offers to install it.
+check_updates = true
 
 # Color theme: "tokyo-night" (the default), "gruvbox-dark", "everforest-dark",
 # "catppuccin-latte" or "classic".
@@ -902,17 +903,17 @@ case_sensitive_sort = false
     }
 
     #[test]
-    fn checking_for_updates_is_off_by_default_saved_and_set() {
+    fn checking_for_updates_is_on_by_default_saved_and_set() {
         let config: Config = toml::from_str("editor = \"vim\"").unwrap();
-        assert!(!config.check_updates);
-        assert!(TEMPLATE.lines().any(|l| l == "check_updates = false"));
+        assert!(config.check_updates);
+        assert!(TEMPLATE.lines().any(|l| l == "check_updates = true"));
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
         fs::write(&path, HAND_WRITTEN).unwrap();
-        let config = save_setting(&path, &Setting::CheckUpdates(true)).unwrap();
-        assert!(config.check_updates);
+        let config = save_setting(&path, &Setting::CheckUpdates(false)).unwrap();
+        assert!(!config.check_updates);
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.lines().any(|l| l == "check_updates = true"), "{text}");
+        assert!(text.lines().any(|l| l == "check_updates = false"), "{text}");
         assert!(text.starts_with("# my settings"));
     }
 

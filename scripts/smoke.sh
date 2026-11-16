@@ -50,7 +50,7 @@ printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
 chmod +x "$work/bin/fake-editor"
 printf '#!/bin/sh\necho "$1" >"%s/user-command"\n' "$work" >"$work/bin/smoke-command"
 chmod +x "$work/bin/smoke-command"
-printf '# smoke config\neditor = "fake-editor"\nlog = true\n\n[[commands]]\nname = "&Smoke"\ncommand = "smoke-command {active_path}"\n' >"$work/config/yagni-commander/config.toml"
+printf '# smoke config\neditor = "fake-editor"\nlog = true\ncheck_updates = false\n\n[[commands]]\nname = "&Smoke"\ncommand = "smoke-command {active_path}"\n' >"$work/config/yagni-commander/config.toml"
 # Two applications for text files (Shift-Enter), found through the
 # temporary XDG folders; the first is the default. Each records its file.
 mkdir -p "$work/data/applications"

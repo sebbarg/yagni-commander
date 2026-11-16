@@ -33,7 +33,7 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
 - A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 27 languages, files up to 4 MiB), hex (H), formatted Markdown (M) and image (I) modes.
-- Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it and offers to install a newer release and restart. With the Settings switch "Check for updates at startup" on (off by default), it also asks at startup, and a button in the status bar makes the same offer.
+- Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it and offers to install a newer release and restart. With the Settings switch "Check for updates" on (the default), it also asks at startup and every hour, and a button in the status bar makes the same offer.
 - Panels follow changes made by other programs.
 - The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
@@ -193,7 +193,7 @@ Version numbers: the major number for changes that break habits or files (keys, 
 
 ### Testing an update
 
-Only an installed copy can update itself (`~/.local/bin/yagni-commander` on Linux, `~/Applications/yagni-commander.app` on macOS), so a test needs an older version installed there. Then use Help > Check for updates, or turn on "Check for updates at startup" and use the button in the status bar.
+Only an installed copy can update itself (`~/.local/bin/yagni-commander` on Linux, `~/Applications/yagni-commander.app` on macOS), so a test needs an older version installed there. Then use Help > Check for updates, or turn on "Check for updates" and use the button in the status bar.
 
 To test the released flow, install an older release with that release's own `install.sh`, which installs the version it came with:
 

@@ -2257,7 +2257,7 @@ mod check_for_updates {
     /// Settings' switch turned on, with `tag` the latest release.
     fn turn_on(tag: &str, cx: &mut VisualTestContext) -> tempfile::TempDir {
         let cfg = tempfile::tempdir().unwrap();
-        use_config(cfg.path(), "", cx);
+        use_config(cfg.path(), "check_updates = false\n", cx);
         release(tag, cx);
         change_setting(Setting::CheckUpdates(true), cx);
         cfg
@@ -2317,7 +2317,7 @@ mod check_for_updates {
     fn a_failed_quiet_check_says_nothing(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
-        use_config(cfg.path(), "", cx);
+        use_config(cfg.path(), "check_updates = false\n", cx);
         change_setting(Setting::CheckUpdates(true), cx);
         wait_until(cx, |cx| {
             !file_manager(cx).read_with(cx, |this, _| this.updates.is_checking())
@@ -2330,7 +2330,7 @@ mod check_for_updates {
     fn startup_checks_only_with_the_setting_on(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
-        use_config(cfg.path(), "", cx);
+        use_config(cfg.path(), "check_updates = false\n", cx);
         let at_start = |cx: &mut VisualTestContext| {
             file_manager(cx).update(cx, |this, cx| this.check_at_start(cx));
         };
@@ -2340,6 +2340,34 @@ mod check_for_updates {
         release("v999.0.0", cx);
         at_start(cx);
         wait_until(cx, available);
+    }
+
+    #[gpui_kit::test]
+    fn it_checks_again_every_hour_while_the_setting_is_on(cx: &mut TestAppContext) {
+        use crate::file_manager::self_update::CHECK_EVERY;
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "check_updates = true\n", cx);
+        release("v0.0.1", cx);
+        file_manager(cx).update(cx, |this, cx| this.check_at_start(cx));
+        let checking = |cx: &mut VisualTestContext| {
+            file_manager(cx).read_with(cx, |this, _| this.updates.is_checking())
+        };
+        wait_until(cx, |cx| !checking(cx));
+        assert!(!available(cx));
+
+        // Off at the hour: no check.
+        use_config(cfg.path(), "check_updates = false\n", cx);
+        cx.executor().advance_clock(CHECK_EVERY);
+        cx.run_until_parked();
+        assert!(!checking(cx));
+
+        // On again by the next one, with a newer release out.
+        use_config(cfg.path(), "check_updates = true\n", cx);
+        release("v999.0.0", cx);
+        cx.executor().advance_clock(CHECK_EVERY);
+        wait_until(cx, available);
+        assert!(button_shown(cx));
     }
 
     #[gpui_kit::test]

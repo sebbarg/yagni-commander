@@ -1,5 +1,6 @@
 //! The update button in the status bar: a quiet check for a newer release
-//! (at startup, and when the setting is turned on), and installing it.
+//! (at startup, every hour, and when the setting is turned on), and
+//! installing it.
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -10,7 +11,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use gpui_kit::component::WindowExt;
 use gpui_kit::{
     AppContext, Context, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, div, relative,
+    StatefulInteractiveElement, Styled, Task, Window, div, relative,
 };
 use yagni_commander_core::{icons, storage, update};
 
@@ -27,6 +28,8 @@ const FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 const SWEEP_FRAMES: u32 = 45;
 /// The moving part's share of the track.
 const BAR: f32 = 0.3;
+/// Between quiet checks after the one at startup.
+pub(crate) const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 type Relaunch = Rc<dyn Fn(&Path) -> Result<(), String>>;
 
@@ -34,6 +37,8 @@ pub(crate) struct Updates {
     /// The newer release the quiet check found: the button shows.
     pub(crate) available: Option<update::Version>,
     checking: bool,
+    /// The hourly checks, started with the one at startup.
+    hourly: Option<Task<()>>,
     /// What to start after an update; `None` if this copy isn't where the
     /// install script puts it, so the button only says how to install.
     pub(crate) app: Option<PathBuf>,
@@ -117,6 +122,7 @@ impl Updates {
         Self {
             available: None,
             checking: false,
+            hourly: None,
             // Now: once the file is replaced, Linux reports it as deleted.
             app: std::env::current_exe()
                 .ok()
@@ -135,9 +141,22 @@ impl Updates {
 }
 
 impl FileManager {
-    /// At startup, if the setting is on. Called by `main`, so app tests,
-    /// whose `update_url` is set after `new`, can never ask GitHub.
+    /// At startup and then every `CHECK_EVERY`, each time if the setting is
+    /// on then. Called by `main`, so app tests, whose `update_url` is set
+    /// after `new`, can never ask GitHub.
     pub(crate) fn check_at_start(&mut self, cx: &mut Context<Self>) {
+        self.check_if_on(cx);
+        self.updates.hourly = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(CHECK_EVERY).await;
+                if this.update(cx, |this, cx| this.check_if_on(cx)).is_err() {
+                    return;
+                }
+            }
+        }));
+    }
+
+    fn check_if_on(&mut self, cx: &mut Context<Self>) {
         if cx.global::<CurrentConfig>().config.check_updates {
             self.check_quietly(cx);
         }

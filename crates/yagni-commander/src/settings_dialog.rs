@@ -306,7 +306,7 @@ const GENERAL_SWITCHES: [SwitchDef; 3] = [
     ),
     (
         "settings-updates",
-        "Check for &updates at startup",
+        "Check for &updates",
         |c| c.check_updates,
         Setting::CheckUpdates,
     ),
