@@ -32,7 +32,7 @@ mod watch;
 use crate::actions::{
     About, Activate, Back, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Connect, Copy,
     CopyHere, CopyName, CopyParentPath, CopyPath, CountFolderSizes, CursorDown, CursorEnd,
-    CursorHome, CursorUp, Delete, DeselectAll, DeselectGroup, DeselectSameExtension,
+    CursorHome, CursorUp, CycleTheme, Delete, DeselectAll, DeselectGroup, DeselectSameExtension,
     DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, FolderHistory,
     Forward, GoToConfig, GoToLog, GoUp, InvertSelection, MakeDirectory, MenuAlt, MountsLeft,
     MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack,
@@ -225,6 +225,25 @@ impl FileManager {
             .then(|| cx.new(|_| MenuBar::new(Vec::new(), focus.clone())));
 
         let this = cx.weak_entity();
+        // App-wide, so the keys work in viewer windows and over dialogs too,
+        // where no FileManager handler is on the dispatch path.
+        let main = window.window_handle();
+        App::on_action(cx, {
+            let this = this.clone();
+            move |_: &CycleTheme, cx: &mut App| {
+                let Some(view) = this.upgrade() else { return };
+                if let Err((title, message)) = view.update(cx, |this, cx| this.cycle_theme(cx)) {
+                    // Deferred: the window is still dispatching the keys, so
+                    // it can't be updated from here.
+                    let target = cx.active_window().unwrap_or(main);
+                    cx.defer(move |cx| {
+                        let _ = target.update(cx, |_, window, cx| {
+                            commands::show_error(title, message, None, window, cx)
+                        });
+                    });
+                }
+            }
+        });
         let mut subscriptions = vec![
             cx.observe_in(&commander, window, |this, commander, window, cx| {
                 this.start_loads(window, cx);
@@ -606,29 +625,37 @@ impl FileManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let current = cx.global::<CurrentConfig>();
-        if current.problem.is_some() {
+        if cx.global::<CurrentConfig>().problem.is_some() {
             return;
         }
+        if let Err(message) = self.save_setting(&setting, cx) {
+            // Deferred: a save on close runs while the settings dialog
+            // is being closed, which would close this error box instead.
+            window.defer(cx, move |window, cx| {
+                commands::show_error("Settings not saved", message, None, window, cx)
+            });
+        }
+    }
+
+    /// [`Self::change_setting`] without the window: the error text of a
+    /// failed save, after the change was applied anyway. The caller checks
+    /// `CurrentConfig::problem`.
+    fn save_setting(&mut self, setting: &Setting, cx: &mut Context<Self>) -> Result<(), String> {
+        let current = cx.global::<CurrentConfig>();
         let path = current.path.clone();
         let mut config = current.config.clone();
-        config.set(&setting);
+        config.set(setting);
         if config == current.config {
-            return;
+            return Ok(());
         }
-        match path.map(|path| config::save_setting(&path, &setting)) {
+        let mut result = Ok(());
+        match path.map(|path| config::save_setting(&path, setting)) {
             Some(Ok(on_disk)) => config = on_disk,
-            Some(Err(e)) => {
-                // Deferred: a save on close runs while the settings dialog
-                // is being closed, which would close this error box instead.
-                let message = e.to_string();
-                window.defer(cx, move |window, cx| {
-                    commands::show_error("Settings not saved", message, None, window, cx)
-                });
-            }
+            Some(Err(e)) => result = Err(e.to_string()),
             None => {}
         }
         self.apply_config(config, cx);
+        result
     }
 
     /// While the config file is broken (or missing a folder), list changes
@@ -650,6 +677,27 @@ impl FileManager {
             cx,
         );
         true
+    }
+
+    /// Ctrl-K Ctrl-T, from any window: switches to the built-in theme after
+    /// the current one (an unset or unknown id counts as the default, Tokyo
+    /// Night) and saves it like Settings' Theme. `Err` is an error box's
+    /// title and text, for the window the keys were pressed in.
+    pub(crate) fn cycle_theme(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<(), (&'static str, String)> {
+        let current = cx.global::<CurrentConfig>();
+        if let Some(problem) = &current.problem {
+            let message = format!("{problem}. Fix the file, then press Ctrl-R.");
+            return Err(("Theme not changed", message));
+        }
+        let name = Theme::named(current.config.theme.as_deref()).0.name;
+        let themes = crate::theme::ids_and_names();
+        let ix = themes.iter().position(|(_, n)| *n == name).unwrap_or(0);
+        let next = themes[(ix + 1) % themes.len()].0;
+        self.save_setting(&Setting::Theme(next.into()), cx)
+            .map_err(|message| ("Settings not saved", message))
     }
 
     /// Saves the whole hotlist to the config file and applies it.

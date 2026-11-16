@@ -107,6 +107,9 @@ actions!(
         ToggleMenu,
         MenuAlt,
         OpenSettings,
+        /// Ctrl-K Ctrl-T, in every window: the next built-in theme, saved like
+        /// Settings' Theme. In no menu.
+        CycleTheme,
         DirectoryHotlist,
         /// Ctrl-S: the user commands popup.
         UserCommands,
@@ -467,6 +470,12 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("ctrl-,", OpenSettings, context),
             KeyBinding::new("escape", CancelSearch, context),
         ],
+    );
+    // Everywhere: the main window, its dialogs and the viewers.
+    bind(
+        cx,
+        mac,
+        [KeyBinding::new("ctrl-k ctrl-t", CycleTheme, None)],
     );
     // The in-window menu bar (Linux; macOS has the native one). "alt" alone
     // is gpui's modifier-only binding: Alt pressed and released with no

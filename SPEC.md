@@ -221,6 +221,7 @@ A key the desktop takes for itself (such as Alt-F7, bound to Move Window by some
 | Alt-Shift-Enter | Count the size of every folder in the active panel (see File list, Folder sizes). Also Commands > Count folder sizes. |
 | Ctrl-Tab / Ctrl-Shift-Tab | Next / previous tab on the active side, wrapping around. |
 | Ctrl-, | Settings (see Config). |
+| Ctrl-K Ctrl-T | Switch to the next built-in theme (the Settings dropdown's order, wrapping round; an unset or unknown theme counts as Tokyo Night) and save it like Settings' Theme. Works in every window: the panels, over any dialog, and in F3 viewers. In no menu, on purpose (owner, 2026-11-16). Refused while the config file is broken, with the error in the window the keys were pressed in. |
 | In text fields | Ctrl-C/X/V and the classic Ctrl-Ins (copy), Shift-Del (cut), Shift-Ins (paste). |
 | Ctrl-=, Ctrl-+, Ctrl-keypad + | Zoom in: the UI level in the main window, the viewer level in a viewer window (see Zoom). |
 | Ctrl--, Ctrl-keypad - | Zoom out (same levels). |

@@ -8268,6 +8268,96 @@ mod themes {
     }
 
     #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_cycles_the_themes_and_saves_each(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "# mine\n", cx);
+        let ids: Vec<_> = crate::theme::ids_and_names();
+        // Unset is the default, the first; the last wraps round to it.
+        for (id, name) in ids.iter().skip(1).chain(ids.iter().take(1)) {
+            cx.simulate_keystrokes("ctrl-k ctrl-t");
+            assert_eq!(&theme_name(cx), name);
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("# mine\n"), "{text}");
+            assert!(text.contains(&format!("theme = \"{id}\"")), "{text}");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_starts_from_the_default_after_an_unknown_theme(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "theme = \"solarized\"\n", cx);
+        cx.simulate_keystrokes("ctrl-k ctrl-t");
+        assert_eq!(theme_name(cx), crate::theme::ids_and_names()[1].1);
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_is_refused_with_a_config_problem(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "log = maybe\n", cx);
+        cx.simulate_keystrokes("ctrl-k ctrl-t");
+        assert_eq!(theme_name(cx), "Tokyo Night");
+        assert!(dialog_open(cx), "the config problem is shown");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "log = maybe\n");
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_works_in_a_dialog(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        cx.simulate_keystrokes("f7");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        cx.simulate_keystrokes("ctrl-k ctrl-t");
+        assert_eq!(theme_name(cx), crate::theme::ids_and_names()[1].1);
+        assert!(dialog_open(cx), "the prompt stays");
+    }
+
+    fn open_viewer(cx: &mut VisualTestContext) -> VisualTestContext {
+        cx.simulate_keystrokes("end f3"); // "f"
+        cx.run_until_parked();
+        let window = cx
+            .windows()
+            .into_iter()
+            .find(|w| crate::viewer_view::tests::viewer_in(*w, cx).is_some())
+            .expect("a viewer");
+        let mut viewer_cx = VisualTestContext::from_window(window, cx);
+        viewer_cx.update(|window, _| window.activate_window());
+        viewer_cx.run_until_parked();
+        viewer_cx
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_works_in_the_viewer(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        let path = use_config(cfg.path(), "", cx);
+        let mut viewer_cx = open_viewer(cx);
+        viewer_cx.simulate_keystrokes("ctrl-k ctrl-t");
+        viewer_cx.run_until_parked();
+        let (id, name) = crate::theme::ids_and_names()[1].clone();
+        assert_eq!(theme_name(cx), name);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&format!("theme = \"{id}\"")), "{text}");
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_t_in_the_viewer_shows_a_config_problem_there(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "log = maybe\n", cx);
+        let mut viewer_cx = open_viewer(cx);
+        viewer_cx.simulate_keystrokes("ctrl-k ctrl-t");
+        viewer_cx.run_until_parked();
+        assert_eq!(theme_name(cx), "Tokyo Night");
+        assert!(dialog_open(&mut viewer_cx), "in the viewer");
+        assert!(!dialog_open(cx), "not in the main window");
+    }
+
+    #[gpui_kit::test]
     fn a_theme_switch_keeps_the_zoom(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let cfg = tempfile::tempdir().unwrap();
