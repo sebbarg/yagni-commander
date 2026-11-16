@@ -191,6 +191,27 @@ git tag -a v1.1.0 -m v1.1.0 && git push origin v1.1.0
 
 Version numbers: the major number for changes that break habits or files (keys, config, state), the minor number for new features, the patch number for fixes only.
 
+### Testing an update
+
+Only an installed copy can update itself (`~/.local/bin/yagni-commander` on Linux, `~/Applications/yagni-commander.app` on macOS), so a test needs an older version installed there. Then use Help > Check for updates, or turn on "Check for updates at startup" and use the button in the status bar.
+
+To test the released flow, install an older release with that release's own `install.sh`, which installs the version it came with:
+
+```sh
+curl -fsSL https://github.com/sebbarg/yagni-commander/releases/download/v1.14.3/install.sh | sh
+```
+
+Pick 1.14.3 or newer: older installers have no Cancel and no Downloading and Installing steps. Releases before 1.10.0 have no update button.
+
+To test update code that isn't released yet, give your build an older version and install it. It then updates to the latest release on GitHub:
+
+1. Lower `version` under `[workspace.package]` in `Cargo.toml`, e.g. to `1.14.0`.
+2. `./build.sh`: the install scripts build nothing, they copy what is in `target/release/`.
+3. `install/install-linux.sh` or `install/install-mac.sh`. Help > About shows the version you installed.
+4. Afterwards, `git checkout Cargo.toml Cargo.lock`. Never commit the lowered version.
+
+An `install.sh` that isn't released yet can't be tested through the app, since the app always asks GitHub. Run it on its own with `YAGNI_COMMANDER_RELEASES=file:///path/to/release-folders YAGNI_COMMANDER_VERSION=<version> sh install/install.sh`, where `v<version>/` in that folder holds the release's files and `SHA256SUMS`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Bundled third-party material (the icon font, the icon table and JetBrains Mono) is listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
