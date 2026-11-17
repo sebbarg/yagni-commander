@@ -268,7 +268,11 @@ pub fn popup_frame<E: Styled>(element: E, theme: &Theme) -> E {
 /// The title of a popup, with a line between it and the rows. It must be the
 /// popup's first child, in a popup without top padding (`pb` only), or the
 /// text is off center between the popup's top edge and the line.
-pub fn popup_title(text: &'static str, selector: &'static str, theme: &Theme) -> gpui_kit::Div {
+pub fn popup_title(
+    text: impl Into<gpui_kit::SharedString>,
+    selector: &'static str,
+    theme: &Theme,
+) -> gpui_kit::Div {
     use crate::zoom::rems_from_px;
     use gpui_kit::{InteractiveElement, ParentElement};
     gpui_kit::div()
@@ -283,7 +287,7 @@ pub fn popup_title(text: &'static str, selector: &'static str, theme: &Theme) ->
         .border_b_1()
         .border_color(theme.colors.raised_border)
         .text_color(theme.colors.text_secondary)
-        .child(text)
+        .child(text.into())
 }
 
 /// The frame of our own controls in dialogs (the dropdown, the find

@@ -133,8 +133,8 @@ impl ViewerView {
                 Err(message) => show_message("Markdown", message, "OK", back.clone(), window, cx),
             }
         }
-        if self.source.is_some()
-            && let Err(message) = self.start_source(window, cx)
+        if let Some(language) = self.source.as_ref().map(|mode| mode.language)
+            && let Err(message) = self.start_source(language, window, cx)
         {
             // It grew past the limits: plain text shows it.
             self.source = None;

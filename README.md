@@ -32,7 +32,7 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - A mounts dropdown per panel (Alt-F1, Alt-F2, or the folder button before the path): Root, USB drives and network mounts (and Home, if it is a filesystem of its own), without the system's own mounts.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
-- A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 27 languages, files up to 4 MiB), hex (H), formatted Markdown (M) and image (I) modes.
+- A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 27 languages, files up to 4 MiB; L picks the language), hex (H), formatted Markdown (M) and image (I) modes.
 - Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it and offers to install a newer release and restart. With the Settings switch "Check for updates" on (the default), it also asks at startup and every hour, and a button in the status bar makes the same offer.
 - Panels follow changes made by other programs.
 - The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.

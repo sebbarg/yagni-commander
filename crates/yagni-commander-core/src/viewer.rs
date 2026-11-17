@@ -21,4 +21,6 @@ pub use lines::{LineIndex, count_lines};
 pub use picture::{PICTURE_PIXELS, PICTURE_SIDE, Picture, is_picture_name, read_picture};
 pub use search::{Direction, find};
 pub use source::{FileSource, FileStamp, Source};
-pub use syntax::{LANGUAGES, Role, SOURCE_CAP, display_name, language, role, row_classes};
+pub use syntax::{
+    LANGUAGES, Role, SOURCE_CAP, display_name, language, pick_key, role, row_classes,
+};

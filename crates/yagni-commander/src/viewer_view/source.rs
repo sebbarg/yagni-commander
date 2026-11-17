@@ -16,6 +16,8 @@ use gpui_kit::{App, Context, HighlightStyle, SharedString, Window};
 use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{Role, Row, SOURCE_CAP, display_name, language, role};
 
+use super::language::Picks;
+
 use super::ViewerView;
 use crate::file_manager::commands::{OPENER_POLL, show_message};
 use crate::theme::{Colors, Theme};
@@ -61,17 +63,20 @@ fn register_queries_now() {
 }
 
 pub(super) struct SourceMode {
-    /// gpui-component's name for the grammar.
-    pub(super) language: &'static str,
-    /// `None` while the parse runs: the rows show uncolored meanwhile.
+    /// gpui-component's name for the grammar; `None`: Plain text (no
+    /// grammar known or picked), the text uncolored.
+    pub(super) language: Option<&'static str>,
+    /// `None` while the parse runs (and without a grammar): the rows show
+    /// uncolored meanwhile.
     highlighter: Option<SyntaxHighlighter>,
     parsing: Option<Receiver<SyntaxHighlighter>>,
 }
 
 impl SourceMode {
+    /// No parse is running.
     #[cfg(test)]
     pub(super) fn parsed(&self) -> bool {
-        self.highlighter.is_some()
+        self.parsing.is_none()
     }
 }
 
@@ -167,17 +172,10 @@ fn highlighter_for(lang: &str) -> Option<SyntaxHighlighter> {
         .then(|| SyntaxHighlighter::new(lang))
 }
 
-/// Why `bytes` (all of a file of `len` bytes named `name`) can't be shown in
-/// source mode, or its grammar. `bytes` is read only when the rest allows.
-fn grammar_for(
-    name: &str,
-    len: u64,
-    first_line: &[u8],
-    bytes: impl FnOnce() -> Vec<u8>,
-) -> Result<(&'static str, String), String> {
-    let Some(language) = language(name, first_line) else {
-        return Err("Source mode has no grammar for this kind of file.".to_owned());
-    };
+/// Why `bytes` (all of a file of `len` bytes) can't be shown in source mode,
+/// or its text. `bytes` is read only when the size allows. The limits hold
+/// without a grammar too, so a grammar picked later always fits.
+fn source_text(len: u64, bytes: impl FnOnce() -> Vec<u8>) -> Result<String, String> {
     if len > SOURCE_CAP {
         return Err(format!(
             "Source mode shows files up to {}; this one is {}.",
@@ -186,13 +184,14 @@ fn grammar_for(
         ));
     }
     String::from_utf8(bytes())
-        .map(|text| (language, text))
         .map_err(|_| "Source mode needs UTF-8 text; this file isn't.".to_owned())
 }
 
 impl ViewerView {
     /// `S`: source mode, out of any other mode (from Markdown mode at the
-    /// place it showed). A file it can't show stays in its mode, with a box
+    /// place it showed), in the grammar picked by hand for such files, else
+    /// the one the name says, else as Plain text (owner, 2026-11-17: so `L`
+    /// can pick one). A file over the limits stays in its mode, with a box
     /// saying why.
     pub(super) fn show_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.try_source(window, cx) {
@@ -221,24 +220,51 @@ impl ViewerView {
         if self.source.is_some() {
             return Ok(());
         }
-        self.start_source(window, cx)
+        let language = self.detected(cx);
+        self.start_source(language, window, cx)
     }
 
-    /// A parse of the file as it is now, replacing any source mode.
+    /// At open: source mode, quietly, when a grammar is known (picked by
+    /// hand for such files, else by the name), never as Plain text.
+    pub(super) fn open_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if Picks::of(&self.file_name(), cx) != Some(None)
+            && let Some(language) = self.detected(cx)
+        {
+            let _ = self.start_source(Some(language), window, cx);
+        }
+    }
+
+    /// The grammar source mode would take: the one picked by hand for such
+    /// files, else the one the name or the first line says.
+    fn detected(&mut self, cx: &App) -> Option<&'static str> {
+        let name = self.file_name();
+        if let Some(Some(picked)) = Picks::of(&name, cx) {
+            return Some(picked);
+        }
+        let first_line = self.doc.bytes(0, self.doc.len().min(256) as usize);
+        language(&name, &first_line)
+    }
+
+    /// Source mode on the file as it is now, in `language` (`None`: Plain
+    /// text, nothing parsed), replacing any source mode.
     pub(super) fn start_source(
         &mut self,
+        language: Option<&'static str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let name = self
-            .path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
         let len = self.doc.len();
-        let first_line = self.doc.bytes(0, len.min(256) as usize);
         let doc = &mut self.doc;
-        let (language, text) = grammar_for(&name, len, &first_line, || doc.bytes(0, len as usize))?;
+        let text = source_text(len, || doc.bytes(0, len as usize))?;
+        let Some(language) = language else {
+            self.source = Some(SourceMode {
+                language: None,
+                highlighter: None,
+                parsing: None,
+            });
+            cx.notify();
+            return Ok(());
+        };
         register_queries();
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -248,7 +274,7 @@ impl ViewerView {
             let _ = tx.send(highlighter);
         });
         self.source = Some(SourceMode {
-            language,
+            language: Some(language),
             highlighter: None,
             parsing: Some(rx),
         });
@@ -320,7 +346,7 @@ impl ViewerView {
         self.source
             .as_ref()
             .filter(|_| !self.hex)
-            .map(|mode| display_name(mode.language))
+            .map(|mode| mode.language.map_or(super::language::PLAIN, display_name))
     }
 }
 
@@ -494,25 +520,17 @@ mod tests {
     }
 
     #[test]
-    fn a_file_needs_a_grammar_the_size_and_utf8() {
+    fn source_mode_needs_the_size_and_utf8() {
         let read = || b"fn main() {}".to_vec();
-        assert_eq!(
-            grammar_for("main.rs", 12, b"", read),
-            Ok(("rust", "fn main() {}".to_owned()))
-        );
+        assert_eq!(source_text(12, read), Ok("fn main() {}".to_owned()));
         let never = || -> Vec<u8> { panic!("read") };
         assert!(
-            grammar_for("notes.txt", 5, b"", never)
-                .unwrap_err()
-                .contains("no grammar")
-        );
-        assert!(
-            grammar_for("big.rs", SOURCE_CAP + 1, b"", never)
+            source_text(SOURCE_CAP + 1, never)
                 .unwrap_err()
                 .contains("up to 4.0 MiB")
         );
         assert!(
-            grammar_for("bad.rs", 2, b"", || vec![0xff, 0xfe])
+            source_text(2, || vec![0xff, 0xfe])
                 .unwrap_err()
                 .contains("UTF-8")
         );

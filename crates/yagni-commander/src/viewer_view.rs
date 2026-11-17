@@ -26,8 +26,8 @@ use yagni_commander_core::watch::PanelWatcher;
 use crate::actions::VIEWER_CONTEXT;
 use crate::actions::viewer::{
     Close, Copy as CopySelection, Edit, End, Find, FindNext, FindPrevious, Help, LineDown, LineUp,
-    PageDown, PageUp, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowImage, ShowMarkdown,
-    ShowSource, ShowText, Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
+    PageDown, PageUp, PickLanguage, Reload, ScrollLeft, ScrollRight, SelectAll, ShowHex, ShowImage,
+    ShowMarkdown, ShowSource, ShowText, Start, ToggleWrap, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::file_manager::commands::{configured_editor, show_error, show_message};
@@ -36,6 +36,7 @@ use crate::theme::Theme;
 use crate::zoom::{Zoom, rems_from_px, scaled};
 
 mod help;
+mod language;
 mod markdown;
 mod picture;
 mod reload;
@@ -102,7 +103,7 @@ pub fn open(
             if picture {
                 view.show_picture(window, cx);
             } else if !(markdown && view.try_markdown(cx).is_ok()) {
-                let _ = view.try_source(window, cx);
+                view.open_source(window, cx);
             }
             if let Some(text) = search {
                 view.search_from_start(text, window, cx);
@@ -135,6 +136,8 @@ pub struct ViewerView {
     source: Option<source::SourceMode>,
     /// Image mode (`I`), over whatever mode is kept below it.
     picture: Option<PictureMode>,
+    /// The language popup (`L`), while open.
+    language: Option<language::Open>,
     /// The last image read started, so a stale poll stops.
     next_picture: u64,
     /// Byte position of the top row (always a row start).
@@ -222,6 +225,7 @@ impl ViewerView {
             markdown: None,
             source: None,
             picture: None,
+            language: None,
             next_picture: 0,
             top: 0,
             cols: 80,
@@ -519,7 +523,8 @@ impl ViewerView {
         self.doc.marked_rows(self.top, n, self.layout(), hl)
     }
 
-    /// "file.txt · 1.2 MiB · 37% · wrap · line 120 of 5,000"
+    /// "file.txt · 1.2 MiB · 37% · wrap · line 120 of 5,000". Source mode's
+    /// language is drawn apart, at the right (`language_button`).
     pub(crate) fn status_text(&mut self, cx: &App) -> String {
         let name = self
             .path
@@ -547,12 +552,7 @@ impl ViewerView {
                 self.top
             );
         }
-        let mode = match (self.source_name(), self.wrap) {
-            (Some(language), true) => format!("{language} · wrap"),
-            (Some(language), false) => format!("{language} · no wrap"),
-            (None, true) => "wrap".to_owned(),
-            (None, false) => "no wrap".to_owned(),
-        };
+        let wrap = if self.wrap { "wrap" } else { "no wrap" };
         let line = match &self.lines {
             None => "counting lines...".to_owned(),
             Some(index) => {
@@ -572,7 +572,7 @@ impl ViewerView {
             }
         };
         format!(
-            "{name} · {} · {percent}% · {mode} · {line}",
+            "{name} · {} · {percent}% · {wrap} · {line}",
             format_size(len)
         )
     }
@@ -890,10 +890,14 @@ impl Render for ViewerView {
         self.drawn = visible;
 
         let status = self.status_text(cx);
+        // Source mode's, in the text view (not over Markdown or a picture).
+        let language = self
+            .source_name()
+            .filter(|_| self.picture.is_none() && self.markdown.is_none());
         let error = self.doc.error().map(str::to_owned);
         let mono = cx.theme().mono_font_family.clone();
 
-        div()
+        let viewer = div()
             .key_context(VIEWER_CONTEXT)
             .track_focus(&self.focus)
             .on_action(cx.listener(|this, _: &Close, window, cx| this.close(window, cx)))
@@ -937,6 +941,9 @@ impl Render for ViewerView {
                 cx.listener(|this, _: &ShowMarkdown, window, cx| this.show_markdown(window, cx)),
             )
             .on_action(cx.listener(|this, _: &ShowSource, window, cx| this.show_source(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &PickLanguage, window, cx| this.toggle_language(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Help, _, cx| this.toggle_help(cx)))
             .on_action(cx.listener(|this, _: &Reload, window, cx| this.reload(window, cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
@@ -1073,13 +1080,23 @@ impl Render for ViewerView {
                                 .whitespace_nowrap()
                                 .text_ellipsis(),
                             )
+                            .when_some(language, |this, language| {
+                                this.child(self.language_button(language, cx))
+                            })
                             .when(self.temp.is_none(), |this| {
                                 this.child(self.reload_button(cx))
                             })
                             .child(self.help_button(cx)),
                     )
                     .when(self.help, |this| this.child(self.render_help(cx))),
-            )
+            );
+        // The popup outside the viewer's key context, so its letters aren't
+        // the viewer's keys, and at the UI's zoom, like the Find dialog.
+        div()
+            .size_full()
+            .relative()
+            .child(viewer)
+            .children(self.render_language(cx))
     }
 }
 

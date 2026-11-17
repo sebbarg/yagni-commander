@@ -167,9 +167,18 @@ pub mod viewer {
             ZoomReset,
             Edit,
             Help,
-            Reload
+            Reload,
+            PickLanguage
         ]
     );
+}
+
+/// Key context of the viewer's language popup (`L`).
+pub const LANGUAGE_CONTEXT: &str = "Language";
+
+/// Language popup actions.
+pub mod language {
+    gpui_kit::actions!(language, [Up, Down, Pick, Close]);
 }
 
 /// Key context of the Open with popup (Shift-Enter).
@@ -589,6 +598,17 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("escape", open_with::Close, popup),
         ],
     );
+    let popup = Some(LANGUAGE_CONTEXT);
+    bind(
+        cx,
+        mac,
+        [
+            KeyBinding::new("up", language::Up, popup),
+            KeyBinding::new("down", language::Down, popup),
+            KeyBinding::new("enter", language::Pick, popup),
+            KeyBinding::new("escape", language::Close, popup),
+        ],
+    );
     let list = Some(HOTLIST_LIST_CONTEXT);
     bind(
         cx,
@@ -671,6 +691,7 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("h", viewer::ShowHex, ctx),
             KeyBinding::new("m", viewer::ShowMarkdown, ctx),
             KeyBinding::new("i", viewer::ShowImage, ctx),
+            KeyBinding::new("l", viewer::PickLanguage, ctx),
             KeyBinding::new("ctrl-r", viewer::Reload, ctx),
             KeyBinding::new("left", viewer::ScrollLeft, ctx),
             KeyBinding::new("right", viewer::ScrollRight, ctx),

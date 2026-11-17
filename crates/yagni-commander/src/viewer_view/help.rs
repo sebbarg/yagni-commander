@@ -32,6 +32,8 @@ pub(super) enum Needs {
     NotSource,
     /// Another mode than image (`I`), and the keys that work on text.
     NotImage,
+    /// Source mode, shown (`L`).
+    Source,
     /// The file itself, not a private copy of an archive entry or a remote
     /// file (F4, Ctrl-R).
     File,
@@ -63,6 +65,7 @@ impl Needs {
             Needs::NotMarkdown => !m.markdown || m.image,
             Needs::NotSource => !m.source || m.hex || m.markdown || m.image,
             Needs::NotImage => !m.image,
+            Needs::Source => m.source && !m.hex && !m.markdown && !m.image,
             Needs::File => !m.archive,
         }
     }
@@ -99,6 +102,7 @@ pub(super) const COLUMNS: [&[(&str, &[Entry])]; 2] = [
                 entry(&["h"], "Hex", Needs::NotHex),
                 entry(&["m"], "Markdown", Needs::NotMarkdown),
                 entry(&["i"], "Image", Needs::NotImage),
+                entry(&["l"], "Language", Needs::Source),
                 entry(&["w"], "Wrap on, off", Needs::Text),
                 entry(&["ctrl-=", "ctrl--"], "Zoom in, out", Needs::Always),
                 entry(&["ctrl-0"], "Reset zoom", Needs::Always),

@@ -818,6 +818,13 @@ shot 10h1-viewer-source-as-text
 keys s
 sleep 1
 shot 10h2-viewer-source-again
+keys Home
+keys l m a r
+sleep 0.3
+shot 10h3-viewer-language-popup
+keys Return
+sleep 1
+shot 10h4-viewer-language-picked
 keys Escape
 check "source viewer closed" bash -c '! xdotool search --name "sample.rs - yagni-commander"'
 xdotool windowfocus "$window"

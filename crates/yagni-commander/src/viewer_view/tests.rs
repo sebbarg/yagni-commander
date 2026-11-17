@@ -2874,6 +2874,21 @@ mod source_mode {
         viewer.update(cx, |v, cx| v.status_text(cx))
     }
 
+    /// The language at the right of the status line, if drawn.
+    fn shown_language(
+        viewer: &Entity<ViewerView>,
+        cx: &mut VisualTestContext,
+    ) -> Option<&'static str> {
+        settle(viewer, cx);
+        let name = viewer.read_with(cx, |v, _| v.source_name());
+        assert_eq!(
+            name.is_some(),
+            cx.debug_bounds("viewer-language").is_some(),
+            "drawn"
+        );
+        name
+    }
+
     fn dialog_open(cx: &mut VisualTestContext) -> bool {
         cx.update(|window, cx| window.has_active_dialog(cx))
     }
@@ -2889,7 +2904,12 @@ mod source_mode {
         assert!(has(&parts, "\"hi\"", "string"), "{parts:?}");
         assert!(has(&parts, "// done", "comment"), "{parts:?}");
         assert!(parts.iter().all(|(_, role)| role != "?"), "{parts:?}");
-        assert!(status(&viewer, &mut vcx).contains(" · Rust · no wrap · "));
+        assert_eq!(shown_language(&viewer, &mut vcx), Some("Rust"));
+        assert!(status(&viewer, &mut vcx).contains(" · no wrap · "));
+        assert!(
+            !status(&viewer, &mut vcx).contains("Rust"),
+            "at the right, apart"
+        );
         // The rows are the text view's.
         assert_eq!(shown(&viewer, &mut vcx)[1], "    let s = \"hi\"; // done");
     }
@@ -2900,21 +2920,33 @@ mod source_mode {
         assert!(!colored(&viewer, &mut vcx).is_empty());
         vcx.simulate_keystrokes("t");
         assert!(colored(&viewer, &mut vcx).is_empty());
-        assert!(!status(&viewer, &mut vcx).contains("Rust"));
+        assert_eq!(shown_language(&viewer, &mut vcx), None);
         vcx.simulate_keystrokes("h s");
         assert!(!viewer.read_with(&vcx, |v, _| v.hex()));
         assert!(has(&colored(&viewer, &mut vcx), "fn", "keyword"));
     }
 
     #[gpui_kit::test]
-    fn s_on_a_file_without_a_grammar_says_why_and_stays(cx: &mut TestAppContext) {
+    fn s_on_a_file_without_a_grammar_shows_it_as_plain_text(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut vcx) = view_named("notes.txt", b"fn x\n", None, cx);
         settle(&viewer, &mut vcx);
-        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+        assert!(
+            viewer.read_with(&vcx, |v, _| v.source().is_none()),
+            "opens as text"
+        );
         vcx.simulate_keystrokes("s");
         vcx.run_until_parked();
+        assert!(!dialog_open(&mut vcx));
+        assert_eq!(shown_language(&viewer, &mut vcx), Some("Plain text"));
+        assert!(colored(&viewer, &mut vcx).is_empty());
+        // Not UTF-8: source mode can't take any grammar, so it says why.
+        vcx.simulate_keystrokes("t");
+        let path = viewer.read_with(&vcx, |v, _| v.path.clone());
+        std::fs::write(&path, [0xff, 0xfe, b'\n']).unwrap();
+        vcx.simulate_keystrokes("ctrl-r s");
+        vcx.run_until_parked();
         assert!(dialog_open(&mut vcx));
-        assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
+        assert_eq!(shown_language(&viewer, &mut vcx), None);
     }
 
     #[gpui_kit::test]
@@ -2932,7 +2964,7 @@ mod source_mode {
     #[gpui_kit::test]
     fn a_script_without_an_extension_goes_by_its_first_line(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut vcx) = view_named("run", b"#!/bin/sh\necho hi\n", None, cx);
-        assert!(status(&viewer, &mut vcx).contains(" · Bash · "));
+        assert_eq!(shown_language(&viewer, &mut vcx), Some("Bash"));
     }
 
     #[gpui_kit::test]
@@ -2942,7 +2974,7 @@ mod source_mode {
         assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_some()));
         vcx.simulate_keystrokes("s");
         assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_none()));
-        assert!(status(&viewer, &mut vcx).contains(" · Markdown · "));
+        assert_eq!(shown_language(&viewer, &mut vcx), Some("Markdown"));
         assert!(!colored(&viewer, &mut vcx).is_empty());
     }
 
@@ -2981,5 +3013,193 @@ mod source_mode {
         settle(&viewer, &mut vcx);
         assert!(viewer.read_with(&vcx, |v, _| v.source().is_none()));
         assert!(dialog_open(&mut vcx));
+    }
+
+    /// `L`: the grammar picked by hand, remembered for the session.
+    mod picked_by_hand {
+        use super::*;
+
+        /// Another viewer in the same app, on `name` in `dir`.
+        fn open_another(
+            dir: &std::path::Path,
+            name: &str,
+            bytes: &[u8],
+            cx: &mut TestAppContext,
+        ) -> (Entity<ViewerView>, VisualTestContext) {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).unwrap();
+            cx.update(|cx| open(path, main_bounds(), None, None, cx))
+                .unwrap();
+            let window = *cx.windows().last().unwrap();
+            let viewer = viewer_in(window, cx).unwrap();
+            (viewer, VisualTestContext::from_window(window, cx))
+        }
+
+        fn popup(viewer: &Entity<ViewerView>, cx: &mut VisualTestContext) -> Option<usize> {
+            cx.run_until_parked();
+            let highlight = viewer.read_with(cx, |v, cx| {
+                v.language.as_ref().map(|(p, _)| p.read(cx).highlight())
+            });
+            assert_eq!(
+                highlight.is_some(),
+                cx.debug_bounds("language-popup").is_some(),
+                "drawn"
+            );
+            highlight
+        }
+
+        /// The row of `name` in the popup (Plain text is row 0).
+        fn row_of(name: &str) -> usize {
+            1 + yagni_commander_core::viewer::LANGUAGES
+                .iter()
+                .position(|(n, _)| *n == name)
+                .unwrap()
+        }
+
+        #[gpui_kit::test]
+        fn a_dockerfile_opens_as_bash(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named(
+                "Dockerfile",
+                b"FROM alpine\nRUN echo \"hi\" # note\n",
+                None,
+                cx,
+            );
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Bash"));
+            assert!(has(&colored(&viewer, &mut vcx), "# note", "comment"));
+        }
+
+        #[gpui_kit::test]
+        fn l_opens_the_popup_on_the_grammar_in_use_and_escape_closes_it(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+            settle(&viewer, &mut vcx);
+            vcx.simulate_keystrokes("l");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("rust")));
+            vcx.simulate_keystrokes("down up up");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("rust") - 1));
+            vcx.simulate_keystrokes("escape");
+            assert_eq!(popup(&viewer, &mut vcx), None);
+            assert_eq!(
+                shown_language(&viewer, &mut vcx),
+                Some("Rust"),
+                "nothing picked"
+            );
+            // The viewer has its keys back, and the window stays open.
+            vcx.simulate_keystrokes("t");
+            assert_eq!(shown_language(&viewer, &mut vcx), None);
+        }
+
+        #[gpui_kit::test]
+        fn l_works_only_in_source_mode(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+            settle(&viewer, &mut vcx);
+            for mode in ["t", "h", "m"] {
+                vcx.simulate_keystrokes(&format!("{mode} l"));
+                assert_eq!(popup(&viewer, &mut vcx), None, "{mode}");
+            }
+            vcx.simulate_keystrokes("s l");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("rust")));
+        }
+
+        #[gpui_kit::test]
+        fn typing_in_the_popup_searches_and_never_picks(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+            settle(&viewer, &mut vcx);
+            let typed = |vcx: &mut VisualTestContext| {
+                viewer.read_with(vcx, |v, cx| {
+                    v.language.as_ref().map(|(p, _)| p.read(cx).typed.clone())
+                })
+            };
+            // `m` is Make, `mar` Markdown; the letters aren't the viewer's
+            // keys (`m` would be Markdown mode).
+            vcx.simulate_keystrokes("l m");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("make")));
+            vcx.simulate_keystrokes("a r");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("markdown")));
+            assert_eq!(typed(&mut vcx).as_deref(), Some("mar"));
+            // A character matching nothing is ignored.
+            vcx.simulate_keystrokes("x");
+            assert_eq!(typed(&mut vcx).as_deref(), Some("mar"));
+            // Backspace takes one back: `ma` is Make again.
+            vcx.simulate_keystrokes("backspace");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("make")));
+            // Up/Down clear the search.
+            vcx.simulate_keystrokes("down");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("markdown")));
+            assert_eq!(typed(&mut vcx).as_deref(), Some(""));
+            assert!(viewer.read_with(&vcx, |v, _| v.markdown().is_none()));
+            // Even a unique match only highlights; Enter picks.
+            vcx.simulate_keystrokes("k");
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("kotlin")));
+            vcx.simulate_keystrokes("enter");
+            assert_eq!(popup(&viewer, &mut vcx), None);
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Kotlin"));
+        }
+
+        #[gpui_kit::test]
+        fn a_grammar_for_an_unknown_file_s_then_l(cx: &mut TestAppContext) {
+            let (tmp, viewer, mut vcx) = view_named("notes.txt", b"fn x() {}\n", None, cx);
+            assert_eq!(shown_language(&viewer, &mut vcx), None);
+            vcx.simulate_keystrokes("s l");
+            assert_eq!(popup(&viewer, &mut vcx), Some(0), "on Plain text");
+            vcx.simulate_keystrokes("r u s enter");
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Rust"));
+            assert!(has(&colored(&viewer, &mut vcx), "fn", "keyword"));
+
+            // Remembered by extension, any case; another name isn't.
+            let (other, mut ocx) = open_another(tmp.path(), "more.TXT", b"fn y() {}\n", cx);
+            assert_eq!(shown_language(&other, &mut ocx), Some("Rust"));
+            let (plain, mut pcx) = open_another(tmp.path(), "notes", b"fn z() {}\n", cx);
+            assert_eq!(shown_language(&plain, &mut pcx), None, "another key");
+        }
+
+        #[gpui_kit::test]
+        fn plain_text_picked_stays_in_source_mode_and_opens_such_files_as_text(
+            cx: &mut TestAppContext,
+        ) {
+            let (tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+            settle(&viewer, &mut vcx);
+            vcx.simulate_keystrokes("l p l enter");
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Plain text"));
+            assert!(colored(&viewer, &mut vcx).is_empty());
+            // `L` still works there.
+            vcx.simulate_keystrokes("l");
+            assert_eq!(popup(&viewer, &mut vcx), Some(0));
+            vcx.simulate_keystrokes("escape");
+
+            let (other, mut ocx) = open_another(tmp.path(), "lib.rs", RUST, cx);
+            assert_eq!(shown_language(&other, &mut ocx), None, "text mode");
+            ocx.simulate_keystrokes("s");
+            assert_eq!(
+                shown_language(&other, &mut ocx),
+                Some("Rust"),
+                "by its name"
+            );
+        }
+
+        #[gpui_kit::test]
+        fn a_reload_keeps_a_picked_grammar(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named("notes.txt", b"fn x() {}\n", None, cx);
+            vcx.simulate_keystrokes("s l r u s enter");
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Rust"));
+            let path = viewer.read_with(&vcx, |v, _| v.path.clone());
+            std::fs::write(&path, b"struct Added;\n").unwrap();
+            vcx.simulate_keystrokes("ctrl-r");
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Rust"));
+            assert!(has(&colored(&viewer, &mut vcx), "struct", "keyword"));
+        }
+
+        #[gpui_kit::test]
+        fn a_click_on_the_language_in_the_status_line_opens_the_popup(cx: &mut TestAppContext) {
+            let (_tmp, viewer, mut vcx) = view_named("main.rs", RUST, None, cx);
+            settle(&viewer, &mut vcx);
+            let at = bounds_of(&mut vcx, "viewer-language").center();
+            vcx.simulate_click(at, gpui_kit::Modifiers::default());
+            assert_eq!(popup(&viewer, &mut vcx), Some(row_of("rust")));
+            let row: &'static str = format!("language-row-{}", row_of("go")).leak();
+            let at = bounds_of(&mut vcx, row).center();
+            vcx.simulate_click(at, gpui_kit::Modifiers::default());
+            assert_eq!(popup(&viewer, &mut vcx), None);
+            assert_eq!(shown_language(&viewer, &mut vcx), Some("Go"));
+        }
     }
 }

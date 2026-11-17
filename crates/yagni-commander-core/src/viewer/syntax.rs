@@ -70,6 +70,10 @@ const NAMES: &[(&str, &str)] = &[
     ("Podfile", "ruby"),
     ("Vagrantfile", "ruby"),
     ("Brewfile", "ruby"),
+    // Docker's instructions aren't Bash, but `RUN`'s shell, comments,
+    // strings and variables color right (owner, 2026-11-17).
+    ("Dockerfile", "bash"),
+    ("Containerfile", "bash"),
     ("Cargo.lock", "toml"),
     ("Pipfile", "toml"),
     ("uv.lock", "toml"),
@@ -98,6 +102,7 @@ const EXTENSIONS: &[(&str, &str)] = &[
     ("css", "css"),
     ("diff", "diff"),
     ("patch", "diff"),
+    ("dockerfile", "bash"),
     ("ejs", "ejs"),
     ("erb", "erb"),
     ("go", "go"),
@@ -163,18 +168,29 @@ pub fn language(name: &str, first_line: &[u8]) -> Option<&'static str> {
     if let Some(&(_, lang)) = NAMES.iter().find(|(n, _)| *n == name) {
         return Some(lang);
     }
-    let ext = Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .filter(|_| !name.starts_with('.') || name[1..].contains('.'))
-        .map(str::to_ascii_lowercase);
-    if let Some(ext) = ext {
+    if let Some(ext) = extension(name) {
         return EXTENSIONS
             .iter()
             .find(|(e, _)| *e == ext)
             .map(|&(_, lang)| lang);
     }
     interpreter(first_line)
+}
+
+/// What a grammar picked by hand is remembered by for the session: the
+/// extension, lowercase (`main.RS` is `rs`), else the whole name
+/// (`Dockerfile`, `.bashrc`), as `language` reads them.
+pub fn pick_key(name: &str) -> String {
+    extension(name).unwrap_or_else(|| name.to_owned())
+}
+
+/// `name`'s extension, lowercase; a dot file's first dot doesn't count.
+fn extension(name: &str) -> Option<String> {
+    Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .filter(|_| !name.starts_with('.') || name[1..].contains('.'))
+        .map(str::to_ascii_lowercase)
 }
 
 /// The grammar named by a `#!` line: its program, or `env`'s first
@@ -304,6 +320,9 @@ mod tests {
             (".eslintrc.json", "json"),
             ("x.h", "cpp"),
             ("ci.yml", "yaml"),
+            ("Dockerfile", "bash"),
+            ("Containerfile", "bash"),
+            ("app.Dockerfile", "bash"),
         ] {
             assert_eq!(language(name, b""), Some(lang), "{name}");
         }
@@ -312,6 +331,16 @@ mod tests {
         assert_eq!(language("README", b"hello"), None);
         assert_eq!(language(".gitignore", b"target/\n"), None);
         assert_eq!(language("makefile.bak", b""), None);
+    }
+
+    #[test]
+    fn picks_are_remembered_by_extension_else_by_name() {
+        assert_eq!(pick_key("main.RS"), "rs");
+        assert_eq!(pick_key("a.tar.gz"), "gz");
+        assert_eq!(pick_key(".eslintrc.json"), "json");
+        assert_eq!(pick_key("Dockerfile"), "Dockerfile");
+        assert_eq!(pick_key(".bashrc"), ".bashrc");
+        assert_eq!(pick_key("README"), "README");
     }
 
     #[test]
