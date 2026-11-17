@@ -2796,8 +2796,8 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         assert_eq!(first(action, cx).as_deref(), Some(keys));
     }
     for (action, keys) in [
-        (&crate::actions::CopyPath as &dyn gpui_kit::Action, "ctrl-c"),
-        (&crate::actions::CopyName, "ctrl-shift-c"),
+        (&crate::actions::CopyName as &dyn gpui_kit::Action, "ctrl-c"),
+        (&crate::actions::CopyPath, "ctrl-shift-c"),
         (&crate::actions::CopyParentPath, "ctrl-alt-c"),
     ] {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
@@ -2892,27 +2892,25 @@ fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
 }
 
 #[gpui_kit::test]
-fn ctrl_c_and_ctrl_ins_copy_the_full_path_under_the_cursor(cx: &mut TestAppContext) {
+fn ctrl_shift_c_copies_the_full_path_under_the_cursor(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     let path = |name: &str| tmp.path().join(name).display().to_string();
     // On "..", the panel's own folder.
-    cx.simulate_keystrokes("ctrl-c");
+    cx.simulate_keystrokes("ctrl-shift-c");
     assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
-    cx.simulate_keystrokes("down ctrl-c");
+    cx.simulate_keystrokes("down ctrl-shift-c");
     assert_eq!(clipboard_text(cx), Some(path("a")));
-    cx.simulate_keystrokes("end ctrl-insert");
-    assert_eq!(clipboard_text(cx), Some(path("f")));
     // Only the cursor entry, never the selection.
-    cx.simulate_keystrokes("home down insert ctrl-c");
+    cx.simulate_keystrokes("insert ctrl-shift-c");
     assert_eq!(clipboard_text(cx), Some(path("b")));
     if cfg!(target_os = "macos") {
-        cx.simulate_keystrokes("end cmd-c");
+        cx.simulate_keystrokes("end cmd-shift-c");
         assert_eq!(clipboard_text(cx), Some(path("f")));
     }
 }
 
 #[gpui_kit::test]
-fn ctrl_shift_c_copies_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppContext) {
+fn ctrl_c_and_ctrl_ins_copy_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     let parent = tmp.path().parent().unwrap().display().to_string();
     let own = tmp
@@ -2922,22 +2920,22 @@ fn ctrl_shift_c_copies_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppContex
         .to_string_lossy()
         .into_owned();
     // On "..", the panel's own folder: its name, and its parent.
-    cx.simulate_keystrokes("ctrl-shift-c");
+    cx.simulate_keystrokes("ctrl-c");
     assert_eq!(clipboard_text(cx), Some(own));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(parent));
     // A folder: its name, and the folder holding it.
-    cx.simulate_keystrokes("down ctrl-shift-c");
+    cx.simulate_keystrokes("down ctrl-c");
     assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
     // A file, ignoring the selection.
-    cx.simulate_keystrokes("space end ctrl-shift-c");
+    cx.simulate_keystrokes("space end ctrl-insert");
     assert_eq!(clipboard_text(cx).as_deref(), Some("f"));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
     if cfg!(target_os = "macos") {
-        cx.simulate_keystrokes("home down cmd-shift-c");
+        cx.simulate_keystrokes("home down cmd-c");
         assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
         cx.simulate_keystrokes("end cmd-alt-c");
         assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
@@ -2961,7 +2959,7 @@ fn ctrl_alt_c_on_an_entry_in_the_root_copies_the_root(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn copy_name_and_parent_end_the_quick_search(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
-    cx.simulate_keystrokes("f ctrl-shift-c");
+    cx.simulate_keystrokes("f ctrl-c");
     assert_eq!(search(&commander, cx), None);
     assert_eq!(clipboard_text(cx).as_deref(), Some("f"));
     cx.simulate_keystrokes("b ctrl-alt-c");
@@ -2970,9 +2968,9 @@ fn copy_name_and_parent_end_the_quick_search(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn ctrl_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
+fn ctrl_shift_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
-    cx.simulate_keystrokes("f ctrl-c");
+    cx.simulate_keystrokes("f ctrl-shift-c");
     assert_eq!(search(&commander, cx), None);
     assert_eq!(
         clipboard_text(cx),
@@ -2981,7 +2979,7 @@ fn ctrl_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn ctrl_c_in_a_text_field_copies_its_text_not_the_path(cx: &mut TestAppContext) {
+fn ctrl_c_in_a_text_field_copies_its_text_not_the_name(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     cx.simulate_keystrokes("down f2");
     cx.run_until_parked();
@@ -7164,10 +7162,10 @@ mod find_files {
         search(cx, "*.rs");
         click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
-        cx.simulate_keystrokes("end ctrl-c");
+        cx.simulate_keystrokes("end ctrl-shift-c");
         let file = tmp.path().join("a/x.rs");
         assert_eq!(clipboard_text(cx), Some(file.display().to_string()));
-        cx.simulate_keystrokes("ctrl-shift-c");
+        cx.simulate_keystrokes("ctrl-c");
         assert_eq!(clipboard_text(cx).as_deref(), Some("x.rs"));
         cx.simulate_keystrokes("ctrl-alt-c");
         let dir = tmp.path().join("a");

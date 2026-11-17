@@ -429,10 +429,10 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             // Only while a panel has focus: a text field's context is deeper, so
             // its own Ctrl-C/Ctrl-Ins win there. Ctrl-C first and last, so both
             // menus show it (Cmd-C on macOS).
-            KeyBinding::new("ctrl-c", CopyPath, context),
-            KeyBinding::new("ctrl-insert", CopyPath, context),
-            KeyBinding::new("ctrl-c", CopyPath, context),
-            KeyBinding::new("ctrl-shift-c", CopyName, context),
+            KeyBinding::new("ctrl-c", CopyName, context),
+            KeyBinding::new("ctrl-insert", CopyName, context),
+            KeyBinding::new("ctrl-c", CopyName, context),
+            KeyBinding::new("ctrl-shift-c", CopyPath, context),
             KeyBinding::new("ctrl-alt-c", CopyParentPath, context),
             KeyBinding::new("f2", Rename, context),
             KeyBinding::new("f3", View, context),
