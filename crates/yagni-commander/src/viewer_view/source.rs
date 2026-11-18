@@ -46,6 +46,23 @@ const QUERIES: [(&str, &str); 4] = [
     ),
 ];
 
+/// JSX's tags and attributes (tree-sitter-javascript's own JSX query), for
+/// the grammars that parse JSX.
+const JSX: &str = include_str!("../../assets/queries/jsx-highlights.scm");
+
+/// Highlight queries built on another language's: (language, patterns of its
+/// own, the language whose query follows them). Upstream these extend
+/// another grammar's query (C++ C's, TSX TypeScript's, JSX JavaScript's),
+/// but gpui-component registers C++ and TSX with the extension alone (no
+/// strings, comments or functions) and JavaScript and TSX without JSX. Ours
+/// come first, since the first pattern wins on a node two of them capture.
+/// `None`: the language's own query in gpui-component.
+const LAYERED: [(&str, Option<&str>, &str); 3] = [
+    ("cpp", None, "c"),
+    ("javascript", Some(JSX), "javascript"),
+    ("tsx", Some(JSX), "typescript"),
+];
+
 /// Puts our queries in the registry, once, before the first parse.
 fn register_queries() {
     static ONCE: std::sync::Once = std::sync::Once::new();
@@ -59,6 +76,31 @@ fn register_queries_now() {
             config.highlights = query.into();
             registry.register(name, &config);
         }
+    }
+    // Read every base before changing any (JavaScript is its own base).
+    let layered: Vec<_> = LAYERED
+        .iter()
+        .filter_map(|&(name, own, base)| {
+            let config = registry.language(name)?;
+            let base = registry.language(base)?;
+            let own = own.map_or_else(|| config.highlights.to_string(), str::to_string);
+            Some((name, config, own + "\n" + &base.highlights, base.injections))
+        })
+        .collect();
+    for (name, mut config, highlights, injections) in layered {
+        config.highlights = highlights.into();
+        if config.injections.is_empty() {
+            // TSX: TypeScript's (CSS, HTML, SQL and GraphQL in template
+            // strings, JSDoc in comments).
+            config.injections = injections;
+        }
+        registry.register(name, &config);
+    }
+    // gpui-component gives ERB the EJS injections, so its code was parsed
+    // as JavaScript; this is the grammar's own ERB query (Ruby).
+    if let Some(mut config) = registry.language("erb") {
+        config.injections = include_str!("../../assets/queries/erb-injections.scm").into();
+        registry.register("erb", &config);
     }
 }
 
@@ -435,6 +477,63 @@ mod tests {
             }
         }
         assert!(colorless.is_empty(), "these color nothing: {colorless:?}");
+    }
+
+    /// The languages whose query we build on another's color what
+    /// gpui-component's left plain: C++'s strings and comments, TSX's
+    /// strings, keywords and JSX, JavaScript's JSX, and ERB's Ruby (`end`
+    /// means nothing in JavaScript, which ERB was parsed as).
+    #[test]
+    fn layered_queries_color_what_they_lacked() {
+        register_queries();
+        let colors = Theme::builtin("gruvbox-dark").unwrap().colors;
+        let palette = Palette(colors.clone());
+        let cases = [
+            (
+                "cpp",
+                "// note\nint main() { auto s = \"text\"; }\n",
+                vec![
+                    ("note", colors.syntax_comment),
+                    ("text", colors.syntax_string),
+                ],
+            ),
+            (
+                "tsx",
+                "// note\nconst e = <div className=\"a\">hi</div>;\n",
+                vec![
+                    ("note", colors.syntax_comment),
+                    ("const", colors.syntax_keyword),
+                    ("div", colors.syntax_keyword),
+                    ("className", colors.syntax_property),
+                    ("\"a\"", colors.syntax_string),
+                ],
+            ),
+            (
+                "javascript",
+                "const e = <div className=\"a\">hi</div>;\n",
+                vec![
+                    ("div", colors.syntax_keyword),
+                    ("className", colors.syntax_property),
+                ],
+            ),
+            (
+                "erb",
+                "<% if x %>hi<% end %>\n",
+                vec![("end", colors.syntax_keyword)],
+            ),
+        ];
+        for (name, code, words) in cases {
+            let mut highlighter = SyntaxHighlighter::new(name);
+            highlighter.update(None, &Rope::from(code), None);
+            let styled = highlighter.styles(&(0..code.len()), &palette);
+            for (word, color) in words {
+                assert_eq!(
+                    style_of(&styled, code, word),
+                    Some(color.into()),
+                    "{name}: {word}"
+                );
+            }
+        }
     }
 
     /// The style `colors` gives the first `word` in `code`.

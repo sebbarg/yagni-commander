@@ -36,7 +36,7 @@ The font contains glyphs from these icon sets, each under its own license:
 
 ## Highlight queries
 
-`crates/yagni-commander/assets/queries/` holds tree-sitter highlight queries that the F3 viewer's source mode registers in place of gpui-component's:
+`crates/yagni-commander/assets/queries/` holds tree-sitter queries that the F3 viewer's source mode registers in place of gpui-component's, or adds to them:
 
 | File | Source | License |
 |---|---|---|
@@ -44,3 +44,5 @@ The font contains glyphs from these icon sets, each under its own license:
 | `proto-highlights.scm` | tree-sitter-proto 0.2.0 (https://github.com/coder3101/tree-sitter-proto), `queries/highlights.scm`, unchanged | MIT |
 | `swift-highlights.scm` | tree-sitter-swift 0.7.4 (https://github.com/alex-pinkus/tree-sitter-swift), `queries/highlights.scm`, unchanged. Copyright (c) 2021 alex-pinkus | MIT |
 | `kotlin-highlights.scm` | gpui-component 0.7.0 (https://github.com/longbridge/gpui-kit), `src/highlighter/languages/kotlin/highlights.scm`. Modified: four patterns the grammar has no nodes for are left out (see the file's header) | Apache 2.0 |
+| `jsx-highlights.scm` | tree-sitter-javascript 0.23.1 (https://github.com/tree-sitter/tree-sitter-javascript), `queries/highlights-jsx.scm`, unchanged. Authors: Max Brunsfeld, Amaan Qureshi | MIT |
+| `erb-injections.scm` | tree-sitter-embedded-template 0.23.2 (https://github.com/tree-sitter/tree-sitter-embedded-template), `queries/injections-erb.scm`, unchanged. Authors: Max Brunsfeld, Amaan Qureshi | MIT |
