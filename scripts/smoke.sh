@@ -20,7 +20,7 @@ delay=${SMOKE_DELAY:-0.4}
 display=${SMOKE_DISPLAY:-:99}
 cargo=${CARGO:-$(command -v cargo || echo "$HOME/.cargo/bin/cargo")}
 
-for tool in Xvfb xdotool xprop import xclip; do
+for tool in Xvfb setxkbmap xdotool xprop import xclip; do
     command -v "$tool" >/dev/null || { echo "smoke: $tool is not installed" >&2; exit 2; }
 done
 
@@ -112,9 +112,15 @@ cleanup() {
 # The temporary folder is kept only when a check failed, for its app.log.
 trap cleanup EXIT
 
-Xvfb "$display" -screen 0 1280x860x24 >/dev/null 2>&1 &
+# -noreset: Xvfb resets its keymap whenever its last client leaves, which would
+# undo setxkbmap (and the app quits and restarts below).
+Xvfb "$display" -noreset -screen 0 1280x860x24 >/dev/null 2>&1 &
 pids+=($!)
 sleep 1
+# Newer xkeyboard-config (Ubuntu 26.04) gives the F-keys a five-level type for
+# Ctrl-Alt-Fn console switching; xdotool then holds Alt with every F-key, so F7
+# arrived as Alt-F7.
+setxkbmap -option srvrkeys:none
 "$app" "$left" "$right" >"$work/app.log" 2>&1 &
 pids+=($!)
 

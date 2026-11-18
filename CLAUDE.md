@@ -26,7 +26,7 @@ Distro testing (2026-10-04): Kubuntu (Wayland and X11) and Omarchy (Hyprland, on
 - User-facing text and docs: no em dashes.
 - Dialog tab order (a recurring bug): every new or changed dialog is checked with Tab and Shift-Tab, in an app test (`mod tab_order`, `assert_order`) and in the headless app. The rule: reading order (top to bottom, left to right), buttons last, Tab into the buttons on the first and Shift-Tab on the last, disabled controls skipped, round at both ends, never out of the top dialog, every stop visibly focused (SPEC, "Tab order in every dialog"; ARCHITECTURE, Gotchas).
 
-## Fresh dev container (Ubuntu 24.04, no display)
+## Fresh dev container (Ubuntu 26.04, no display)
 
 Containers are ephemeral; redo this at the start of a session if `~/.cargo/bin/cargo` is missing.
 
@@ -47,7 +47,8 @@ Xvfb gives a virtual X11 display, Mesa's llvmpipe renders Vulkan on the CPU, xdo
 ```sh
 S=<scratchpad>; mkdir -p $S/xdg $S/cfg $S/state; chmod 700 $S/xdg
 export DISPLAY=:99 XDG_RUNTIME_DIR=$S/xdg XDG_CONFIG_HOME=$S/cfg XDG_STATE_HOME=$S/state
-(Xvfb :99 -screen 0 1280x860x24 >/dev/null 2>&1 &); sleep 1
+(Xvfb :99 -noreset -screen 0 1280x860x24 >/dev/null 2>&1 &); sleep 1
+setxkbmap -option srvrkeys:none        # else xdotool sends Alt with every F-key (Ubuntu 26.04)
 (target/debug/yagni-commander /usr /etc >$S/app.log 2>&1 &); sleep 4
 W=$(xdotool search --name yagni-commander | head -1); xdotool windowfocus $W; sleep 0.5
 xdotool key Down F2; xdotool type --delay 40 "name"; xdotool key Return
@@ -57,4 +58,5 @@ xdotool key alt+F4; pkill -x Xvfb
 
 - Pause (`sleep 0.3`+) after focusing, moving or resizing before sending keys; gpui also ignores a click sent in the same instant as the pointer move.
 - Never `pkill -f` a pattern that matches your own shell command line; use `pkill -x yagni-commander`.
+- `-noreset` keeps the `setxkbmap` option: Xvfb resets its keymap when its last client disconnects.
 - X11 only, no window manager: Wayland, tiling (Hyprland) and macOS are untested here.
