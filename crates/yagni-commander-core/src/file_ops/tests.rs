@@ -17,6 +17,8 @@ struct Script {
     cancel_at_path: Option<PathBuf>,
     cancelled: bool,
     last: Progress,
+    /// `files_total` of each report made while counting.
+    counted: Vec<usize>,
     /// Answers to link questions, in order.
     links: VecDeque<LinkAnswer>,
     link_questions: Vec<LinkQuestion>,
@@ -86,6 +88,9 @@ impl Observer for Script {
             || self.cancel_at_path.as_ref() == Some(&progress.current)
         {
             self.cancelled = true;
+        }
+        if progress.counting {
+            self.counted.push(progress.files_total);
         }
         self.last = progress.clone();
     }
@@ -233,6 +238,8 @@ fn copies_files_and_trees_with_times_permissions_and_progress() {
     assert_eq!((p.items_done, p.items_total), (2, 2));
     assert_eq!((p.bytes_done, p.bytes_total), (9, 9));
     assert_eq!((p.files_done, p.files_total), (3, 3));
+    assert_eq!(script.counted, [1, 2, 3], "the count shows as it grows");
+    assert!(!p.counting);
 }
 
 #[test]
@@ -902,8 +909,50 @@ fn delete_removes_files_and_trees_with_progress() {
     assert!(names(&src).is_empty());
     let p = &script.last;
     assert_eq!((p.items_done, p.items_total), (2, 2));
-    assert_eq!((p.files_done, p.files_total), (3, 3));
+    assert_eq!(
+        (p.files_done, p.files_total),
+        (3, 0),
+        "no total: no count first"
+    );
     assert_eq!(p.bytes_total, 0, "deleting is counted by files");
+    assert!(script.counted.is_empty(), "never counting");
+}
+
+#[test]
+fn delete_counts_only_the_files_it_removed() {
+    if is_root() {
+        return;
+    }
+    let (_tmp, src, _) = fixture();
+    let deep = src.join("dir/deep");
+    fs::set_permissions(&deep, fs::Permissions::from_mode(0o555)).unwrap();
+    let mut script = Script::default();
+    run_script(&delete(&[src.join("dir")]), &mut script);
+    fs::set_permissions(&deep, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(script.last.files_done, 1, "b.txt, not c.txt");
+}
+
+#[test]
+fn a_report_keeps_the_first_failures_and_counts_the_rest() {
+    if is_root() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let locked = tmp.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    let many = KEPT_FAILURES + 5;
+    for i in 0..many {
+        fs::write(locked.join(format!("f{i:04}")), "").unwrap();
+    }
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).unwrap();
+    let report = run_script(
+        &delete(std::slice::from_ref(&locked)),
+        &mut Script::default(),
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(report.failures.len(), KEPT_FAILURES);
+    assert_eq!(report.more_failures, 5);
+    assert_eq!(report.failed(), many);
 }
 
 #[test]
@@ -1012,7 +1061,7 @@ fn delete_leaves_a_mount_point_and_the_folders_above_it() {
     assert_eq!(report.failures[0].message, MOUNT_POINT);
     assert!(deep.join("c.txt").exists(), "the mount's contents stay");
     assert_eq!(walk(&src), [deep.join("c.txt")], "everything else went");
-    assert_eq!(script.last.files_total, 2, "the mount is not counted");
+    assert_eq!(script.last.files_done, 2, "the mount's file is not counted");
 }
 
 #[test]
@@ -1033,6 +1082,26 @@ fn delete_refuses_a_chosen_mount_point_even_through_a_link() {
 }
 
 #[test]
+fn a_folder_listed_as_a_file_is_still_deleted_with_its_contents() {
+    // Swapped for a folder between the listing and the unlink.
+    let (_tmp, src, _) = fixture();
+    let mut script = Script::default();
+    let mut engine = engine(&mut script);
+    let dir = open_dir(&src).unwrap();
+    let step = engine.delete_at(
+        &dir,
+        std::ffi::OsStr::new("dir"),
+        Some(nix::dir::Type::File),
+        &src.join("dir"),
+        &src.canonicalize().unwrap(),
+        dir_device(&dir).unwrap(),
+    );
+    assert_eq!(step, Step::Done);
+    assert!(!src.join("dir").exists());
+    assert_eq!(engine.progress.files_done, 2);
+}
+
+#[test]
 fn delete_without_a_mount_table_stops_at_another_device() {
     // macOS: no table, so a device of its own marks a mount point.
     let (_tmp, src, _) = fixture();
@@ -1040,11 +1109,12 @@ fn delete_without_a_mount_table_stops_at_another_device() {
     let mut engine = engine(&mut script);
     engine.mounts = Some(Mounts::default());
     let dir = open_dir(&src).unwrap();
-    let real = src.canonicalize().unwrap().join("dir");
+    let real = src.canonicalize().unwrap();
     let other_device = dir_device(&dir).unwrap() + 1;
     let step = engine.delete_at(
         &dir,
         std::ffi::OsStr::new("dir"),
+        None,
         &src.join("dir"),
         &real,
         other_device,
@@ -3257,6 +3327,8 @@ mod across {
         assert_eq!((last.files_done, last.files_total), (3, 3));
         assert_eq!((last.bytes_done, last.bytes_total), (14, 14));
         assert_eq!((last.items_done, last.items_total), (1, 1));
+        assert_eq!(script.counted.last(), Some(&3), "counting showed");
+        assert!(!last.counting);
     }
 
     #[test]
@@ -3489,6 +3561,8 @@ mod across {
         assert!(!tmp.path().join("d").exists());
         assert!(outside.path().join("keep").exists());
         assert_eq!(script.last.files_done, 4);
+        assert_eq!(script.last.files_total, 0, "no count first");
+        assert!(script.counted.is_empty());
         // Trash on a host deletes as well.
         fs::write(tmp.path().join("t"), "").unwrap();
         let report = run_across(

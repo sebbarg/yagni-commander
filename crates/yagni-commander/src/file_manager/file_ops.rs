@@ -17,7 +17,7 @@ use gpui_kit::component::input::InputState;
 use gpui_kit::component::progress::Progress as ProgressBar;
 use gpui_kit::{
     App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, WeakEntity, Window, div,
+    Render, SharedString, Styled, WeakEntity, Window, div, prelude::FluentBuilder,
 };
 use yagni_commander_core::archive::inner_parts;
 use yagni_commander_core::file_ops::{
@@ -694,7 +694,7 @@ impl FileManager {
             kind,
             source,
             source_dir,
-            view: cx.new(|_| ProgressView::new()),
+            view: cx.new(|_| ProgressView::new(kind)),
             polls: 0,
             progress_open: false,
             compare: None,
@@ -1663,7 +1663,7 @@ fn failure_summary(report: &Report) -> String {
         .take(MAX_LISTED_FAILURES)
         .map(|f| format!("{}: {}", f.path.display(), f.message))
         .collect();
-    let more = report.failures.len().saturating_sub(MAX_LISTED_FAILURES);
+    let more = report.failed().saturating_sub(MAX_LISTED_FAILURES);
     if more > 0 {
         lines.push(format!("and {more} more"));
     }
@@ -1672,13 +1672,15 @@ fn failure_summary(report: &Report) -> String {
 
 /// The progress dialog's contents.
 pub(super) struct ProgressView {
+    kind: Kind,
     progress: Progress,
     cancelling: bool,
 }
 
 impl ProgressView {
-    fn new() -> Self {
+    fn new(kind: Kind) -> Self {
         Self {
+            kind,
             progress: Progress::default(),
             cancelling: false,
         }
@@ -1691,7 +1693,7 @@ impl Render for ProgressView {
         let status = if self.cancelling {
             "Cancelling...".to_owned()
         } else {
-            progress_text(&self.progress)
+            progress_text(&self.progress, self.kind)
         };
         div()
             .flex()
@@ -1704,7 +1706,10 @@ impl Render for ProgressView {
                     .text_ellipsis_start()
                     .child(self.progress.current.display().to_string()),
             )
-            .child(ProgressBar::new("progress").value(fraction(&self.progress) * 100.0))
+            // A delete knows no total, so a bar would sit still or jump.
+            .when(self.kind != Kind::Delete, |div| {
+                div.child(ProgressBar::new("progress").value(fraction(&self.progress) * 100.0))
+            })
             .child(
                 div()
                     .text_color(colors.text_secondary)
@@ -1734,8 +1739,20 @@ fn fraction(progress: &Progress) -> f32 {
     }
 }
 
-fn progress_text(progress: &Progress) -> String {
-    if progress.files_total > 0 && progress.bytes_total == 0 {
+fn progress_text(progress: &Progress, kind: Kind) -> String {
+    if progress.counting {
+        format!(
+            "Counting: {} files, {}",
+            progress.files_total,
+            format_size(progress.bytes_total)
+        )
+    } else if kind == Kind::Delete {
+        // A delete counts nothing first (it would walk the tree twice).
+        match progress.files_done {
+            1 => "1 file deleted".to_owned(),
+            n => format!("{n} files deleted"),
+        }
+    } else if progress.files_total > 0 && progress.bytes_total == 0 {
         format!(
             "{} of {} files",
             progress.files_done.min(progress.files_total),
@@ -1767,7 +1784,7 @@ mod tests {
             files_total: files.1,
             bytes_done: bytes.0,
             bytes_total: bytes.1,
-            current: PathBuf::new(),
+            ..Progress::default()
         }
     }
 
@@ -1787,16 +1804,40 @@ mod tests {
     #[test]
     fn progress_text_counts_files_and_bytes_or_entries() {
         assert_eq!(
-            progress_text(&progress((0, 1), (3, 60), (512, 2048))),
+            progress_text(&progress((0, 1), (3, 60), (512, 2048)), Kind::Copy),
             "3 of 60 files, 512 B of 2.0 KiB"
         );
         assert_eq!(
-            progress_text(&progress((2, 3), (0, 0), (0, 0))),
+            progress_text(&progress((2, 3), (0, 0), (0, 0)), Kind::Trash),
             "Entry 2 of 3"
         );
         assert_eq!(
-            progress_text(&progress((0, 1), (3, 60), (0, 0))),
+            progress_text(&progress((0, 1), (3, 60), (0, 0)), Kind::Copy),
             "3 of 60 files"
+        );
+    }
+
+    #[test]
+    fn progress_text_shows_counting_and_files_deleted() {
+        let counting = Progress {
+            counting: true,
+            ..progress((0, 1), (0, 1234), (0, 2048))
+        };
+        assert_eq!(
+            progress_text(&counting, Kind::Copy),
+            "Counting: 1234 files, 2.0 KiB"
+        );
+        assert_eq!(
+            progress_text(&progress((0, 1), (0, 0), (0, 0)), Kind::Delete),
+            "0 files deleted"
+        );
+        assert_eq!(
+            progress_text(&progress((0, 1), (1, 0), (0, 0)), Kind::Delete),
+            "1 file deleted"
+        );
+        assert_eq!(
+            progress_text(&progress((0, 1), (19, 0), (0, 0)), Kind::Delete),
+            "19 files deleted"
         );
     }
 
@@ -1916,6 +1957,12 @@ mod tests {
         let summary = failure_summary(&report);
         assert!(summary.starts_with("/f0: denied\n/f1: denied"));
         assert!(summary.ends_with("/f9: denied\nand 2 more"));
+        // Failures past the kept ones count too.
+        let report = Report {
+            more_failures: 1000,
+            ..report
+        };
+        assert!(failure_summary(&report).ends_with("\nand 1002 more"));
     }
 
     #[test]

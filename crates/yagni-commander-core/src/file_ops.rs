@@ -115,13 +115,16 @@ pub struct Progress {
     pub items_total: usize,
     /// Files (and symlinks) and their bytes copied. A copy knows the totals
     /// up front; a move adds to them only when it has to copy (another
-    /// filesystem). Trash leaves them at 0.
+    /// filesystem). Trash leaves them at 0. A delete counts the files it
+    /// removes but never knows the total (it doesn't walk the tree twice).
     pub files_done: usize,
     pub files_total: usize,
     pub bytes_done: u64,
     pub bytes_total: u64,
     /// The entry being worked on.
     pub current: PathBuf,
+    /// Set while the totals are being counted, before the work starts.
+    pub counting: bool,
 }
 
 /// A file (or symlink) would replace an existing one.
@@ -223,10 +226,17 @@ pub struct Failure {
     pub message: String,
 }
 
+/// Failures kept in a [`Report`]; later ones are only counted.
+pub const KEPT_FAILURES: usize = 100;
+
 /// What happened, for the summary at the end.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
+    /// The first [`KEPT_FAILURES`] failures; the rest are only counted in
+    /// `more_failures`, so a huge tree of unreadable entries can't fill
+    /// memory. Each one is in the operation log.
     pub failures: Vec<Failure>,
+    pub more_failures: usize,
     /// Files left alone because their target existed and the user chose Skip.
     pub skipped: usize,
     pub cancelled: bool,
@@ -234,6 +244,13 @@ pub struct Report {
     pub left_out: Vec<PathBuf>,
     /// The result of [`Operation::Compare`].
     pub comparison: Option<Comparison>,
+}
+
+impl Report {
+    /// Every failure, kept or only counted.
+    pub fn failed(&self) -> usize {
+        self.failures.len() + self.more_failures
+    }
 }
 
 pub trait Observer {
@@ -373,7 +390,7 @@ pub fn run(operation: &Operation, observer: &mut dyn Observer, settings: &Settin
         } else {
             "finished"
         },
-        report.failures.len(),
+        report.failed(),
         report.skipped
     ));
     engine.report
@@ -597,13 +614,18 @@ impl Engine<'_> {
     /// Adds the files and bytes under `path` to the progress totals.
     /// Returns `None` if cancelled. Unreadable entries are left out; the copy
     /// itself reports them.
-    /// A delete or a move leaves out mount points, as they will.
+    /// A move leaves out mount points, as it will. Progress says
+    /// [`Progress::counting`] meanwhile, with the totals so far.
     fn scan(&mut self, path: &Path) -> Option<()> {
         let within = self.mounts.as_ref().and_then(|_| place(path));
-        self.scan_at(
+        self.progress.counting = true;
+        let scanned = self.scan_at(
             path,
             within.as_ref().map(|(real, dev)| (real.as_path(), *dev)),
-        )
+        );
+        self.progress.counting = false;
+        self.report_progress();
+        scanned
     }
 
     /// [`Engine::scan`] of `path`; `within` is its real path and the device
@@ -621,6 +643,7 @@ impl Engine<'_> {
             if meta.is_file() {
                 self.progress.bytes_total += meta.len();
             }
+            self.report_progress();
             return Some(());
         }
         if let Some((real, root_dev)) = within
@@ -1056,8 +1079,9 @@ impl Engine<'_> {
         }
     }
 
-    /// Permanent delete. Counts the files first for progress, then removes
-    /// each source with [`Engine::delete_at`].
+    /// Permanent delete: removes each source with [`Engine::delete_at`].
+    /// No count first: it would walk the whole tree once more only for a
+    /// total, so progress is the files deleted so far.
     fn delete(&mut self, sources: &[PathBuf]) {
         self.progress.items_total = sources.len();
         // Roots are rejected before the scan, which would walk everything.
@@ -1071,23 +1095,13 @@ impl Engine<'_> {
                 }
             }
         }
-        for (source, _, _) in &work {
-            if self.scan(source).is_none() {
-                self.report.cancelled = true;
-                return;
-            }
-        }
-        self.progress.bytes_total = 0; // deleting takes no time per byte
         for (source, parent, name) in work {
             let step = match open_dir(parent) {
                 Ok(dir) => match parent.canonicalize() {
-                    Ok(real) => {
-                        let real = real.join(name);
-                        match dir_device(&dir) {
-                            Ok(dev) => self.delete_at(&dir, name, source, &real, dev),
-                            Err(e) => self.fail(parent, e),
-                        }
-                    }
+                    Ok(real) => match dir_device(&dir) {
+                        Ok(dev) => self.delete_at(&dir, name, None, source, &real, dev),
+                        Err(e) => self.fail(parent, e),
+                    },
                     Err(e) => self.fail(parent, e),
                 },
                 Err(e) => self.fail(parent, e),
@@ -1107,19 +1121,26 @@ impl Engine<'_> {
     /// through a symlink (`O_NOFOLLOW`, `AT_SYMLINK_NOFOLLOW`), so replacing
     /// a directory with a symlink while this runs cannot make it delete
     /// anything outside the tree: the open fails instead. A symlink is
-    /// deleted itself, never its target. A mount point (`real` is the real
-    /// path, `root_dev` the device of the folder the delete started in) is
-    /// left alone with its folders above it, so a mounted share or a bind
-    /// mount never loses its contents.
+    /// deleted itself, never its target. A mount point (`dir_real` is the
+    /// real path of `dir`, `root_dev` the device of the folder the delete
+    /// started in) is left alone with its folders above it, so a mounted
+    /// share or a bind mount never loses its contents.
+    ///
+    /// `listed` is the type the directory listing gave, if it gave one: an
+    /// entry listed as no folder is unlinked without a `stat` first, as
+    /// `rm` does (a folder put in its place since fails to unlink and is
+    /// looked at again).
     #[cfg(unix)]
     fn delete_at(
         &mut self,
         dir: &nix::dir::Dir,
         name: &std::ffi::OsStr,
+        listed: Option<nix::dir::Type>,
         path: &Path,
-        real: &Path,
+        dir_real: &Path,
         root_dev: u64,
     ) -> Step {
+        use nix::errno::Errno;
         use nix::sys::stat::{FileStat, SFlag, fstatat};
         use nix::unistd::{UnlinkatFlags, unlinkat};
 
@@ -1127,6 +1148,18 @@ impl Engine<'_> {
             return Step::Cancelled;
         }
         self.set_current(path);
+        if listed.is_some_and(|kind| kind != nix::dir::Type::Directory) {
+            match unlinkat(dir, name, UnlinkatFlags::NoRemoveDir) {
+                Ok(()) => {
+                    self.progress.files_done += 1;
+                    self.note(format_args!("deleted {}", path.display()));
+                    return Step::Done;
+                }
+                // A folder now (EISDIR on Linux, EPERM on macOS): see below.
+                Err(Errno::EISDIR | Errno::EPERM) => {}
+                Err(e) => return self.fail(path, io::Error::from(e)),
+            }
+        }
         let is_dir = |stat: FileStat| {
             SFlag::from_bits_truncate(stat.st_mode) & SFlag::S_IFMT == SFlag::S_IFDIR
         };
@@ -1135,16 +1168,17 @@ impl Engine<'_> {
             Err(e) => return self.fail(path, io::Error::from(e)),
         };
         if !is_dir(stat) {
-            self.progress.files_done += 1;
             return match unlinkat(dir, name, UnlinkatFlags::NoRemoveDir) {
                 Ok(()) => {
+                    self.progress.files_done += 1;
                     self.note(format_args!("deleted {}", path.display()));
                     Step::Done
                 }
                 Err(e) => self.fail(path, io::Error::from(e)),
             };
         }
-        if self.is_mount_point(real, device(&stat), root_dev) {
+        let real = dir_real.join(name);
+        if self.is_mount_point(&real, device(&stat), root_dev) {
             return self.fail(path, MOUNT_POINT);
         }
         let mut child = match open_dir_at(dir, name) {
@@ -1152,22 +1186,24 @@ impl Engine<'_> {
             Err(e) => return self.fail(path, e),
         };
         // Names first: deleting while reading the same directory is unreliable.
-        let names: Vec<std::ffi::OsString> = child
+        let names: Vec<(std::ffi::OsString, Option<nix::dir::Type>)> = child
             .iter()
             .filter_map(Result::ok)
             .map(|entry| {
                 use std::os::unix::ffi::OsStrExt;
-                std::ffi::OsStr::from_bytes(entry.file_name().to_bytes()).to_owned()
+                let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes()).to_owned();
+                (name, entry.file_type())
             })
-            .filter(|n| n != "." && n != "..")
+            .filter(|(n, _)| n != "." && n != "..")
             .collect();
         let mut complete = true;
-        for child_name in names {
+        for (child_name, listed) in names {
             match self.delete_at(
                 &child,
                 &child_name,
+                listed,
                 &path.join(&child_name),
-                &real.join(&child_name),
+                &real,
                 root_dev,
             ) {
                 Step::Done => {}
@@ -1188,7 +1224,15 @@ impl Engine<'_> {
     }
 
     #[cfg(not(unix))]
-    fn delete_at(&mut self, _: &(), _: &std::ffi::OsStr, path: &Path, _: &Path, _: u64) -> Step {
+    fn delete_at(
+        &mut self,
+        _: &(),
+        _: &std::ffi::OsStr,
+        _: Option<()>,
+        path: &Path,
+        _: &Path,
+        _: u64,
+    ) -> Step {
         self.fail(path, "deleting is not supported on this platform")
     }
 
@@ -1223,10 +1267,14 @@ impl Engine<'_> {
     fn fail(&mut self, path: &Path, message: impl ToString) -> Step {
         let message = message.to_string();
         self.note(format_args!("failed {}: {message}", path.display()));
-        self.report.failures.push(Failure {
-            path: path.to_path_buf(),
-            message,
-        });
+        if self.report.failures.len() < KEPT_FAILURES {
+            self.report.failures.push(Failure {
+                path: path.to_path_buf(),
+                message,
+            });
+        } else {
+            self.report.more_failures += 1;
+        }
         Step::Incomplete
     }
 

@@ -157,7 +157,17 @@ impl Engine<'_> {
 
     /// Adds the files and bytes under `path` to the totals; `None` if
     /// cancelled. Unreadable folders are left out (the copy reports them).
+    /// Progress says [`Progress::counting`](super::Progress::counting)
+    /// meanwhile.
     fn scan_across(&mut self, fs: &mut dyn Fs, path: &Path, meta: &Meta) -> Option<()> {
+        self.progress.counting = true;
+        let scanned = self.count_across(fs, path, meta);
+        self.progress.counting = false;
+        self.report_progress();
+        scanned
+    }
+
+    fn count_across(&mut self, fs: &mut dyn Fs, path: &Path, meta: &Meta) -> Option<()> {
         if self.observer.is_cancelled() {
             return None;
         }
@@ -169,7 +179,7 @@ impl Engine<'_> {
         match kind {
             Kind::Dir => {
                 for (name, child) in fs.read_dir(path).unwrap_or_default() {
-                    self.scan_across(fs, &path.join(name), &child)?;
+                    self.count_across(fs, &path.join(name), &child)?;
                 }
             }
             Kind::File | Kind::Symlink => {
@@ -614,12 +624,6 @@ impl Engine<'_> {
                 }
             }
         }
-        for (source, meta) in &work {
-            if self.scan_across(fs.as_mut(), source, meta).is_none() {
-                self.report.cancelled = true;
-                return;
-            }
-        }
         for (source, meta) in work {
             if self.delete_one_across(fs.as_mut(), source, &meta) == Step::Cancelled {
                 self.report.cancelled = true;
@@ -669,10 +673,9 @@ impl Engine<'_> {
                 Err(e) => self.fail(path, e),
             };
         }
-        let result = fs.remove_file(path);
-        self.progress.files_done += 1;
-        match result {
+        match fs.remove_file(path) {
             Ok(()) => {
+                self.progress.files_done += 1;
                 self.note(format_args!("deleted {}", path.display()));
                 Step::Done
             }
