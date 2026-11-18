@@ -2228,7 +2228,7 @@ mod check_for_updates {
 
     /// Points the check at a local server that redirects one request to
     /// the release tag `tag`, as GitHub does.
-    fn release(tag: &str, cx: &mut VisualTestContext) {
+    pub(super) fn release(tag: &str, cx: &mut VisualTestContext) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/releases/latest", listener.local_addr().unwrap());
         let response = format!(
@@ -2241,6 +2241,22 @@ mod check_for_updates {
             stream.write_all(response.as_bytes()).unwrap();
         });
         file_manager(cx).update(cx, |this, _| this.update_url = url);
+    }
+
+    /// Clicks the update button and waits for the box the check's answer
+    /// opens. Without a `release`, the check fails (port 1).
+    pub(super) fn click_button(cx: &mut VisualTestContext) {
+        click(cx, "update-button", 1);
+        wait_until(cx, answered);
+    }
+
+    /// The checking box has given way to the answer's.
+    fn answered(cx: &mut VisualTestContext) -> bool {
+        dialog_open(cx) && !checking_shown(cx)
+    }
+
+    fn checking_shown(cx: &mut VisualTestContext) -> bool {
+        cx.debug_bounds("update-checking").is_some()
     }
 
     fn button_shown(cx: &mut VisualTestContext) -> bool {
@@ -2262,7 +2278,8 @@ mod check_for_updates {
 
     /// With the button up: this copy is installed at a made-up place,
     /// releases come from a folder holding `script` as 999.0.0's install.sh,
-    /// and restarting records the app it was given.
+    /// and restarting records the app it was given. The check a click runs
+    /// finds 999.0.0 too.
     fn ready_to_update(
         script: &str,
         cx: &mut VisualTestContext,
@@ -2287,6 +2304,7 @@ mod check_for_updates {
             cx.notify();
         });
         cx.run_until_parked();
+        release("v999.0.0", cx);
         (tmp, started)
     }
 
@@ -2383,8 +2401,7 @@ mod check_for_updates {
         let mark = releases.path().join("ran");
         let script = format!("echo ran > '{}'\n", mark.display());
         std::fs::write(releases.path().join("v999.0.0/install.sh"), script).unwrap();
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         assert!(cx.debug_bounds("update-question").is_some());
         assert!(!mark.exists(), "nothing before the answer");
         cx.simulate_keystrokes("enter");
@@ -2394,11 +2411,121 @@ mod check_for_updates {
     }
 
     #[gpui_kit::test]
+    fn the_button_offers_a_release_newer_than_the_one_it_found(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let (releases, started) = ready_to_update("exit 1\n", cx);
+        let newer = releases.path().join("v1000.0.0");
+        std::fs::create_dir(&newer).unwrap();
+        let mark = releases.path().join("ran");
+        let script = format!("echo ran > '{}'\n", mark.display());
+        std::fs::write(newer.join("install.sh"), script).unwrap();
+        release("v1000.0.0", cx);
+        click_button(cx);
+        assert!(cx.debug_bounds("update-question").is_some());
+        let latest = file_manager(cx).read_with(cx, |this, _| this.updates.available);
+        assert_eq!(
+            latest,
+            yagni_commander_core::update::Version::parse("1000.0.0")
+        );
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |_| !started.borrow().is_empty());
+        assert!(mark.exists(), "1000.0.0's script ran, not 999.0.0's");
+    }
+
+    #[gpui_kit::test]
+    fn the_button_says_so_when_its_release_is_gone(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        ready_to_update("", cx);
+        release("v0.0.1", cx);
+        click_button(cx);
+        assert!(box_text(cx).ends_with("is the latest version."));
+        assert!(!button_shown(cx));
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_check_from_the_button_says_why_and_keeps_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        ready_to_update("", cx);
+        // Port 1: the check fails.
+        file_manager(cx).update(cx, |this, _| this.update_url = "http://127.0.0.1:1/".into());
+        click_button(cx);
+        assert!(cx.debug_bounds("update-question").is_none());
+        assert_eq!(
+            box_text(cx),
+            "Cannot check for updates\nCannot reach GitHub. Check the connection and try again."
+        );
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert!(button_shown(cx));
+    }
+
+    #[gpui_kit::test]
+    fn the_button_opens_a_checking_box_that_gives_way_to_the_offer(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        ready_to_update("", cx);
+        click(cx, "update-button", 1);
+        // The answer is read on the poll, which the test clock holds back.
+        cx.run_until_parked();
+        assert!(checking_shown(cx));
+        assert_eq!(box_text(cx), "", "Ctrl-C copies nothing from it");
+        wait_until(cx, answered);
+        assert!(cx.debug_bounds("update-question").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn help_opens_the_checking_box_too(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        release("v0.0.1", cx);
+        cx.dispatch_action(crate::actions::CheckForUpdates);
+        cx.run_until_parked();
+        assert!(checking_shown(cx));
+        wait_until(cx, answered);
+        assert!(box_text(cx).ends_with("is the latest version."));
+    }
+
+    /// Cancelled by `keys`: the box closes, the answer is never shown, the
+    /// panel has focus and a new check runs.
+    fn cancel_checking_with(keys: &str, cx: &mut VisualTestContext) {
+        ready_to_update("", cx);
+        activate(cx);
+        click(cx, "update-button", 1);
+        cx.run_until_parked();
+        assert!(checking_shown(cx));
+        cx.simulate_keystrokes(keys);
+        cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        for _ in 0..10 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(100));
+            cx.run_until_parked();
+        }
+        assert!(!dialog_open(cx), "the answer is dropped");
+        assert!(button_shown(cx));
+        let file_manager_focused =
+            file_manager(cx).update_in(cx, |this, window, _| this.focus.is_focused(window));
+        assert!(file_manager_focused);
+        release("v999.0.0", cx);
+        click_button(cx);
+        assert!(cx.debug_bounds("update-question").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn cancel_drops_the_check(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cancel_checking_with("enter", cx);
+    }
+
+    #[gpui_kit::test]
+    fn escape_drops_the_check(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cancel_checking_with("escape", cx);
+    }
+
+    #[gpui_kit::test]
     fn the_install_box_keeps_moving(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let (_releases, started) = ready_to_update("sleep 1\n", cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         cx.simulate_keystrokes("enter");
         let bar = "update-progress-bar";
         wait_until(cx, |cx| cx.debug_bounds(bar).is_some());
@@ -2429,8 +2556,7 @@ mod check_for_updates {
         use_log_dir(logs.path(), cx);
         change_setting(Setting::Log(true), cx);
         let (_releases, started) = ready_to_update(script, cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| {
             !started.borrow().is_empty()
@@ -2485,8 +2611,7 @@ mod check_for_updates {
         change_setting(Setting::Log(true), cx);
         let (releases, started) = ready_to_update(script, cx);
         activate(cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        click_button(cx);
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| cx.debug_bounds("update-installing").is_some());
         (vec![cfg, logs, releases], started)
@@ -2564,8 +2689,7 @@ mod check_for_updates {
     fn not_now_leaves_everything_alone(cx: &mut TestAppContext) {
         let (_tmp, commander, cx) = open(cx);
         let (_releases, started) = ready_to_update("", cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         cx.simulate_keystrokes("right enter");
         cx.run_until_parked();
         assert!(!dialog_open(cx));
@@ -2579,8 +2703,7 @@ mod check_for_updates {
     fn a_failed_install_says_why_and_does_not_restart(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         let (_releases, started) = ready_to_update("echo 'install.sh: broken' >&2; exit 1\n", cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| {
             cx.debug_bounds("update-installing").is_none() && dialog_open(cx)
@@ -2597,15 +2720,14 @@ mod check_for_updates {
         let (_tmp, _commander, cx) = open(cx);
         let (_releases, started) = ready_to_update("", cx);
         file_manager(cx).update(cx, |this, _| this.updates.app = None);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::click_button(cx);
         assert!(box_text(cx).contains("999.0.0 is available"));
         assert!(started.borrow().is_empty());
     }
 
     fn check(cx: &mut VisualTestContext) {
         cx.dispatch_action(crate::actions::CheckForUpdates);
-        wait_until(cx, dialog_open);
+        wait_until(cx, answered);
     }
 
     #[gpui_kit::test]
@@ -2694,9 +2816,9 @@ mod check_for_updates {
         let (_tmp, _commander, cx) = open(cx);
         check(cx);
         let text = box_text(cx);
-        assert!(
-            text.starts_with("Cannot check for updates\nCannot reach GitHub: "),
-            "{text}"
+        assert_eq!(
+            text,
+            "Cannot check for updates\nCannot reach GitHub. Check the connection and try again."
         );
     }
 
@@ -2708,7 +2830,7 @@ mod check_for_updates {
         // show an error after the first box.
         cx.dispatch_action(crate::actions::CheckForUpdates);
         cx.dispatch_action(crate::actions::CheckForUpdates);
-        wait_until(cx, dialog_open);
+        wait_until(cx, answered);
         assert!(box_text(cx).contains("is the latest version"));
         cx.simulate_keystrokes("enter");
         for _ in 0..10 {
@@ -9960,6 +10082,19 @@ pub(crate) mod tab_order {
     }
 
     #[gpui_kit::test]
+    fn the_checking_box_keeps_tab_on_cancel(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        activate(cx);
+        cx.dispatch_action(crate::actions::CheckForUpdates);
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("update-checking").is_some());
+        let named = Vec::new();
+        assert_focus(cx, "button:Cancel", &named);
+        assert_order(cx, "tab", &["button:Cancel"], &named);
+        assert_order(cx, "shift-tab", &["button:Cancel"], &named);
+    }
+
+    #[gpui_kit::test]
     fn the_update_question_goes_round_its_buttons(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = open(cx);
         file_manager(cx).update(cx, |this, cx| {
@@ -9969,8 +10104,8 @@ pub(crate) mod tab_order {
         });
         cx.run_until_parked();
         activate(cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::release("v999.0.0", cx);
+        check_for_updates::click_button(cx);
         let named = Vec::new();
         assert_focus(cx, "button:Update and restart", &named);
         let order = ["button:Not now", "button:Update and restart"];
@@ -9993,8 +10128,8 @@ pub(crate) mod tab_order {
         });
         cx.run_until_parked();
         activate(cx);
-        click(cx, "update-button", 1);
-        cx.run_until_parked();
+        check_for_updates::release("v999.0.0", cx);
+        check_for_updates::click_button(cx);
         cx.simulate_keystrokes("enter");
         wait_until(cx, |cx| cx.debug_bounds("update-installing").is_some());
         let named = Vec::new();

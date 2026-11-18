@@ -123,6 +123,8 @@ pub struct FileManager {
     pub(crate) update_url: String,
     /// A check for updates is running: another press waits for it.
     checking_updates: bool,
+    /// The running check's number: a cancelled one's answer is dropped.
+    update_check: usize,
     /// The startup check's state and the update itself (`self_update.rs`).
     pub(crate) updates: self_update::Updates,
     /// Runs directory reads; `None` reads them inline (tests).
@@ -330,6 +332,7 @@ impl FileManager {
             opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
             update_url: yagni_commander_core::update::LATEST_URL.to_owned(),
             checking_updates: false,
+            update_check: 0,
             updates: self_update::Updates::new(),
             terminal: None,
             load: Some(loads::spawn_load),

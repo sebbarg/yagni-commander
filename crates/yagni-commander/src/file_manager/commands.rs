@@ -1007,20 +1007,26 @@ impl FileManager {
 }
 
 impl FileManager {
-    /// Help > Check for updates: asks GitHub on a thread of its own and
-    /// shows what it found: the latest version, an offer to install a newer
-    /// one, or why it couldn't tell.
+    /// Help > Check for updates and the update button's click (a newer
+    /// release may be out since the button appeared): a box says
+    /// "Checking for updates..." while GitHub is asked on a thread of its
+    /// own, then gives way to what the check found: an offer to install a
+    /// newer release, the latest version, or why it couldn't tell. Cancel
+    /// (or Escape) drops the answer.
     pub(super) fn check_for_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.end_search(cx);
         if self.checking_updates {
             return;
         }
         self.checking_updates = true;
+        self.update_check += 1;
+        let id = self.update_check;
         let (tx, rx) = std::sync::mpsc::channel();
         let url = self.update_url.clone();
         std::thread::spawn(move || {
             let _ = tx.send(yagni_commander_core::update::check(&url));
         });
+        self.show_checking(window, cx);
         // Polled: a wake-up from another thread panics gpui's test scheduler.
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -1033,13 +1039,76 @@ impl FileManager {
                     }
                 };
                 let _ = this.update_in(cx, |this, window, cx| {
+                    // Cancelled: the box is gone, and maybe a new check runs.
+                    if this.update_check != id {
+                        return;
+                    }
                     this.checking_updates = false;
-                    this.checked_for_updates(result, window, cx);
+                    window.close_dialog(cx);
+                    // After the checking box's close has run.
+                    let this = cx.entity().downgrade();
+                    window.defer(cx, move |window, cx| {
+                        let _ = this
+                            .update(cx, |this, cx| this.checked_for_updates(result, window, cx));
+                    });
                 });
                 break;
             }
         })
         .detach();
+    }
+
+    /// The box while a check runs: its text and a Cancel button.
+    fn show_checking(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_kit::InteractiveElement;
+        let this = cx.entity().downgrade();
+        let focus = self.focus.clone();
+        // Leaves the check to finish unheard; true if it was still running.
+        let stop = move |cx: &mut App| {
+            this.update(cx, |this, _| {
+                let running = this.checking_updates;
+                this.checking_updates = false;
+                this.update_check += 1;
+                running
+            })
+            .unwrap_or(false)
+        };
+        let cancel: OnPress = Rc::new({
+            let stop = stop.clone();
+            let focus = focus.clone();
+            move |window, cx| {
+                if stop(cx) {
+                    window.close_dialog(cx);
+                    let focus = focus.clone();
+                    window.defer(cx, move |window, cx| focus.focus(window, cx));
+                }
+            }
+        });
+        let buttons = ButtonRow::build([("Cancel", cancel)], 0, cx);
+        focus_when_open(buttons.focus_handle(cx), window, cx);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let stop = stop.clone();
+            let focus = focus.clone();
+            themed_dialog(dialog, cx)
+                .title("Check for updates")
+                .w(crate::zoom::dialog_width(460.0, cx))
+                .close_button(false)
+                .overlay_closable(false)
+                .child(
+                    gpui_kit::div()
+                        .debug_selector(|| "update-checking".into())
+                        .child("Checking for updates..."),
+                )
+                .footer(buttons.clone())
+                // Enter belongs to the Cancel button, never the dialog's OK.
+                .on_ok(|_, _, _| false)
+                .on_cancel(move |_, window, cx| {
+                    stop(cx);
+                    let focus = focus.clone();
+                    window.defer(cx, move |window, cx| focus.focus(window, cx));
+                    true
+                })
+        });
     }
 
     /// A newer release is offered like the update button's click (which

@@ -93,10 +93,7 @@ fn latest(url: &str) -> Result<Version, String> {
         .user_agent(concat!("yagni-commander/", env!("CARGO_PKG_VERSION")))
         .build()
         .into();
-    let response = agent
-        .head(url)
-        .call()
-        .map_err(|e| format!("Cannot reach GitHub: {e}"))?;
+    let response = agent.head(url).call().map_err(check_error)?;
     let location = response
         .headers()
         .get("location")
@@ -108,6 +105,23 @@ fn latest(url: &str) -> Result<Version, String> {
             Some(l) => format!("GitHub sent an unexpected address: {l}"),
             None => format!("GitHub sent no release (status {}).", response.status()),
         })
+}
+
+/// A sentence for a failed request: plain words when the network or
+/// GitHub is the cause, else the technical message.
+fn check_error(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::StatusCode(status) if (500..600).contains(&status) => {
+            format!("GitHub is having trouble answering (HTTP {status}). Try again later.")
+        }
+        ureq::Error::Io(_)
+        | ureq::Error::Timeout(_)
+        | ureq::Error::HostNotFound
+        | ureq::Error::ConnectionFailed => {
+            "Cannot reach GitHub. Check the connection and try again.".to_owned()
+        }
+        e => format!("Cannot reach GitHub: {e}"),
+    }
 }
 
 /// What to start after an update, if `exe` is where the install script puts
@@ -522,6 +536,25 @@ mod tests {
         assert!(error.starts_with("Cannot reach GitHub: "), "{error}");
     }
 
+    #[test]
+    fn a_server_error_says_to_try_later() {
+        let (url, _) = serve("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+        assert_eq!(
+            check(&url),
+            Err("GitHub is having trouble answering (HTTP 503). Try again later.".into())
+        );
+    }
+
+    #[test]
+    fn no_host_says_to_check_the_connection() {
+        // `.invalid` never resolves (RFC 6761).
+        let error = check("http://nowhere.invalid/").unwrap_err();
+        assert_eq!(
+            error,
+            "Cannot reach GitHub. Check the connection and try again."
+        );
+    }
+
     /// The real request, over the network: `cargo test -p
     /// yagni-commander-core -- --ignored github`.
     #[test]
@@ -540,7 +573,10 @@ mod tests {
             .unwrap()
             .port();
         let error = check(&format!("http://127.0.0.1:{port}/")).unwrap_err();
-        assert!(error.starts_with("Cannot reach GitHub: "), "{error}");
+        assert_eq!(
+            error,
+            "Cannot reach GitHub. Check the connection and try again."
+        );
     }
 
     #[test]

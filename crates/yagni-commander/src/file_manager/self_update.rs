@@ -234,7 +234,8 @@ impl FileManager {
                 .font_family(icons::FONT_FAMILY)
                 .text_size(rems_from_px(10.0))
                 .child(icons::UPDATE.to_string())
-                .on_click(cx.listener(|this, _, window, cx| this.offer_update(window, cx))),
+                // Checks again first: a newer release may be out by now.
+                .on_click(cx.listener(|this, _, window, cx| this.check_for_updates(window, cx))),
         )
     }
 
