@@ -1,0 +1,45 @@
+# Dracula (draculatheme.com, the classic palette and its UI shades). Colors are
+# named by role, not hue.
+# Hex values: #rgb, #rgba, #rrggbb or #rrggbbaa.
+# Every text color reaches WCAG AA (4.5:1) on the backgrounds it is drawn on
+# (checked by the theme tests); the grays (text_secondary, text_dim, hidden)
+# are Dracula's comment color lifted toward its foreground for that, and error
+# its red (dialogs are drawn on the popups' color).
+name = "Dracula"
+mode = "dark"
+
+[colors]
+window_bg = "#191a21"
+panel_bg = "#282a36"
+dialog_bg = "#343746"
+header_bg = "#21222c"
+header_active_bg = "#44475a"
+popup_bg = "#343746"
+raised_border = "#6272a4"
+border = "#343746"
+text = "#f8f8f2"
+text_secondary = "#adb5cb"
+text_dim = "#95a0bf"
+directory = "#bd93f9"
+symlink = "#8be9fd"
+hidden = "#95a0bf"
+accent = "#bd93f9"
+text_on_accent = "#282a36"
+cursor_inactive_bg = "#343746"
+selected = "#ff79c6"
+text_on_selected = "#282a36"
+error = "#ff7979"
+warning = "#f1fa8c"
+success = "#50fa7b"
+info = "#8be9fd"
+# The F3 viewer's source mode (Dracula's own syntax colors: constants purple and
+# parameters orange as in its VS Code theme; the comment color lifted from
+# #6272a4 to reach 4.5:1; punctuation the foreground, as the spec has it).
+syntax_keyword = "#ff79c6"
+syntax_string = "#f1fa8c"
+syntax_comment = "#8491b6"
+syntax_type = "#8be9fd"
+syntax_function = "#50fa7b"
+syntax_constant = "#bd93f9"
+syntax_property = "#ffb86c"
+syntax_punctuation = "#f8f8f2"

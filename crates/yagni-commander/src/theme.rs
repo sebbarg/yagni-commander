@@ -12,16 +12,18 @@ use serde::Deserialize;
 const TOKYO_NIGHT: &str = include_str!("../assets/themes/tokyo-night.toml");
 const GRUVBOX_DARK: &str = include_str!("../assets/themes/gruvbox-dark.toml");
 const EVERFOREST_DARK: &str = include_str!("../assets/themes/everforest-dark.toml");
+const DRACULA: &str = include_str!("../assets/themes/dracula.toml");
 const CATPPUCCIN_LATTE: &str = include_str!("../assets/themes/catppuccin-latte.toml");
 const CLASSIC: &str = include_str!("../assets/themes/classic.toml");
 
 /// The built-in themes: (id, file), Tokyo Night (the default) first, then
 /// the other dark ones, then the light ones. The id is what the config's
 /// `theme` key holds.
-pub const BUILTIN: [(&str, &str); 5] = [
+pub const BUILTIN: [(&str, &str); 6] = [
     ("tokyo-night", TOKYO_NIGHT),
     ("gruvbox-dark", GRUVBOX_DARK),
     ("everforest-dark", EVERFOREST_DARK),
+    ("dracula", DRACULA),
     ("catppuccin-latte", CATPPUCCIN_LATTE),
     ("classic", CLASSIC),
 ];
@@ -496,6 +498,7 @@ mod tests {
                 ("tokyo-night", "Tokyo Night".to_owned()),
                 ("gruvbox-dark", "Gruvbox Dark".to_owned()),
                 ("everforest-dark", "Everforest Dark".to_owned()),
+                ("dracula", "Dracula".to_owned()),
                 ("catppuccin-latte", "Catppuccin Latte".to_owned()),
                 ("classic", "Classic".to_owned()),
             ]
@@ -503,6 +506,7 @@ mod tests {
         assert_eq!(Theme::builtin("classic").unwrap().mode, Mode::Light);
         assert_eq!(Theme::builtin("gruvbox-dark").unwrap().mode, Mode::Dark);
         assert_eq!(Theme::builtin("everforest-dark").unwrap().mode, Mode::Dark);
+        assert_eq!(Theme::builtin("dracula").unwrap().mode, Mode::Dark);
         assert_eq!(
             Theme::builtin("catppuccin-latte").unwrap().mode,
             Mode::Light

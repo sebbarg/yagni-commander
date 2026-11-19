@@ -42,7 +42,7 @@ pub struct Config {
     /// [`crate::update`]).
     pub check_updates: bool,
     /// The theme's id (`tokyo-night`, `gruvbox-dark`, `everforest-dark`,
-    /// `catppuccin-latte`, `classic`); none
+    /// `dracula`, `catppuccin-latte`, `classic`); none
     /// means the default. Not checked here: the app knows the themes.
     pub theme: Option<String>,
     /// Bookmarked folders (Ctrl-D), edited in the app.
@@ -115,7 +115,7 @@ git = true
 check_updates = true
 
 # Color theme: "tokyo-night" (the default), "gruvbox-dark", "everforest-dark",
-# "catppuccin-latte" or "classic".
+# "dracula", "catppuccin-latte" or "classic".
 # theme = "tokyo-night"
 
 # User commands (Ctrl-S): programs to open the entry under the cursor with.

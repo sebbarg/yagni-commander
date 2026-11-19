@@ -37,7 +37,7 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - Panels follow changes made by other programs.
 - The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.
 - Hidden files on Ctrl-., folders and window position remembered between runs.
-- Five themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
+- Six themes (Tokyo Night, Gruvbox Dark, Everforest Dark, Dracula, Catppuccin Latte, Classic), switched live in the settings dialog (Ctrl-,), and a plain TOML config file; an optional log of every file operation.
 
 ## User commands
 
@@ -156,7 +156,7 @@ Set `editor` to the command F4 runs, for example `editor = "code --wait"`. If it
 
 Ctrl-Shift-T opens a terminal in the active panel's folder. On Linux it uses `$TERMINAL`, then your desktop's choice (KDE), then the first common terminal it finds; on macOS, Terminal.app. To pick one yourself, set `terminal` to the command to run, with `{active_dir}` for the folder if the terminal needs it as an argument: `terminal = "wezterm start --cwd {active_dir}"`, `terminal = "kitty --directory {active_dir}"`, or on macOS `terminal = "open -na WezTerm --args start --cwd {active_dir}"` (through `open`, so its window comes to the front).
 
-Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `catppuccin-latte` (light) or `classic` (light), or pick one in the settings dialog; it switches at once.
+Set `theme` to `tokyo-night` (the default), `gruvbox-dark`, `everforest-dark`, `dracula`, `catppuccin-latte` (light) or `classic` (light), or pick one in the settings dialog; it switches at once.
 
 ## Development
 

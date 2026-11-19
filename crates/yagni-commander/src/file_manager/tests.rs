@@ -8220,7 +8220,7 @@ mod themes {
         let cfg = tempfile::tempdir().unwrap();
         let path = use_config(cfg.path(), "", cx);
         open_theme_dropdown(cx);
-        cx.simulate_keystrokes("down down down down enter"); // Classic, the last
+        cx.simulate_keystrokes("down down down down down enter"); // Classic, the last
         assert_eq!(theme_name(cx), "Classic");
         assert_eq!(config(cx).theme.as_deref(), Some("classic"));
         assert!(
@@ -8331,7 +8331,7 @@ mod themes {
         cx.run_until_parked();
         click(cx, "settings-theme", 1);
         assert!(cx.debug_bounds("dropdown-theme-list").is_some());
-        click(cx, "dropdown-theme-row-4", 1);
+        click(cx, "dropdown-theme-row-5", 1);
         assert_eq!(theme_name(cx), "Classic");
         assert!(cx.debug_bounds("dropdown-theme-list").is_none());
     }
