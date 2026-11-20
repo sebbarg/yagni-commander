@@ -4676,6 +4676,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "no_std_io2"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9582,7 +9594,7 @@ dependencies = [
  "jiff",
  "liblzma",
  "markdown",
- "nix",
+ "nix 0.32.0",
  "notify",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
@@ -9930,7 +9942,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "memchr",
- "nix",
+ "nix 0.31.3",
  "pbkdf2 0.13.0",
  "sha1",
  "typed-path",
