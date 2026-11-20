@@ -2,7 +2,7 @@
 //! can later add or override bindings without touching the views.
 
 use gpui_kit::component::input;
-use gpui_kit::{App, KeyBinding, actions};
+use gpui_kit::{App, KeyBinding, OperatingSystem, actions};
 
 /// Key context of the file manager's root view; scopes the bindings below.
 pub const FILE_MANAGER_CONTEXT: &str = "FileManager";
@@ -331,12 +331,13 @@ pub fn bind_default_keys(cx: &mut App) {
 /// gpui-component's (Linux, the last binding) still shows Ctrl. Not for
 /// Ctrl-Tab and Ctrl-Shift-Tab: Cmd-Tab is the system's app switcher.
 pub fn with_cmd_twins(
+    cx: &App,
     bindings: impl IntoIterator<Item = KeyBinding>,
     mac: bool,
 ) -> Vec<KeyBinding> {
     let mut all = Vec::new();
     for binding in bindings {
-        if mac && let Some(twin) = cmd_twin(&binding) {
+        if mac && let Some(twin) = cmd_twin(cx, &binding) {
             all.push(twin);
         }
         all.push(binding);
@@ -344,7 +345,7 @@ pub fn with_cmd_twins(
     all
 }
 
-fn cmd_twin(binding: &KeyBinding) -> Option<KeyBinding> {
+fn cmd_twin(cx: &App, binding: &KeyBinding) -> Option<KeyBinding> {
     let [keystroke] = binding.keystrokes() else {
         return None;
     };
@@ -356,18 +357,30 @@ fn cmd_twin(binding: &KeyBinding) -> Option<KeyBinding> {
     modifiers.control = false;
     modifiers.platform = true;
     KeyBinding::load(
-        &keystroke.unparse(),
+        &keystroke.unparse(OperatingSystem::Mac),
         binding.action().boxed_clone(),
         binding.predicate(),
         false,
         None,
-        &gpui_kit::DummyKeyboardMapper,
+        cx,
     )
     .ok()
 }
 
+/// `alt-a` to `alt-z`: `KeyBinding::new` takes only static text.
+fn alt_letter(letter: char) -> &'static str {
+    const KEYS: [&str; 26] = [
+        "alt-a", "alt-b", "alt-c", "alt-d", "alt-e", "alt-f", "alt-g", "alt-h", "alt-i", "alt-j",
+        "alt-k", "alt-l", "alt-m", "alt-n", "alt-o", "alt-p", "alt-q", "alt-r", "alt-s", "alt-t",
+        "alt-u", "alt-v", "alt-w", "alt-x", "alt-y", "alt-z",
+    ];
+    assert!(letter.is_ascii_lowercase(), "no Alt key for {letter:?}");
+    KEYS[(letter as u8 - b'a') as usize]
+}
+
 fn bind(cx: &mut App, mac: bool, bindings: impl IntoIterator<Item = KeyBinding>) {
-    cx.bind_keys(with_cmd_twins(bindings, mac));
+    let all = with_cmd_twins(cx, bindings, mac);
+    cx.bind_keys(all);
 }
 
 /// The keymap; `mac` adds the Cmd twins ([`with_cmd_twins`]) and leaves
@@ -505,8 +518,11 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
                 .iter()
                 .enumerate()
                 .map(|(index, title)| {
-                    let key = format!("alt-{}", crate::menus::letter(title));
-                    KeyBinding::new(&key, OpenMenu(index), context)
+                    KeyBinding::new(
+                        alt_letter(crate::menus::letter(title)),
+                        OpenMenu(index),
+                        context,
+                    )
                 }),
         );
     }
@@ -662,7 +678,7 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             cx,
             mac,
             ('a'..='z').map(|letter| {
-                KeyBinding::new(&format!("alt-{letter}"), DialogAlt(letter), Some(context))
+                KeyBinding::new(alt_letter(letter), DialogAlt(letter), Some(context))
             }),
         );
     }

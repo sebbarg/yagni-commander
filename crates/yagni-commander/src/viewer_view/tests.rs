@@ -257,13 +257,13 @@ fn bounds_of(
 fn wheel_scrolls_rows(cx: &mut TestAppContext) {
     let (_tmp, viewer, mut cx) = view(&numbered(1000), cx);
     let at = bounds_of(&mut cx, "viewer-row-0").center();
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: at,
         delta: gpui_kit::ScrollDelta::Lines(point(0.0, -3.0)),
         ..Default::default()
     });
     assert_eq!(shown(&viewer, &mut cx)[0], "line 4");
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: at,
         delta: gpui_kit::ScrollDelta::Lines(point(0.0, 1.0)),
         ..Default::default()
@@ -273,7 +273,7 @@ fn wheel_scrolls_rows(cx: &mut TestAppContext) {
 
 fn wheel(cx: &mut VisualTestContext, delta: gpui_kit::ScrollDelta) {
     let at = bounds_of(cx, "viewer-row-0").center();
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position: at,
         delta,
         ..Default::default()
@@ -2109,7 +2109,7 @@ mod help {
             let bound = |key: &str| {
                 viewer
                     .iter()
-                    .filter(|b| matches!(b.keystrokes(), [k] if k.inner().unparse() == key))
+                    .filter(|b| matches!(b.keystrokes(), [k] if k.inner().unparse(gpui_kit::OperatingSystem::Mac) == key))
                     .map(|b| b.action().name())
                     .next()
             };
@@ -2595,7 +2595,7 @@ mod image_mode {
         bytes.extend(numbered(500));
         let (_tmp, viewer, mut vcx) = open_named("a.png", &bytes, None, cx);
         assert!(in_image_mode(&viewer, &mut vcx));
-        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+        vcx.simulate_event(gpui_kit::ScrollEvent {
             position: point(px(100.0), px(100.0)),
             delta: gpui_kit::ScrollDelta::Lines(point(0.0, -5.0)),
             ..Default::default()
@@ -2754,7 +2754,7 @@ mod image_mode {
         let (_tmp, _viewer, mut vcx) = zoomed_png(cx);
         vcx.simulate_keystrokes("ctrl-= ctrl-=");
         let (start, area) = drawn(&mut vcx);
-        vcx.simulate_event(gpui_kit::ScrollWheelEvent {
+        vcx.simulate_event(gpui_kit::ScrollEvent {
             position: area.center(),
             delta: gpui_kit::ScrollDelta::Pixels(point(px(-30.0), px(-20.0))),
             ..Default::default()

@@ -718,12 +718,7 @@ impl ViewerView {
         self.jump_to((y - top) / height, cx);
     }
 
-    fn on_wheel(
-        &mut self,
-        event: &gpui_kit::ScrollWheelEvent,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn on_wheel(&mut self, event: &gpui_kit::ScrollEvent, window: &Window, cx: &mut Context<Self>) {
         if self.picture.is_some() {
             // Moves a zoomed picture, both axes at once (no rows to keep).
             let delta = event.delta.pixel_delta(px(line_height(cx)));
@@ -965,9 +960,7 @@ impl Render for ViewerView {
                 cx.listener(|this, _: &ZoomOut, window, cx| this.zoom(Some(false), window, cx)),
             )
             .on_action(cx.listener(|this, _: &ZoomReset, window, cx| this.zoom(None, window, cx)))
-            .on_scroll_wheel(
-                cx.listener(|this, event, window, cx| this.on_wheel(event, window, cx)),
-            )
+            .on_scroll(cx.listener(|this, event, window, cx| this.on_wheel(event, window, cx)))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui_kit::MouseMoveEvent, window, cx| {
                     if this.drag_picture(event.position, event.pressed_button, window, cx) {

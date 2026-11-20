@@ -791,7 +791,46 @@ pub(crate) fn ask_for_attention(window: &Window) {
 /// Every dialog's builder starts here: gpui-component's `Dialog` paints its
 /// own background and then applies ours, so this one wins (`dialog_bg`).
 pub(crate) fn themed_dialog(dialog: Dialog, cx: &App) -> Dialog {
-    dialog.bg(crate::theme::Theme::get(cx).colors.dialog_bg)
+    // No slide-in or fade (owner, 2026-10-29): a dialog opens and closes in
+    // one frame. Other animations keep running.
+    dialog
+        .entrance(gpui_kit::component::dialog::DialogEntrance::None)
+        .bg(crate::theme::Theme::get(cx).colors.dialog_bg)
+}
+
+/// The About box's band: a short accent bar sliding back and forth under
+/// the text, so a glance shows animations run while dialogs don't.
+fn about_sweep(cx: &App) -> gpui_kit::AnyElement {
+    use gpui_kit::{
+        Animation, AnimationExt, InteractiveElement, IntoElement, ParentElement, Styled, bounce,
+        ease_in_out, relative,
+    };
+    const BAR: f32 = 0.25;
+    let accent = crate::theme::Theme::get(cx).colors.accent;
+    gpui_kit::div()
+        .relative()
+        .w_full()
+        .h(crate::zoom::rems_from_px(3.0))
+        .mt(crate::zoom::rems_from_px(8.0))
+        .overflow_hidden()
+        .child(
+            gpui_kit::div()
+                .debug_selector(|| "about-sweep".into())
+                .absolute()
+                .top_0()
+                .h_full()
+                .w(relative(BAR))
+                .rounded_full()
+                .bg(accent)
+                .with_animation(
+                    "about-sweep",
+                    Animation::new(std::time::Duration::from_secs(3))
+                        .repeat()
+                        .with_easing(bounce(ease_in_out)),
+                    move |bar, delta| bar.left(relative((1.0 - BAR) * delta)),
+                ),
+        )
+        .into_any_element()
 }
 
 /// A centered, modal error box that stays until dismissed (button, Enter or
@@ -984,7 +1023,7 @@ impl FileManager {
         let title = "About yagni-commander";
         let text = about_text();
         let copied = format!("{title}\n{text}");
-        let body = move |_: &mut App| {
+        let body = move |cx: &mut App| {
             use gpui_kit::component::link::Link;
             use gpui_kit::{InteractiveElement, IntoElement};
             let (lines, url) = text.rsplit_once('\n').unwrap_or((&text, ""));
@@ -1000,6 +1039,7 @@ impl FileManager {
                         ),
                     ),
                 )
+                .child(about_sweep(cx))
                 .into_any_element()
         };
         show_box(title, body, copied, 420.0, "OK", refocus, window, cx);

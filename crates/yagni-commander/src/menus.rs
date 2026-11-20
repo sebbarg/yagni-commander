@@ -683,7 +683,7 @@ mod tests {
                     assert!(
                         first.modifiers.platform && !first.modifiers.control,
                         "{label}: the menu shows {}",
-                        first.unparse()
+                        first.unparse(gpui_kit::OperatingSystem::Mac)
                     );
                 }
             }
@@ -705,13 +705,18 @@ mod tests {
                     }) && other.action().partial_eq(binding.action())
                         && other.predicate() == binding.predicate()
                 });
-                assert_eq!(twin, k.key != "tab", "{}", k.unparse());
+                assert_eq!(
+                    twin,
+                    k.key != "tab",
+                    "{}",
+                    k.unparse(gpui_kit::OperatingSystem::Mac)
+                );
             }
         });
     }
 
-    #[test]
-    fn cmd_twins_only_on_macos_and_never_for_tab() {
+    #[gpui_kit::test]
+    fn cmd_twins_only_on_macos_and_never_for_tab(cx: &mut gpui_kit::TestAppContext) {
         use crate::actions::{Connect, NextTab, Quit, with_cmd_twins};
         use gpui_kit::KeyBinding;
         let bindings = || {
@@ -722,8 +727,13 @@ mod tests {
                 KeyBinding::new("ctrl-k ctrl-f", Connect, None),
             ]
         };
-        assert_eq!(with_cmd_twins(bindings(), false).len(), 4);
-        let mac = with_cmd_twins(bindings(), true);
+        let (linux, mac) = cx.update(|cx| {
+            (
+                with_cmd_twins(cx, bindings(), false),
+                with_cmd_twins(cx, bindings(), true),
+            )
+        });
+        assert_eq!(linux.len(), 4);
         assert_eq!(mac.len(), 5, "one twin: Ctrl-F");
         let first = mac[0].keystrokes()[0].inner();
         assert!(first.modifiers.platform && !first.modifiers.control);

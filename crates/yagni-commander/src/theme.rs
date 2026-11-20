@@ -234,13 +234,13 @@ impl Theme {
         // Links (the About box's), in a color tested on dialogs.
         colors.link = hex(c.info);
 
-        ThemeConfig {
-            name: SharedString::from(self.name.clone()),
-            mode: self.mode.into(),
-            colors,
-            mono_font_family: Some(crate::fonts::MONO_FAMILY.into()),
-            ..Default::default()
-        }
+        // `ThemeConfig` is non-exhaustive: build it from `default()`.
+        let mut config = ThemeConfig::default();
+        config.name = SharedString::from(self.name.clone());
+        config.mode = self.mode.into();
+        config.colors = colors;
+        config.mono_font_family = Some(crate::fonts::MONO_FAMILY.into());
+        config
     }
 }
 

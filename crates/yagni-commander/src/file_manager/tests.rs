@@ -6,10 +6,6 @@ use yagni_commander_core::watch::Report;
 fn setup(cx: &mut TestAppContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        // Animations run on wall-clock time, not the test clock: a dialog
-        // sliding in would move between a test's frames, and clicks would
-        // miss under load. Reduced motion settles them on the first frame.
-        cx.set_reduce_motion(true);
         crate::fonts::register(cx);
         cx.set_global(Theme::default());
         cx.set_global(AppState::default());
@@ -1098,7 +1094,7 @@ fn wheel_scrolls_the_list_without_moving_the_cursor(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-r");
     assert!(bounds(cx, "row-left-0".into()).is_some());
     let position = center(cx, "row-left-3");
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position,
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, -60.0)),
         ..Default::default()
@@ -1122,7 +1118,7 @@ fn a_reload_shifting_the_cursor_keeps_a_wheel_scrolled_view(cx: &mut TestAppCont
         "the cursor at the end"
     );
     let position = center(cx, "row-left-190");
-    cx.simulate_event(gpui_kit::ScrollWheelEvent {
+    cx.simulate_event(gpui_kit::ScrollEvent {
         position,
         delta: gpui_kit::ScrollDelta::Lines(gpui_kit::point(0.0, 400.0)),
         ..Default::default()
@@ -2107,6 +2103,27 @@ fn sort_actions_sort_the_active_panel_and_repeat_reverses(cx: &mut TestAppContex
     }
 }
 
+/// Dialogs don't animate, other animations do: the About box's band moves.
+#[gpui_kit::test]
+fn the_about_band_moves_while_the_box_stands_still(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    cx.update(|_, cx| assert!(!cx.reduce_motion()));
+    cx.dispatch_action(crate::actions::About);
+    cx.run_until_parked();
+    let draw = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let bar = cx.debug_bounds("about-sweep").unwrap();
+        let link = cx.debug_bounds("about-link").unwrap();
+        (bar.origin.x, link.origin)
+    };
+    let (start, link) = draw(cx);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(700));
+    let (later, link_later) = draw(cx);
+    assert!(later > start, "the band moved: {start:?} to {later:?}");
+    assert_eq!(link_later, link, "the box stood still");
+}
+
 #[gpui_kit::test]
 fn about_shows_a_dialog_and_ok_returns_to_the_panels(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
@@ -2859,7 +2876,11 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         cx.update(|window, _| {
             window
                 .highest_precedence_binding_for_action_in(action, &focus)
-                .map(|b| b.keystrokes()[0].inner().unparse())
+                .map(|b| {
+                    b.keystrokes()[0]
+                        .inner()
+                        .unparse(gpui_kit::OperatingSystem::Mac)
+                })
         })
     };
     assert_eq!(key(&crate::actions::Trash, cx).as_deref(), Some("f8"));
@@ -2883,7 +2904,11 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
                 .borrow()
                 .bindings_for_action(action)
                 .next()
-                .map(|b| b.keystrokes()[0].inner().unparse())
+                .map(|b| {
+                    b.keystrokes()[0]
+                        .inner()
+                        .unparse(gpui_kit::OperatingSystem::Mac)
+                })
         })
     };
     assert_eq!(first(&crate::actions::Trash, cx).as_deref(), Some("f8"));
@@ -2895,14 +2920,14 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
     // On macOS a Ctrl key's Cmd twin is registered just before it
     // (`actions::with_cmd_twins`): first for the native menu, while the
     // Ctrl key stays the last, gpui-component's.
-    let native = |keys: &str| -> String {
+    let native = |keys: &'static str| -> String {
         let mut keystroke = gpui_kit::Keystroke::parse(keys).unwrap();
         let modifiers = &mut keystroke.modifiers;
         if cfg!(target_os = "macos") && modifiers.control && keystroke.key != "tab" {
             modifiers.control = false;
             modifiers.platform = true;
         }
-        keystroke.unparse()
+        keystroke.unparse(gpui_kit::OperatingSystem::Mac)
     };
     for (action, keys) in [
         (&crate::actions::ZoomIn as &dyn gpui_kit::Action, "ctrl-="),
@@ -3327,7 +3352,7 @@ fn activate(cx: &mut VisualTestContext) {
 /// A full key press, down and up. `simulate_keystrokes` sends only key-down,
 /// and gpui turns Space or Enter on a focused button or switch into a click
 /// on key-up.
-fn press(cx: &mut VisualTestContext, key: &str) {
+fn press(cx: &mut VisualTestContext, key: &'static str) {
     let keystroke = gpui_kit::Keystroke::parse(key).unwrap();
     cx.simulate_event(gpui_kit::KeyDownEvent {
         keystroke: keystroke.clone(),
@@ -5578,8 +5603,9 @@ fn dialogs_appear_in_place_so_clicks_land(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("ctrl-,");
     cx.run_until_parked();
     let first = center(cx, "settings-sort");
-    // Longer than a loaded machine's gap between two frames.
-    std::thread::sleep(std::time::Duration::from_millis(120));
+    // Within the 250 ms an entrance would take.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(120));
     cx.update(|window, _| window.refresh());
     cx.run_until_parked();
     assert_eq!(center(cx, "settings-sort"), first, "the dialog moved");

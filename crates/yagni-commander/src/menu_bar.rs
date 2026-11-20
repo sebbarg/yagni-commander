@@ -239,7 +239,7 @@ mod tests {
     use super::passes;
     use gpui_kit::Keystroke;
 
-    fn key(s: &str) -> Keystroke {
+    fn key(s: &'static str) -> Keystroke {
         Keystroke::parse(s).unwrap()
     }
 

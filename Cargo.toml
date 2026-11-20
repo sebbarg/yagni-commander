@@ -21,7 +21,7 @@ yagni-commander-core = { path = "crates/yagni-commander-core" }
 # The F3 viewer's source mode: one feature per language (each grammar is C,
 # built by `cc` and linked statically; JSON comes with `tree-sitter`). Sizes
 # and the owner's choice of languages: SPEC, F3 viewer.
-gpui-kit = { version = "0.7", features = [
+gpui-kit = { version = "0.10", features = [
     "tree-sitter",
     "tree-sitter-bash",
     "tree-sitter-c",
@@ -62,7 +62,7 @@ serde = { version = "1", features = ["derive"] }
 toml = "1"
 toml_edit = "0.25"
 # Already in the tree via gpui-component: same version, no new crate.
-notify = "7.0.0"
+notify = "8.2"
 nix = { version = "0.31", default-features = false, features = ["user", "fs", "dir", "signal"] }
 trash = "5"
 unicode-width = "0.2"
