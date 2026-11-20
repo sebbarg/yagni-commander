@@ -6679,6 +6679,7 @@ mod results_panel {
             root: tmp.path().into(),
             masks: Masks::parse("*.rs"),
             skip: Vec::new(),
+            hidden: true,
             text: None,
         };
         let mut found = Vec::new();
@@ -6862,6 +6863,55 @@ mod find_files {
         assert!(dialog_open(cx));
     }
 
+    /// Test windows draw only when asked: the list's fit takes a frame.
+    fn settle(cx: &mut VisualTestContext) {
+        for _ in 0..3 {
+            cx.run_until_parked();
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn in_a_short_window_the_list_shrinks_so_the_status_line_shows(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_resize(gpui_kit::size(px(1000.0), px(1000.0)));
+        search(cx, "*");
+        settle(cx);
+        let tall = cx.debug_bounds("find-list").unwrap().size.height;
+        assert_eq!(tall, px(240.0), "nothing given up while it fits");
+        cx.simulate_resize(gpui_kit::size(px(1000.0), px(560.0)));
+        settle(cx);
+        let list = cx.debug_bounds("find-list").unwrap();
+        let status = cx.debug_bounds("find-status").unwrap();
+        let button = cx.debug_bounds("button-Search").unwrap();
+        assert!(list.size.height < tall, "{list:?}");
+        assert!(status.bottom() <= button.top(), "{status:?} {button:?}");
+        // Taller again: the list gets its height back.
+        cx.simulate_resize(gpui_kit::size(px(1000.0), px(1000.0)));
+        settle(cx);
+        assert_eq!(cx.debug_bounds("find-list").unwrap().size.height, tall);
+    }
+
+    #[gpui_kit::test]
+    fn hidden_files_are_found_until_alt_h_turns_them_off(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = opened(cx);
+        std::fs::write(tmp.path().join("a/.dot.rs"), b"").unwrap();
+        std::fs::create_dir(tmp.path().join(".cfg")).unwrap();
+        std::fs::write(tmp.path().join(".cfg/in.rs"), b"").unwrap();
+        search(cx, "*.rs");
+        assert_eq!(results(cx), [".cfg/in.rs", "a/.dot.rs", "a/x.rs"]);
+        cx.simulate_keystrokes("alt-h");
+        run_search(cx);
+        assert_eq!(results(cx), ["a/x.rs"]);
+        // Kept while the app runs, like the other boxes.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.simulate_keystrokes("alt-f7");
+        cx.run_until_parked();
+        let view = dialog(cx);
+        assert!(!view.read_with(cx, |v, _| v.options()[1]));
+    }
+
     #[gpui_kit::test]
     fn a_name_search_lists_results_and_enter_goes_to_the_file(cx: &mut TestAppContext) {
         let (tmp, commander, cx) = opened(cx);
@@ -6914,11 +6964,11 @@ mod find_files {
         assert!(drawn(cx, "focus-ring-find-not"));
         assert!(!drawn(cx, "find-cursor-focused"));
         let view = dialog(cx);
-        assert!(!view.read_with(cx, |v, _| v.options()[4]));
+        assert!(!view.read_with(cx, |v, _| v.options()[5]));
         cx.simulate_keystrokes("space");
-        assert!(view.read_with(cx, |v, _| v.options()[4]));
+        assert!(view.read_with(cx, |v, _| v.options()[5]));
         cx.simulate_keystrokes("space");
-        assert!(!view.read_with(cx, |v, _| v.options()[4]));
+        assert!(!view.read_with(cx, |v, _| v.options()[5]));
         // A text field: its own ring, none of ours.
         view.update_in(cx, |v, window, cx| v.focus_field(Field::Masks, window, cx));
         assert!(!drawn(cx, "focus-ring-find-not"));
@@ -6944,6 +6994,8 @@ mod find_files {
     #[gpui_kit::test]
     fn the_dialog_resizes_from_its_corner_but_not_below_its_size(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = opened(cx);
+        // Room to grow: in a short window the list gives up height.
+        cx.simulate_resize(gpui_kit::size(px(1400.0), px(1200.0)));
         search(cx, "*.rs");
         let list = |cx: &mut VisualTestContext| bounds(cx, "find-list".into()).unwrap().size;
         let before = list(cx);
@@ -6986,6 +7038,7 @@ mod find_files {
     #[gpui_kit::test]
     fn the_dialog_resizes_in_px_when_zoomed(cx: &mut TestAppContext) {
         let (_tmp, _commander, cx) = opened(cx);
+        cx.simulate_resize(gpui_kit::size(px(1400.0), px(1600.0)));
         for _ in 0..8 {
             cx.simulate_keystrokes("ctrl-=");
         }
@@ -7402,14 +7455,22 @@ mod find_files {
         cx.simulate_keystrokes("alt-f7");
         cx.run_until_parked();
         let view = dialog(cx);
-        cx.simulate_keystrokes("alt-t alt-c alt-a alt-w alt-r alt-n");
-        assert_eq!(view.read_with(cx, |v, _| v.options()), [true; 5]);
+        assert_eq!(
+            view.read_with(cx, |v, _| v.options()),
+            [false, true, false, false, false, false],
+            "only Hidden files at first"
+        );
+        cx.simulate_keystrokes("alt-t alt-c alt-h alt-a alt-w alt-r alt-n");
+        assert_eq!(
+            view.read_with(cx, |v, _| v.options()),
+            [true, false, true, true, true, true]
+        );
         cx.simulate_input("q");
         assert_eq!(view.read_with(cx, |v, cx| v.field(Field::Text, cx)), "q");
         cx.simulate_keystrokes("alt-a");
         assert_eq!(
             view.read_with(cx, |v, _| v.options()),
-            [true, false, true, true, true]
+            [true, false, false, true, true, true]
         );
     }
 
@@ -10064,6 +10125,7 @@ pub(crate) mod tab_order {
             "find-case-names",
             "search-in",
             "skip",
+            "find-hidden",
             "text",
             "find-case",
             "find-words",

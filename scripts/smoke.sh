@@ -443,10 +443,10 @@ sleep 1
 shot 08i-find-dialog
 # The Skip folders popup must paint over the dialog (only a screenshot
 # shows that): Shift-Tab from the list reaches the control.
-keys shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab space
+keys shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab shift+Tab space
 shot 08i1-find-skip-popup
 keys Escape
-xdotool key --clearmodifiers Tab Tab Tab Tab Tab Tab
+xdotool key --clearmodifiers Tab Tab Tab Tab Tab Tab Tab
 sleep "$delay"
 # The results list has focus: Tab reaches the buttons (ringed, the list's
 # cursor muted), Right selects Feed.

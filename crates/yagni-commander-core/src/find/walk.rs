@@ -1,6 +1,6 @@
 //! Alt-F7's walk: below the root, depth first in name order, hidden
-//! entries included, symlinks never followed, never into another
-//! filesystem.
+//! entries included unless the query leaves them out, symlinks never
+//! followed, never into another filesystem.
 
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::masks::Masks;
 use super::text::TextQuery;
-use crate::entry::{Entry, OwnerCache, stat_entry};
+use crate::entry::{Entry, OwnerCache, is_hidden_name, stat_entry};
 use crate::mounts::Mounts;
 
 /// What to look for, and where.
@@ -22,6 +22,9 @@ pub struct Query {
     /// Folder names (any case) neither listed nor entered below the root:
     /// the dialog's "Skip folders".
     pub skip: Vec<String>,
+    /// Whether hidden entries (names starting with `.`) are searched; off,
+    /// they are neither listed nor entered.
+    pub hidden: bool,
     pub text: Option<TextQuery>,
 }
 
@@ -101,6 +104,9 @@ pub fn search(
             if cancel.load(Ordering::Relaxed) {
                 summary.stopped = true;
                 return summary;
+            }
+            if !query.hidden && is_hidden_name(&name) {
+                continue;
             }
             Progress::add(&progress.seen, &mut summary.seen);
             let path = dir.join(&name);
@@ -196,6 +202,7 @@ mod tests {
             root: root.to_path_buf(),
             masks: Masks::parse(masks),
             skip: Vec::new(),
+            hidden: true,
             text: text.map(|t| t.compile().unwrap()),
         }
     }
@@ -315,6 +322,41 @@ mod tests {
             &mut |f| inside.push(f.label),
         );
         assert!(inside.contains(&"objects/in.rs".to_owned()), "{inside:?}");
+    }
+
+    #[test]
+    fn without_hidden_entries_dot_names_are_neither_listed_nor_entered() {
+        let tmp = fixture();
+        let p = tmp.path();
+        fs::create_dir_all(p.join(".config/sub")).unwrap();
+        fs::write(p.join(".config/sub/in.rs"), b"").unwrap();
+        fs::write(p.join("src/.dot.rs"), b"").unwrap();
+        let mut q = query(p, "*", None);
+        q.hidden = false;
+        let mut names = Vec::new();
+        let s = search(
+            &q,
+            &AtomicBool::new(false),
+            &Progress::default(),
+            &mut |f| names.push(f.label),
+        );
+        assert!(names.contains(&"src/main.rs".to_owned()), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n.starts_with('.') || n.contains("/.")),
+            "{names:?}"
+        );
+        assert_eq!(s.skipped, 0, "not counted as skipped folders");
+        // The root itself is searched even when its name is hidden.
+        let mut q = query(&p.join(".config"), "*.rs", None);
+        q.hidden = false;
+        let mut inside = Vec::new();
+        search(
+            &q,
+            &AtomicBool::new(false),
+            &Progress::default(),
+            &mut |f| inside.push(f.label),
+        );
+        assert_eq!(inside, ["sub/in.rs"]);
     }
 
     #[test]

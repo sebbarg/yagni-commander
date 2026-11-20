@@ -12,6 +12,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use gpui_kit::component::input::InputState;
+use gpui_kit::component::scroll::{Scrollbar, ScrollbarMode};
 use gpui_kit::component::{Icon, IconName};
 use gpui_kit::{
     App, AppContext, Context, CursorStyle, DispatchPhase, Div, Entity, EventEmitter, FocusHandle,
@@ -32,19 +33,23 @@ use crate::actions::{
 };
 use crate::app_state::AppState;
 use crate::button_row::{ButtonRow, OnPress, focus_ring, marked_label};
-use crate::file_manager::commands::{OPENER_POLL, dialog_field, show_error, text_field};
+use crate::file_manager::commands::{OPENER_POLL, show_error, text_field};
 use crate::theme::Theme;
 
 /// Rows the results list moves by on PageUp/PageDown.
 const PAGE_ROWS: usize = 10;
 /// Height of the results list at the dialog's smallest.
 const LIST_HEIGHT: f32 = 240.0;
+/// The least the list shrinks to in a short window (about three rows).
+const LIST_MIN_HEIGHT: f32 = 80.0;
 /// Width of the dialog at its smallest.
 pub const MIN_WIDTH: f32 = 680.0;
 /// The option boxes, in their tab order; indices below.
-const OPTIONS: [(&str, &str); 5] = [
+const OPTIONS: [(&str, &str); 6] = [
     // Next to Search for.
     ("find-case-names", "&Case-sensitive"),
+    // Under Skip folders.
+    ("find-hidden", "Include &hidden files and folders"),
     // Under Containing text.
     ("find-case", "C&ase-sensitive"),
     ("find-regex", "&Regular expression"),
@@ -52,15 +57,19 @@ const OPTIONS: [(&str, &str); 5] = [
     ("find-not", "&Not containing"),
 ];
 
-/// Height of the "Skip folders" control (a text field's).
-const SKIP_CONTROL_HEIGHT: f32 = 30.0;
+/// Height of the "Skip folders" control: a text field's, so the rows are
+/// evenly spaced.
+const SKIP_CONTROL_HEIGHT: f32 = 32.0;
 /// Width of a column of the text's option boxes.
 const OPTION_COLUMN: f32 = 200.0;
 const CASE_NAMES: usize = 0;
-const CASE_TEXT: usize = 1;
-const REGEX: usize = 2;
-const WHOLE_WORDS: usize = 3;
-const NOT_CONTAINING: usize = 4;
+const HIDDEN: usize = 1;
+const CASE_TEXT: usize = 2;
+const REGEX: usize = 3;
+const WHOLE_WORDS: usize = 4;
+const NOT_CONTAINING: usize = 5;
+/// The boxes as a new dialog has them: only Hidden files on.
+const DEFAULT_OPTIONS: [bool; OPTIONS.len()] = [false, true, false, false, false, false];
 
 /// The dialog's text fields.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,8 +121,8 @@ pub struct FindDialog {
     search_in: Entity<InputState>,
     text: Entity<InputState>,
     /// The option boxes' states and focus handles, in `OPTIONS` order.
-    options: [bool; 5],
-    option_focus: [FocusHandle; 5],
+    options: [bool; OPTIONS.len()],
+    option_focus: [FocusHandle; OPTIONS.len()],
     /// "Skip folders": which of `SKIP_FOLDERS` are on; the control's and
     /// its popup's focus, whether the popup is open, its cursor.
     skip: [bool; SKIP_FOLDERS.len()],
@@ -126,6 +135,11 @@ pub struct FindDialog {
     /// While the corner is dragged: where the mouse went down, and `grown`
     /// then.
     resizing: Option<(Point<Pixels>, Size<Pixels>)>,
+    /// How much the results list gives up so the dialog fits the window
+    /// (the dialog body would scroll, hiding the status line), and the
+    /// window size and list height it was found for.
+    fit: Pixels,
+    fit_for: (Size<Pixels>, Pixels),
     /// Named by their path relative to `root`; shared with a results
     /// panel after "Feed to listbox".
     found: Arc<Vec<Entry>>,
@@ -179,7 +193,7 @@ impl FindDialog {
             masks: cx.new(|cx| InputState::new(window, cx)),
             search_in: cx.new(|cx| InputState::new(window, cx)),
             text: cx.new(|cx| InputState::new(window, cx)),
-            options: [false; 5],
+            options: DEFAULT_OPTIONS,
             option_focus: std::array::from_fn(|_| cx.focus_handle().tab_stop(true)),
             skip: Self::saved_skip(cx),
             skip_focus: cx.focus_handle().tab_stop(true),
@@ -188,6 +202,8 @@ impl FindDialog {
             skip_cursor: 0,
             grown: Size::default(),
             resizing: None,
+            fit: Pixels::ZERO,
+            fit_for: Default::default(),
             found: Arc::default(),
             root: PathBuf::new(),
             masks_text: String::new(),
@@ -297,7 +313,7 @@ impl FindDialog {
 
     /// The option boxes, in `OPTIONS` order.
     #[cfg(test)]
-    pub fn options(&self) -> [bool; 5] {
+    pub fn options(&self) -> [bool; OPTIONS.len()] {
         self.options
     }
 
@@ -321,7 +337,7 @@ impl FindDialog {
     /// Alt-G goes to the file under the results' cursor. Whether the letter
     /// is the body's (the buttons' are `dialog_keys`').
     pub fn alt(&mut self, letter: char, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if !"fiktcawrng".contains(letter) {
+        if !"fikhtcawrng".contains(letter) {
             return false;
         }
         if letter != 'k' {
@@ -333,6 +349,7 @@ impl FindDialog {
             'k' => self.open_skip(window, cx),
             't' => self.select_field(Field::Text, window, cx),
             'c' => self.toggle(CASE_NAMES, cx),
+            'h' => self.toggle(HIDDEN, cx),
             'a' => self.toggle(CASE_TEXT, cx),
             'w' => self.toggle(WHOLE_WORDS, cx),
             'r' => self.toggle(REGEX, cx),
@@ -453,6 +470,7 @@ impl FindDialog {
             root,
             masks: Masks::new(&self.field(Field::Masks, cx), self.options[CASE_NAMES]),
             skip: self.skipped_names(),
+            hidden: self.options[HIDDEN],
             text,
         })
     }
@@ -693,6 +711,30 @@ impl FindDialog {
         }
     }
 
+    /// The results list's height: the dialog's (zoom and drag), less what
+    /// it gives up to fit the window. A new window size or list height
+    /// starts the fit over.
+    fn list_height(&mut self, window: &Window, cx: &App) -> Pixels {
+        let full = crate::zoom::dialog_width(LIST_HEIGHT, cx) + self.grown.height;
+        let key = (window.viewport_size(), full);
+        if self.fit_for != key {
+            self.fit_for = key;
+            self.fit = Pixels::ZERO;
+        }
+        let least = crate::zoom::dialog_width(LIST_MIN_HEIGHT, cx).min(full);
+        (full - self.fit).max(least)
+    }
+
+    /// After layout: the view runs `overflow` past the dialog body's
+    /// visible area (the window is too short for it), so the list gives
+    /// that up on the next frame.
+    fn fit_to(&mut self, overflow: Pixels, cx: &mut Context<Self>) {
+        if overflow > px(0.5) && self.fit < self.fit_for.1 {
+            self.fit = (self.fit + overflow).min(self.fit_for.1);
+            cx.notify();
+        }
+    }
+
     fn toggle(&mut self, ix: usize, cx: &mut Context<Self>) {
         self.options[ix] = !self.options[ix];
         cx.notify();
@@ -928,8 +970,13 @@ impl Render for FindDialog {
         let list_focused = self.list_focus.is_focused(window);
         // A drag of the corner goes on wherever the mouse is.
         let this = cx.weak_entity();
+        let fitted = cx.weak_entity();
         let follow = canvas(
-            |_, _, _| (),
+            // The view's own bounds against the dialog body's clip.
+            move |bounds, window, cx| {
+                let overflow = bounds.bottom() - window.content_mask().bounds.bottom();
+                let _ = fitted.update(cx, |v, cx| v.fit_to(overflow, cx));
+            },
             move |_, _, window, _| {
                 let moved = this.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
@@ -956,6 +1003,8 @@ impl Render for FindDialog {
             },
         )
         .absolute()
+        .top_0()
+        .left_0()
         .size_full();
         let row = |label: &'static str, field: Div| {
             div()
@@ -970,6 +1019,7 @@ impl Render for FindDialog {
                 )
                 .child(div().flex_1().child(field))
         };
+        let list_height = self.list_height(window, cx);
         let list = uniform_list(
             "find-results",
             self.found.len(),
@@ -982,15 +1032,23 @@ impl Render for FindDialog {
             .flex()
             .flex_col()
             .gap(crate::zoom::rems_from_px(8.0))
+            // Room for the first field's focus ring (the body clips).
+            .pt(crate::zoom::rems_from_px(4.0))
             .child(follow)
             // Each case box sits by what it applies to: names here, the
             // text's options under its field.
             .child(
-                row("Search &for", dialog_field(&self.masks))
+                row("Search &for", div().child(text_field(&self.masks)))
                     .child(self.option_box(CASE_NAMES, window, cx).flex_none()),
             )
             .child(row("Search &in", div().child(text_field(&self.search_in))))
             .child(row("S&kip folders", self.skip_control(window, cx)))
+            .child(
+                div()
+                    .flex()
+                    .ml(crate::zoom::rems_from_px(148.0))
+                    .child(self.option_box(HIDDEN, window, cx).flex_none()),
+            )
             // Which files above, what's in them below.
             .child(
                 div()
@@ -1033,7 +1091,7 @@ impl Render for FindDialog {
                     .on_action(cx.listener(|this, _: &act::View, _, cx| this.view(cx)))
                     .on_action(cx.listener(|this, _: &act::Edit, _, cx| this.edit(cx)))
                     .mt(crate::zoom::rems_from_px(4.0))
-                    .h(crate::zoom::dialog_width(LIST_HEIGHT, cx) + self.grown.height)
+                    .h(list_height)
                     .border_1()
                     .border_color(if list_focused {
                         colors.accent
@@ -1041,7 +1099,14 @@ impl Render for FindDialog {
                         colors.border
                     })
                     .bg(colors.panel_bg)
-                    .child(list),
+                    .relative()
+                    .child(list)
+                    // Shown while the results don't fit.
+                    .child(
+                        Scrollbar::vertical(&self.scroll)
+                            .id("find-scrollbar")
+                            .mode(ScrollbarMode::Always),
+                    ),
             )
             .child(
                 div()

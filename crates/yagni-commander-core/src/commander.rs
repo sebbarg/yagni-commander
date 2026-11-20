@@ -2830,6 +2830,7 @@ mod results_tests {
             root: root.into(),
             masks: Masks::parse(masks),
             skip: Vec::new(),
+            hidden: true,
             text: None,
         };
         let mut found = Vec::new();
