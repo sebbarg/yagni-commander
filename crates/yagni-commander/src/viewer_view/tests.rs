@@ -43,7 +43,7 @@ fn view(
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("file.txt");
     std::fs::write(&path, text).unwrap();
-    cx.update(|cx| open(path, main_bounds(), None, None, cx))
+    cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
         .unwrap();
     let window = *cx.windows().last().unwrap();
     let viewer = viewer_in(window, cx).expect("a viewer window");
@@ -129,7 +129,7 @@ fn the_next_viewer_opens_in_the_last_wrap_mode(cx: &mut TestAppContext) {
     assert!(first.read_with(&first_cx, |v, _| v.wraps()));
     let open_one = |cx: &mut TestAppContext| {
         let path = tmp.path().join("file.txt");
-        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -225,10 +225,14 @@ fn empty_file_shows_nothing(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn window_title_names_the_file() {
+fn window_title_is_the_full_path_alone() {
     assert_eq!(
         window_title(std::path::Path::new("/a/b/notes.txt")),
-        "notes.txt - yagni-commander"
+        "/a/b/notes.txt"
+    );
+    assert_eq!(
+        window_title(std::path::Path::new("sftp://box/srv/notes.txt")),
+        "sftp://box/srv/notes.txt"
     );
 }
 
@@ -360,8 +364,8 @@ fn closing_the_main_window_closes_the_viewers(cx: &mut TestAppContext) {
     std::fs::write(&path, b"x").unwrap();
     cx.update(|cx| {
         crate::windows::close_all_when_main_closes(main, cx).detach();
-        open(path.clone(), main_bounds(), None, None, cx).unwrap();
-        open(path, main_bounds(), None, None, cx).unwrap();
+        open(path.clone(), &path, main_bounds(), None, None, cx).unwrap();
+        open(path.clone(), &path, main_bounds(), None, None, cx).unwrap();
     });
     cx.run_until_parked();
     assert_eq!(cx.windows().len(), 3);
@@ -660,7 +664,7 @@ mod search {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("other.txt");
         std::fs::write(&path, b"Two two\n").unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let other = viewer_in(window, cx).unwrap();
@@ -732,7 +736,7 @@ mod search {
         let cols = first.read_with(&vcx, |v, _| v.cols) as usize;
         let path = tmp.path().join("wide.txt");
         std::fs::write(&path, format!("{}abcdef\n", "x".repeat(cols - 3))).unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -755,7 +759,7 @@ mod search {
             pattern: "LINE 700".into(),
             ..Text::default()
         };
-        cx.update(|cx| open(path, main_bounds(), None, Some(text), cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, Some(text), cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -1257,7 +1261,7 @@ mod zoom {
         cx.simulate_keystrokes("ctrl-= ctrl-= ctrl-= ctrl-=");
         cx.run_until_parked();
         let path = tmp.path().join("file.txt");
-        cx.update(|_, cx| open(path, main_bounds(), None, None, cx))
+        cx.update(|_, cx| open(path.clone(), &path, main_bounds(), None, None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let second = viewer_in(window, &mut cx).unwrap();
@@ -1368,7 +1372,7 @@ mod edit {
         let path = temp.path().join("entry.txt");
         std::fs::write(&path, b"text\n").unwrap();
         let out = temp.path().join("out");
-        cx.update(|cx| open(path, main_bounds(), Some(temp), None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), Some(temp), None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let mut cx = VisualTestContext::from_window(window, cx);
@@ -1667,7 +1671,7 @@ Last paragraph.
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(name);
         std::fs::write(&path, bytes).unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, search, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, search, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -2072,7 +2076,7 @@ mod help {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("n".repeat(200));
         std::fs::write(&path, b"x\n").unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let mut vcx = VisualTestContext::from_window(window, cx);
@@ -2385,7 +2389,7 @@ mod reload {
         let path = tmp.path().join("entry.txt");
         std::fs::write(&path, b"old\n").unwrap();
         let copy = tempfile::tempdir().unwrap();
-        cx.update(|cx| open(path.clone(), main_bounds(), Some(copy), None, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), Some(copy), None, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -2423,7 +2427,7 @@ mod image_mode {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(name);
         std::fs::write(&path, bytes).unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, search, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, search, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -2809,7 +2813,7 @@ mod source_mode {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join(name);
         std::fs::write(&path, bytes).unwrap();
-        cx.update(|cx| open(path, main_bounds(), None, search, cx))
+        cx.update(|cx| open(path.clone(), &path, main_bounds(), None, search, cx))
             .unwrap();
         let window = *cx.windows().last().unwrap();
         let viewer = viewer_in(window, cx).unwrap();
@@ -3028,7 +3032,7 @@ mod source_mode {
         ) -> (Entity<ViewerView>, VisualTestContext) {
             let path = dir.join(name);
             std::fs::write(&path, bytes).unwrap();
-            cx.update(|cx| open(path, main_bounds(), None, None, cx))
+            cx.update(|cx| open(path.clone(), &path, main_bounds(), None, None, cx))
                 .unwrap();
             let window = *cx.windows().last().unwrap();
             let viewer = viewer_in(window, cx).unwrap();

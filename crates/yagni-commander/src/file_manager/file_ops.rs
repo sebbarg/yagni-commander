@@ -134,6 +134,8 @@ pub(crate) struct RunningJob {
 struct Viewing {
     dir: tempfile::TempDir,
     file: PathBuf,
+    /// The entry's path as the panel shows it, for the viewer's title.
+    shown: PathBuf,
     open: bool,
 }
 
@@ -490,7 +492,7 @@ impl FileManager {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> io::Result<()> {
-        let (archive, inner, name) = {
+        let (archive, inner, name, shown) = {
             let panel = self.active_panel(cx);
             let index = panel.archive().expect("view_file checked");
             let entry = panel.cursor_entry().expect("view_file checked");
@@ -498,13 +500,16 @@ impl FileManager {
                 index.file().to_path_buf(),
                 inner_parts(index.file(), panel.path()),
                 entry.name.clone(),
+                panel.cursor_path(),
             )
         };
-        self.view_copy(&name, open, window, cx, |file| Operation::ExtractEntries {
-            archive,
-            inner,
-            names: vec![name.clone()],
-            to: Destination::As(file),
+        self.view_copy(&name, shown, open, window, cx, |file| {
+            Operation::ExtractEntries {
+                archive,
+                inner,
+                names: vec![name.clone()],
+                to: Destination::As(file),
+            }
         })
     }
 
@@ -520,9 +525,11 @@ impl FileManager {
             let entry = panel.cursor_entry().expect("view_file checked");
             (panel.cursor_path(), entry.name.clone())
         };
-        self.view_copy(&name, false, window, cx, |file| Operation::Copy {
-            sources: vec![source],
-            to: Destination::As(file),
+        self.view_copy(&name, source.clone(), false, window, cx, |file| {
+            Operation::Copy {
+                sources: vec![source],
+                to: Destination::As(file),
+            }
         })
     }
 
@@ -532,6 +539,7 @@ impl FileManager {
     fn view_copy(
         &mut self,
         name: &std::ffi::OsStr,
+        shown: PathBuf,
         open: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -549,7 +557,12 @@ impl FileManager {
         let file = dir.path().join(name);
         self.start_job(Kind::View, operation(file.clone()), window, cx)?;
         if let Some(running) = &mut self.job {
-            running.viewing = Some(Viewing { dir, file, open });
+            running.viewing = Some(Viewing {
+                dir,
+                file,
+                shown,
+                open,
+            });
         }
         Ok(())
     }
@@ -1102,9 +1115,14 @@ impl FileManager {
                     return;
                 }
                 let main = window.window_bounds();
-                if let Err(e) =
-                    crate::viewer_view::open(viewing.file, main, Some(viewing.dir), None, cx)
-                {
+                if let Err(e) = crate::viewer_view::open(
+                    viewing.file,
+                    &viewing.shown,
+                    main,
+                    Some(viewing.dir),
+                    None,
+                    cx,
+                ) {
                     show_error(
                         "Cannot view file",
                         e.to_string(),

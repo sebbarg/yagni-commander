@@ -625,7 +625,7 @@ impl FileManager {
         // A results panel's text search: the viewer opens at its match.
         let text = panel.results().and_then(|r| r.text.clone());
         let main = window.window_bounds();
-        if let Err(e) = crate::viewer_view::open(path, main, None, text, cx) {
+        if let Err(e) = crate::viewer_view::open(path.clone(), &path, main, None, text, cx) {
             show_error(
                 "Cannot view file",
                 e.to_string(),

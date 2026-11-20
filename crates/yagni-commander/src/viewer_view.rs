@@ -63,16 +63,15 @@ const H_STEP: u32 = 8;
 /// Before the first layout.
 const FALLBACK_ROWS: usize = 20;
 
-pub fn window_title(path: &Path) -> String {
-    let name = path.file_name().map_or_else(
-        || path.display().to_string(),
-        |n| n.to_string_lossy().into_owned(),
-    );
-    format!("{name} - yagni-commander")
+/// The window title: the file's full path, as the panel shows it (inside an
+/// archive or on a host, not the private copy's), alone (owner, 2026-11-20).
+pub fn window_title(shown: &Path) -> String {
+    shown.display().to_string()
 }
 
 /// Opens `path` in a new viewer window, placed where the last viewer was or
 /// over the main window (`main`).
+/// `shown`: the path for the title, `path` unless that is a private copy.
 /// `temp`: the private copy of an archive entry that `path` is in, deleted
 /// with the window.
 /// `search`: Alt-F7's text, searched for from the start of the file.
@@ -82,6 +81,7 @@ pub fn window_title(path: &Path) -> String {
 /// text's).
 pub fn open(
     path: PathBuf,
+    shown: &Path,
     main: WindowBounds,
     temp: Option<tempfile::TempDir>,
     search: Option<Text>,
@@ -99,6 +99,7 @@ pub fn open(
             let markdown = search.is_none() && markdown::is_markdown_name(&path);
             let picture = search.is_none() && is_picture_name(&path);
             let mut view = ViewerView::new(path, source, temp, window, cx);
+            window.set_window_title(&window_title(shown));
             // Over the limits a mode isn't taken, quietly: nobody asked.
             if picture {
                 view.show_picture(window, cx);
@@ -199,7 +200,6 @@ impl ViewerView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        window.set_window_title(&window_title(&path));
         let focus = cx.focus_handle();
         window.focus(&focus, cx);
         let subscriptions = vec![cx.observe_window_bounds(window, |_, window, cx| {

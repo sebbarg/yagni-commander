@@ -686,16 +686,16 @@ check "first tab again" xdotool search --name "^$left - yagni-commander\$"
 echo "F3 viewer"
 typed big
 keys F3
-check "viewer window open" xdotool search --name "big.txt - yagni-commander"
-check "viewer window app id" app_id "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
+check "viewer window open" xdotool search --name "^$left/big.txt\$"
+check "viewer window app id" app_id "$(xdotool search --name "^$left/big.txt\$" | head -1)"
 # No window manager here to focus the new window.
-xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
+xdotool windowfocus "$(xdotool search --name "^$left/big.txt\$" | head -1)"
 sleep 0.5
 shot 08-viewer
 echo "F4 in the viewer opens the file in the editor"
 keys F4
 check "the editor got big.txt" last_line "$work/edited" "$left/big.txt"
-check "the viewer stays open" xdotool search --name "big.txt - yagni-commander"
+check "the viewer stays open" xdotool search --name "^$left/big.txt\$"
 keys ctrl+End
 shot 09-viewer-end
 # No wrap at the first start: Right scrolls sideways.
@@ -703,7 +703,7 @@ keys Right Right
 shot 10-viewer-nowrap
 echo "Selection and copy in the viewer (W: wrap, kept for the next viewers)"
 keys w ctrl+Home
-viewer=$(xdotool search --name "big.txt - yagni-commander" | head -1)
+viewer=$(xdotool search --name "^$left/big.txt\$" | head -1)
 # Drag from the start of row 0 to far right on row 1 (rows are 18 px, 8 px padding).
 xdotool mousemove --window "$viewer" 10 17 mousedown 1
 sleep 0.2
@@ -725,7 +725,7 @@ keys F3
 sleep 1
 shot 10b-viewer-not-found
 keys Escape
-check "Escape closed only the not-found box" xdotool search --name "big.txt - yagni-commander"
+check "Escape closed only the not-found box" xdotool search --name "^$left/big.txt\$"
 echo "H: hex mode, the match marked in both columns"
 keys h
 shot 10c-viewer-hex
@@ -734,17 +734,17 @@ keys question
 sleep 0.3
 shot 10c1-viewer-keys
 keys Escape
-check "Escape closed only the key overlay" xdotool search --name "big.txt - yagni-commander"
+check "Escape closed only the key overlay" xdotool search --name "^$left/big.txt\$"
 keys t
 keys Escape
-check "viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
+check "viewer closed" bash -c '! xdotool search --name "/big.txt\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 
 echo "a .md file opens in Markdown mode; search and copy there"
 typed guide
 keys F3
-xdotool windowfocus "$(xdotool search --name "guide.md - yagni-commander" | head -1)"
+xdotool windowfocus "$(xdotool search --name "^$left/guide.md\$" | head -1)"
 sleep 1.5
 shot 10d-viewer-markdown
 keys question
@@ -772,7 +772,7 @@ check "the reload shows the new text" bash -c "xclip -o -selection clipboard | g
 keys t
 shot 10f-viewer-markdown-off
 keys Escape
-check "markdown viewer closed" bash -c '! xdotool search --name "guide.md - yagni-commander"'
+check "markdown viewer closed" bash -c '! xdotool search --name "/guide.md\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 
@@ -785,7 +785,7 @@ open(sys.argv[1],"wb").write(b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",struct.pack(">II
 keys ctrl+r
 typed photo
 keys Escape F3
-xdotool windowfocus "$(xdotool search --name "photo.png - yagni-commander" | head -1)"
+xdotool windowfocus "$(xdotool search --name "^$left/photo.png\$" | head -1)"
 sleep 1.5
 shot 10g-viewer-image
 keys t
@@ -801,7 +801,7 @@ keys question ctrl+equal ctrl+equal ctrl+equal End End
 sleep 0.5
 shot 10g4-viewer-image-zoomed
 keys ctrl+0 Escape
-check "image viewer closed" bash -c '! xdotool search --name "photo.png - yagni-commander"'
+check "image viewer closed" bash -c '! xdotool search --name "/photo.png\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 rm "$left/photo.png"
@@ -813,7 +813,7 @@ printf '// A sample.\nfn main() {\n    let answer: u32 = 42;\n    println!("{ans
 keys ctrl+r
 typed sample
 keys Escape F3
-xdotool windowfocus "$(xdotool search --name "sample.rs - yagni-commander" | head -1)"
+xdotool windowfocus "$(xdotool search --name "^$left/sample.rs\$" | head -1)"
 sleep 1.5
 shot 10h-viewer-source
 keys ctrl+a ctrl+c
@@ -832,7 +832,7 @@ keys Return
 sleep 1
 shot 10h4-viewer-language-picked
 keys Escape
-check "source viewer closed" bash -c '! xdotool search --name "sample.rs - yagni-commander"'
+check "source viewer closed" bash -c '! xdotool search --name "/sample.rs\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 rm "$left/sample.rs"
@@ -854,12 +854,12 @@ check "inside docs in the zip" title_is "$left/browse.zip/docs"
 shot 08f-archive-inside
 typed readme
 keys Escape F3
-check "viewer on the zip entry" xdotool search --name "^readme.txt - yagni-commander\$"
-xdotool windowfocus "$(xdotool search --name "^readme.txt - yagni-commander\$" | head -1)"
+check "viewer on the zip entry" xdotool search --name "^$left/browse.zip/docs/readme.txt\$"
+xdotool windowfocus "$(xdotool search --name "^$left/browse.zip/docs/readme.txt\$" | head -1)"
 sleep 0.5
 shot 08g-archive-viewer
 keys Escape
-check "entry viewer closed" bash -c '! xdotool search --name "^readme.txt - yagni-commander\$"'
+check "entry viewer closed" bash -c '! xdotool search --name "/browse.zip/docs/readme.txt\$"'
 check "one temp folder for the run" bash -c '[[ $(compgen -G "$1/yagni-commander-*" | wc -l) == 1 ]]' _ "$work/tmp"
 check "its private copy deleted" bash -c '[[ -z $(find "$1"/yagni-commander-* -mindepth 1) ]]' _ "$work/tmp"
 xdotool windowfocus "$window"
@@ -888,9 +888,9 @@ check "out of the tar.gz" title_is "$left"
 echo "F3 viewer on a giant single line"
 typed oneline
 keys F3
-check "viewer window open" xdotool search --name "oneline.txt - yagni-commander"
+check "viewer window open" xdotool search --name "^$left/oneline.txt\$"
 # No window manager here to focus the new window.
-xdotool windowfocus "$(xdotool search --name "oneline.txt - yagni-commander" | head -1)"
+xdotool windowfocus "$(xdotool search --name "^$left/oneline.txt\$" | head -1)"
 sleep 0.5
 keys ctrl+End
 shot 11-viewer-oneline-end
@@ -899,9 +899,9 @@ keys m
 sleep 0.5
 shot 11a-viewer-markdown-refused
 keys Return
-check "the box closed, the viewer stays" xdotool search --name "oneline.txt - yagni-commander"
+check "the box closed, the viewer stays" xdotool search --name "^$left/oneline.txt\$"
 keys q
-check "viewer closed" bash -c '! xdotool search --name "oneline.txt - yagni-commander"'
+check "viewer closed" bash -c '! xdotool search --name "/oneline.txt\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 
@@ -946,14 +946,14 @@ shot 12c-zoom-menu
 keys Escape
 typed big
 keys F3
-check "zoomed viewer window open" xdotool search --name "big.txt - yagni-commander"
-xdotool windowfocus "$(xdotool search --name "big.txt - yagni-commander" | head -1)"
+check "zoomed viewer window open" xdotool search --name "^$left/big.txt\$"
+xdotool windowfocus "$(xdotool search --name "^$left/big.txt\$" | head -1)"
 sleep 0.5
 keys ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal
 sleep 0.5
 shot 12d-zoom-viewer
 keys Escape
-check "zoomed viewer closed" bash -c '! xdotool search --name "big.txt - yagni-commander"'
+check "zoomed viewer closed" bash -c '! xdotool search --name "/big.txt\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 
