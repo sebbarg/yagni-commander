@@ -5,7 +5,9 @@
 //! only while the clipboard still holds it, so copying anything else
 //! anywhere forgets the files. Text on the clipboard is never read as
 //! paths. Files another app put there as files (Finder; gpui reads them on
-//! macOS only) are copied.
+//! macOS only) are copied. On macOS local files also go onto the pasteboard
+//! as files (core `pasteboard`), so Finder pastes them; once ours are
+//! forgotten they are put back as text alone, so nothing pastes them.
 
 use std::path::{Path, PathBuf};
 
@@ -29,6 +31,8 @@ pub(crate) struct FileClipboard {
     from_archive: Option<FromArchive>,
     /// What went onto the system clipboard.
     text: String,
+    /// macOS: the files went onto the pasteboard as files too.
+    as_files: bool,
     /// The tab and folder they came from: a complete copy clears the
     /// selection there, as F5 does.
     source: PanelId,
@@ -61,6 +65,24 @@ fn clipboard_text(sources: &[PathBuf]) -> String {
         .map(|path| path.display().to_string())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Puts the paths on the clipboard as `text`; on macOS, when they are
+/// `local` files, as files too. Returns whether they went on as files.
+fn write_clipboard(sources: &[PathBuf], local: bool, text: &str, cx: &mut gpui_kit::App) -> bool {
+    // Never in tests: they would overwrite the real pasteboard, which the
+    // test clipboard doesn't see.
+    #[cfg(all(target_os = "macos", not(test)))]
+    if local {
+        let paths: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+        if yagni_commander_core::pasteboard::write_files(&paths, text) {
+            return true;
+        }
+    }
+    #[cfg(any(not(target_os = "macos"), test))]
+    let _ = (sources, local);
+    cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
+    false
 }
 
 /// The files another app put on the clipboard as files.
@@ -100,6 +122,10 @@ impl FileManager {
             return;
         }
         let text = clipboard_text(&sources);
+        // Archive entries and remote files are no files Finder could take.
+        let local = !panel.in_archive() && !panel.is_remote();
+        let as_files = write_clipboard(&sources, local, &text, cx);
+        let panel = self.active_panel(cx);
         self.next_clipboard += 1;
         self.clipboard = Some(FileClipboard {
             id: self.next_clipboard,
@@ -108,28 +134,39 @@ impl FileManager {
             source: panel.id(),
             source_dir: panel.path().to_path_buf(),
             sources,
-            text: text.clone(),
+            text,
+            as_files,
         });
         self.notice = None;
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
         cx.notify();
     }
 
     /// Escape (last) and the end of a pasted cut: forget the files. The
     /// text stays on the system clipboard. Returns whether there were any.
     pub(super) fn forget_files(&mut self, cx: &mut Context<Self>) -> bool {
-        let had = self.clipboard.take().is_some();
-        if had {
-            cx.notify();
+        let Some(clip) = self.clipboard.take() else {
+            return false;
+        };
+        // Still ours on the pasteboard as files: text alone, so neither
+        // Finder nor our Ctrl-V pastes them.
+        if clip.as_files
+            && cx
+                .read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref()
+                == Some(clip.text.as_str())
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(clip.text));
         }
-        had
+        cx.notify();
+        true
     }
 
     /// A complete paste of cut `id` forgets it (a newer Ctrl-C or Ctrl-X
     /// stays).
-    pub(super) fn forget_cut(&mut self, id: Option<u64>) {
+    pub(super) fn forget_cut(&mut self, id: Option<u64>, cx: &mut Context<Self>) {
         if self.clipboard.as_ref().map(|clip| clip.id) == id {
-            self.clipboard = None;
+            self.forget_files(cx);
         }
     }
 

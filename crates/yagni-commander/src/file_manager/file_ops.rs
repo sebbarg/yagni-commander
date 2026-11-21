@@ -1147,7 +1147,7 @@ impl FileManager {
         }
         let complete = report.failures.is_empty() && !report.cancelled;
         if complete && running.pasted_cut.is_some() {
-            self.forget_cut(running.pasted_cut);
+            self.forget_cut(running.pasted_cut, cx);
         }
         // Shift-F5 (a copy with a name to select) ignored the selection.
         if matches!(running.kind, Kind::Copy | Kind::Pack) && complete && running.select.is_none() {

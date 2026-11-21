@@ -88,9 +88,11 @@ sha1 = "0.11"
 # parent lookup is broken in 0.4 (`get_parents` is None unless the type is an
 # alias), so `apps::mime` reads `subclasses` and `aliases` itself.
 xdg-mime = "0.4"
-# Open with, macOS: NSWorkspace's application list. Already in the tree via
+# Open with, macOS: NSWorkspace's application list; Ctrl-C's files on the
+# pasteboard (NSPasteboard, objc2's ProtocolObject). Already in the tree via
 # gpui: same versions, no new crate.
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSWorkspace"] }
+objc2 = { version = "0.6.5", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSPasteboard", "NSPasteboardItem", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSFileManager", "NSString", "NSURL"] }
 # Help > Check for updates: one HTTPS request to GitHub. rustls (with ring and
 # the bundled Mozilla roots, webpki-roots), no gzip.

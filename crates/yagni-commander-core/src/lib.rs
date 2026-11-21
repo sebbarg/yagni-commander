@@ -23,6 +23,8 @@ mod listing;
 pub mod mounts;
 pub mod oplog;
 mod panel;
+#[cfg(target_os = "macos")]
+pub mod pasteboard;
 mod quick_search;
 pub mod remote;
 pub mod select;
