@@ -324,18 +324,35 @@ else
     echo "  skip  no zip command: the password prompt is not checked"
 fi
 
-echo "Ctrl-C and Ctrl-Ins copy the name under the cursor, Ctrl-Shift-C the full path, Ctrl-Alt-C the parent"
+echo "Ctrl-Shift-C copies the name under the cursor, Ctrl-Alt-C the parent"
 clipboard() { [[ $(xclip -o -selection clipboard) == "$1" ]]; }
 typed notes
-keys Escape ctrl+c
-check "Ctrl-C copied the name" clipboard notes.txt
-typed docs
 keys Escape ctrl+shift+c
-check "Ctrl-Shift-C copied the path" clipboard "$left/docs"
-keys ctrl+Insert
-check "Ctrl-Ins copied the name" clipboard docs
-keys ctrl+alt+c
+check "Ctrl-Shift-C copied the name" clipboard notes.txt
+typed docs
+keys Escape ctrl+alt+c
 check "Ctrl-Alt-C copied the parent" clipboard "$left"
+echo "Ctrl-C/Ctrl-X and Ctrl-V copy and move files, with their paths on the clipboard as text"
+printf c >"$left/clip-copy.txt"
+printf m >"$left/clip-move.txt"
+keys ctrl+r
+typed clip-c
+keys Escape ctrl+c
+check "Ctrl-C put the path on the clipboard" clipboard "$left/clip-copy.txt"
+shot 02d-clipboard-status
+keys Tab ctrl+v
+check "Ctrl-V copied into the right panel" has "$right/clip-copy.txt" c
+check "the copy's source stays" test -f "$left/clip-copy.txt"
+keys Tab
+typed clip-m
+keys Escape ctrl+x
+keys Tab shift+Insert
+check "Shift-Ins moved the cut file" has "$right/clip-move.txt" m
+check "the cut file left its folder" test ! -e "$left/clip-move.txt"
+keys Tab
+typed clip-c
+keys Escape ctrl+Insert Escape
+check "Escape kept the text" clipboard "$left/clip-copy.txt"
 echo "Ctrl-C in a text field copies its text"
 keys F7
 typed typed-text

@@ -2943,8 +2943,13 @@ fn menu_labels_show_the_primary_keys(cx: &mut TestAppContext) {
         assert_eq!(first(action, cx).as_deref(), Some(keys));
     }
     for (action, keys) in [
-        (&crate::actions::CopyName as &dyn gpui_kit::Action, "ctrl-c"),
-        (&crate::actions::CopyPath, "ctrl-shift-c"),
+        (
+            &crate::actions::CopyFiles as &dyn gpui_kit::Action,
+            "ctrl-c",
+        ),
+        (&crate::actions::CutFiles, "ctrl-x"),
+        (&crate::actions::PasteFiles, "ctrl-v"),
+        (&crate::actions::CopyName, "ctrl-shift-c"),
         (&crate::actions::CopyParentPath, "ctrl-alt-c"),
     ] {
         assert_eq!(key(action, cx).as_deref(), Some(keys));
@@ -3039,25 +3044,7 @@ fn clipboard_text(cx: &mut VisualTestContext) -> Option<String> {
 }
 
 #[gpui_kit::test]
-fn ctrl_shift_c_copies_the_full_path_under_the_cursor(cx: &mut TestAppContext) {
-    let (tmp, _commander, cx) = open(cx);
-    let path = |name: &str| tmp.path().join(name).display().to_string();
-    // On "..", the panel's own folder.
-    cx.simulate_keystrokes("ctrl-shift-c");
-    assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
-    cx.simulate_keystrokes("down ctrl-shift-c");
-    assert_eq!(clipboard_text(cx), Some(path("a")));
-    // Only the cursor entry, never the selection.
-    cx.simulate_keystrokes("insert ctrl-shift-c");
-    assert_eq!(clipboard_text(cx), Some(path("b")));
-    if cfg!(target_os = "macos") {
-        cx.simulate_keystrokes("end cmd-shift-c");
-        assert_eq!(clipboard_text(cx), Some(path("f")));
-    }
-}
-
-#[gpui_kit::test]
-fn ctrl_c_and_ctrl_ins_copy_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppContext) {
+fn ctrl_shift_c_copies_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppContext) {
     let (tmp, _commander, cx) = open(cx);
     let parent = tmp.path().parent().unwrap().display().to_string();
     let own = tmp
@@ -3067,22 +3054,22 @@ fn ctrl_c_and_ctrl_ins_copy_the_name_and_ctrl_alt_c_the_parent(cx: &mut TestAppC
         .to_string_lossy()
         .into_owned();
     // On "..", the panel's own folder: its name, and its parent.
-    cx.simulate_keystrokes("ctrl-c");
+    cx.simulate_keystrokes("ctrl-shift-c");
     assert_eq!(clipboard_text(cx), Some(own));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(parent));
     // A folder: its name, and the folder holding it.
-    cx.simulate_keystrokes("down ctrl-c");
+    cx.simulate_keystrokes("down ctrl-shift-c");
     assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
     // A file, ignoring the selection.
-    cx.simulate_keystrokes("space end ctrl-insert");
+    cx.simulate_keystrokes("space end ctrl-shift-c");
     assert_eq!(clipboard_text(cx).as_deref(), Some("f"));
     cx.simulate_keystrokes("ctrl-alt-c");
     assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
     if cfg!(target_os = "macos") {
-        cx.simulate_keystrokes("home down cmd-c");
+        cx.simulate_keystrokes("home down cmd-shift-c");
         assert_eq!(clipboard_text(cx).as_deref(), Some("a"));
         cx.simulate_keystrokes("end cmd-alt-c");
         assert_eq!(clipboard_text(cx), Some(tmp.path().display().to_string()));
@@ -3106,7 +3093,7 @@ fn ctrl_alt_c_on_an_entry_in_the_root_copies_the_root(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn copy_name_and_parent_end_the_quick_search(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
-    cx.simulate_keystrokes("f ctrl-c");
+    cx.simulate_keystrokes("f ctrl-shift-c");
     assert_eq!(search(&commander, cx), None);
     assert_eq!(clipboard_text(cx).as_deref(), Some("f"));
     cx.simulate_keystrokes("b ctrl-alt-c");
@@ -3115,9 +3102,9 @@ fn copy_name_and_parent_end_the_quick_search(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn ctrl_shift_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
+fn ctrl_c_ends_the_quick_search_and_copies_its_match(cx: &mut TestAppContext) {
     let (tmp, commander, cx) = open(cx);
-    cx.simulate_keystrokes("f ctrl-shift-c");
+    cx.simulate_keystrokes("f ctrl-c");
     assert_eq!(search(&commander, cx), None);
     assert_eq!(
         clipboard_text(cx),
@@ -6232,6 +6219,7 @@ mod archive_browsing {
             "shift-f8",
             "shift-delete",
             "shift-f4",
+            "ctrl-x",
             "alt-f5",
             "alt-f6",
             "alt-f9",
@@ -7363,10 +7351,10 @@ mod find_files {
         search(cx, "*.rs");
         click(cx, "button-Feed to listbox", 1);
         cx.run_until_parked();
-        cx.simulate_keystrokes("end ctrl-shift-c");
+        cx.simulate_keystrokes("end ctrl-c");
         let file = tmp.path().join("a/x.rs");
         assert_eq!(clipboard_text(cx), Some(file.display().to_string()));
-        cx.simulate_keystrokes("ctrl-c");
+        cx.simulate_keystrokes("ctrl-shift-c");
         assert_eq!(clipboard_text(cx).as_deref(), Some("x.rs"));
         cx.simulate_keystrokes("ctrl-alt-c");
         let dir = tmp.path().join("a");
@@ -11091,5 +11079,214 @@ mod copy_here {
             &["Input", "button:OK", "button:Cancel", "Input"],
             &[],
         );
+    }
+}
+
+mod clipboard_files {
+    use super::*;
+
+    fn has_files(cx: &mut VisualTestContext) -> bool {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.clipboard.is_some())
+    }
+
+    fn notice(cx: &mut VisualTestContext) -> Option<String> {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| this.notice.as_ref().map(|n| n.to_string()))
+    }
+
+    fn status(cx: &mut VisualTestContext) -> Option<String> {
+        let view = file_manager(cx);
+        view.read_with(cx, |this, _| {
+            this.clipboard_status().map(|text| text.to_string())
+        })
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_c_then_ctrl_v_copies_into_the_active_panel(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("ctrl-c");
+        assert_eq!(
+            clipboard_text(cx),
+            Some(tmp.path().join("f").display().to_string()),
+            "the path as text"
+        );
+        assert!(status(cx).unwrap().starts_with("Copied “f” · "));
+        assert!(bounds(cx, "status-clipboard".into()).is_some());
+        cx.simulate_keystrokes("tab ctrl-v");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(!dialog_open(cx), "no prompt");
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+        assert!(tmp.path().join("f").exists());
+        assert_eq!(labels(&commander, Side::Right, cx), ["..", "f"], "reloaded");
+        assert!(has_files(cx), "a copy can be pasted again");
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_x_then_ctrl_v_moves_and_forgets_the_files(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("ctrl-x");
+        assert!(status(cx).unwrap().starts_with("Cut “f” · "));
+        cx.simulate_keystrokes("tab ctrl-v");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+        assert!(!tmp.path().join("f").exists());
+        assert!(!has_files(cx));
+        assert!(bounds(cx, "status-clipboard".into()).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn the_selection_is_taken_and_cleared_after_a_complete_copy(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        // f and b selected; the cursor's entry alone doesn't count.
+        cx.simulate_keystrokes("space up space ctrl-insert");
+        let path = |name: &str| tmp.path().join(name).display().to_string();
+        assert_eq!(
+            clipboard_text(cx),
+            Some(format!("{}\n{}", path("b"), path("f")))
+        );
+        assert!(status(cx).unwrap().starts_with("Copied 2 entries · "));
+        cx.simulate_keystrokes("tab shift-insert");
+        wait_until(cx, |cx| !job_running(cx));
+        assert!(tmp.path().join("a/b").is_dir());
+        assert!(tmp.path().join("a/f").is_file());
+        assert!(selected(&commander, Side::Left, cx).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn other_text_on_the_clipboard_forgets_the_files(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("ctrl-x");
+        // Text that names a real file is still never pasted as one.
+        let other = tmp.path().join("f").display().to_string() + "\n";
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(other));
+        cx.simulate_keystrokes("tab ctrl-v");
+        cx.run_until_parked();
+        assert!(!job_running(cx));
+        assert!(!dialog_open(cx));
+        assert!(!has_files(cx));
+        assert_eq!(notice(cx).as_deref(), Some("No files on the clipboard"));
+        assert!(tmp.path().join("f").exists());
+        assert!(!tmp.path().join("a/f").exists());
+    }
+
+    #[gpui_kit::test]
+    fn copying_a_name_forgets_the_files(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("ctrl-c ctrl-shift-c");
+        assert_eq!(clipboard_text(cx).as_deref(), Some("f"));
+        assert!(!has_files(cx));
+    }
+
+    #[gpui_kit::test]
+    fn escape_forgets_the_files_but_keeps_the_text(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        let text = tmp.path().join("f").display().to_string();
+        // The quick search goes first.
+        cx.simulate_keystrokes("ctrl-x a escape");
+        assert!(has_files(cx));
+        cx.simulate_keystrokes("escape");
+        assert!(!has_files(cx));
+        assert_eq!(clipboard_text(cx), Some(text));
+        cx.simulate_keystrokes("tab ctrl-v");
+        cx.run_until_parked();
+        assert!(!job_running(cx));
+        assert!(tmp.path().join("f").exists());
+    }
+
+    #[gpui_kit::test]
+    fn nothing_on_the_parent_entry_and_nothing_to_paste(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("before".into()));
+        cx.simulate_keystrokes("ctrl-c");
+        assert!(!has_files(cx));
+        assert_eq!(clipboard_text(cx).as_deref(), Some("before"));
+        cx.simulate_keystrokes("ctrl-v");
+        assert_eq!(notice(cx).as_deref(), Some("No files on the clipboard"));
+    }
+
+    #[gpui_kit::test]
+    fn a_cut_into_its_own_folder_is_refused(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("end ctrl-x ctrl-v");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert_eq!(
+            box_text(cx),
+            "Cannot paste\nThe entries are already in this folder."
+        );
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert!(!job_running(cx));
+        assert!(tmp.path().join("f").exists());
+        assert!(has_files(cx), "still there to paste elsewhere");
+    }
+
+    #[gpui_kit::test]
+    fn a_copy_into_its_own_folder_asks_for_a_name_like_shift_f5(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open(cx);
+        std::fs::write(tmp.path().join("f"), b"data").unwrap();
+        cx.simulate_keystrokes("end ctrl-c ctrl-v");
+        cx.run_until_parked();
+        assert!(dialog_open(cx), "the name prompt");
+        cx.simulate_input("g");
+        cx.simulate_keystrokes("enter");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("g")).unwrap(), b"data");
+        // Two entries can't be named: refused.
+        cx.simulate_keystrokes("home down space down space ctrl-c ctrl-v");
+        cx.run_until_parked();
+        assert_eq!(
+            box_text(cx),
+            "Cannot paste\nThe entries are already in this folder."
+        );
+    }
+
+    #[gpui_kit::test]
+    fn files_another_app_copied_are_copied(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = open_with_target(cx);
+        let files = gpui_kit::ClipboardItem {
+            entries: vec![gpui_kit::ClipboardEntry::ExternalPaths(
+                gpui_kit::ExternalPaths(vec![tmp.path().join("f")].into()),
+            )],
+        };
+        cx.write_to_clipboard(files);
+        cx.simulate_keystrokes("tab ctrl-v");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("a/f")).unwrap(), b"new");
+        assert!(tmp.path().join("f").exists(), "copied, never moved");
+    }
+
+    #[gpui_kit::test]
+    fn archive_entries_are_extracted_and_nothing_is_pasted_inside(cx: &mut TestAppContext) {
+        let (tmp, _commander, cx) = super::archive_browsing::inside_zip(cx);
+        // README, the last entry.
+        cx.simulate_keystrokes("end ctrl-c tab ctrl-v");
+        wait_until(cx, |cx| !job_running(cx));
+        assert_eq!(std::fs::read(tmp.path().join("a/README")).unwrap(), b"r");
+        cx.simulate_keystrokes("end ctrl-c tab ctrl-v");
+        cx.run_until_parked();
+        assert!(box_text(cx).starts_with("Inside an archive\n"));
+        assert!(!job_running(cx));
+    }
+
+    #[gpui_kit::test]
+    fn nothing_is_pasted_into_search_results(cx: &mut TestAppContext) {
+        let (tmp, commander, cx) = open_with_target(cx);
+        cx.simulate_keystrokes("ctrl-c");
+        let results = yagni_commander_core::find::Results::new(
+            tmp.path().to_path_buf(),
+            "*".into(),
+            std::sync::Arc::new(Vec::new()),
+        );
+        commander.update(cx, |c, cx| {
+            c.feed(results);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("ctrl-v");
+        cx.run_until_parked();
+        assert!(box_text(cx).starts_with("In search results\n"));
+        assert!(!job_running(cx));
     }
 }

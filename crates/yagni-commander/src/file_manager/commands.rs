@@ -286,12 +286,6 @@ impl FileManager {
         }
     }
 
-    /// Ctrl-C/Ctrl-Ins (also Cmd-C on macOS): copy the full path of the
-    /// entry under the cursor (or the directory, on "..") as text.
-    pub(super) fn copy_path(&mut self, cx: &mut Context<Self>) {
-        self.copy_part(cx, |path| Some(path.display().to_string()));
-    }
-
     /// Ctrl-Shift-C (also Cmd-Shift-C on macOS): copy only the name of the
     /// entry under the cursor (the panel's folder name, on "..").
     pub(super) fn copy_name(&mut self, cx: &mut Context<Self>) {
@@ -318,6 +312,8 @@ impl FileManager {
         self.end_search(cx);
         if let Some(text) = part(&self.active_panel(cx).cursor_path()) {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
+            // The clipboard holds other text now.
+            self.check_clipboard(cx);
         }
     }
 

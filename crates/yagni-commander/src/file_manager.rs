@@ -14,6 +14,7 @@ use yagni_commander_core::{
 };
 
 mod askpass;
+mod clipboard;
 pub(crate) mod commands;
 mod connect;
 mod file_ops;
@@ -31,16 +32,16 @@ mod watch;
 
 use crate::actions::{
     About, Activate, Back, CancelSearch, CheckForUpdates, CloseTab, CompareContents, Connect, Copy,
-    CopyHere, CopyName, CopyParentPath, CopyPath, CountFolderSizes, CursorDown, CursorEnd,
-    CursorHome, CursorUp, CycleTheme, Delete, DeselectAll, DeselectGroup, DeselectSameExtension,
-    DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT, FindFiles, FolderHistory,
-    Forward, GoToConfig, GoToLog, GoUp, InvertSelection, MakeDirectory, MenuAlt, MountsLeft,
-    MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal, OpenWith, Pack,
-    PageDown, PageUp, PrevTab, Reload, Rename, SelectAll, SelectDown, SelectEnd, SelectGroup,
-    SelectHome, SelectPageDown, SelectPageUp, SelectSameExtension, SelectUp, ShowProperties,
-    SortByModified, SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels,
-    SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu, ToggleSelection, Trash,
-    UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    CopyFiles, CopyHere, CopyName, CopyParentPath, CountFolderSizes, CursorDown, CursorEnd,
+    CursorHome, CursorUp, CutFiles, CycleTheme, Delete, DeselectAll, DeselectGroup,
+    DeselectSameExtension, DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT,
+    FindFiles, FolderHistory, Forward, GoToConfig, GoToLog, GoUp, InvertSelection, MakeDirectory,
+    MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal,
+    OpenWith, Pack, PageDown, PageUp, PasteFiles, PrevTab, Reload, Rename, SelectAll, SelectDown,
+    SelectEnd, SelectGroup, SelectHome, SelectPageDown, SelectPageUp, SelectSameExtension,
+    SelectUp, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu,
+    ToggleSelection, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -109,6 +110,10 @@ pub struct FileManager {
     notice: Option<SharedString>,
     /// The copy, move or trash operation in progress.
     job: Option<file_ops::RunningJob>,
+    /// The files Ctrl-C or Ctrl-X took, for Ctrl-V.
+    clipboard: Option<clipboard::FileClipboard>,
+    /// Id of the last Ctrl-C or Ctrl-X.
+    next_clipboard: u64,
     /// What F8 uses. Tests replace it so they never touch the real trash.
     trash: yagni_commander_core::file_ops::TrashFn,
     /// The terminal Ctrl-Shift-T starts without a `terminal` setting;
@@ -266,6 +271,8 @@ impl FileManager {
                 // A commit in a terminal changes no file the watcher sees.
                 if window.is_window_active() {
                     this.refresh_git(None, cx);
+                    // Something copied in another app forgets our files.
+                    this.check_clipboard(cx);
                 } else {
                     this.alt_armed = false;
                     // Like the menu, the hotlist popup closes.
@@ -328,6 +335,8 @@ impl FileManager {
             dragging_split: false,
             notice: notice.map(Into::into),
             job: None,
+            clipboard: None,
+            next_clipboard: 0,
             trash: yagni_commander_core::file_ops::system_trash,
             opener: yagni_commander_core::launch::SYSTEM_OPENER.to_owned(),
             update_url: yagni_commander_core::update::LATEST_URL.to_owned(),
@@ -904,7 +913,7 @@ impl FileManager {
 
     /// Escape: closes the quick search box, else stops loading the active
     /// panel (see `Commander::cancel_load`), else stops counting folder
-    /// sizes.
+    /// sizes, else forgets the files Ctrl-C or Ctrl-X took.
     fn escape(&mut self, cx: &mut Context<Self>) {
         let done = self.commander.update(cx, |c, cx| {
             let active = c.active();
@@ -914,8 +923,13 @@ impl FileManager {
             }
             done
         });
-        if !done {
+        if done {
+            return;
+        }
+        if self.sizes.is_some() {
             self.stop_sizes(cx);
+        } else {
+            self.forget_files(cx);
         }
     }
 
@@ -1035,10 +1049,17 @@ impl Render for FileManager {
             (Some(err), _) => Some(err.to_owned().into()),
             (None, notice) => notice.clone(),
         };
-        let status = match (problem, self.sizes_text()) {
-            (None, Some(text)) => div()
-                .id("status-sizes")
-                .debug_selector(|| "status-sizes".into())
+        let info = self
+            .sizes_text()
+            .map(|text| ("status-sizes", text))
+            .or_else(|| {
+                self.clipboard_status()
+                    .map(|text| ("status-clipboard", text))
+            });
+        let status = match (problem, info) {
+            (None, Some((id, text))) => div()
+                .id(id)
+                .debug_selector(move || id.into())
                 .text_color(colors.text_secondary)
                 .child(text),
             (problem, _) => match problem {
@@ -1179,7 +1200,13 @@ impl Render for FileManager {
                 cx.listener(|this, _: &MakeDirectory, window, cx| this.make_directory(window, cx)),
             )
             .on_action(cx.listener(|this, _: &Edit, window, cx| this.edit(window, cx)))
-            .on_action(cx.listener(|this, _: &CopyPath, _, cx| this.copy_path(cx)))
+            .on_action(
+                cx.listener(|this, _: &CopyFiles, window, cx| this.take_files(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &CutFiles, window, cx| this.take_files(true, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &PasteFiles, window, cx| this.paste_files(window, cx)))
             .on_action(cx.listener(|this, _: &CopyName, _, cx| this.copy_name(cx)))
             .on_action(cx.listener(|this, _: &CopyParentPath, _, cx| this.copy_parent_path(cx)))
             .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))

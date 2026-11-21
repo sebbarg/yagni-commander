@@ -62,7 +62,13 @@ actions!(
         Rename,
         Edit,
         EditNewFile,
-        CopyPath,
+        /// Ctrl-C: the targets onto the clipboard, for Ctrl-V to copy (their
+        /// paths as text too).
+        CopyFiles,
+        /// Ctrl-X: the same, for Ctrl-V to move.
+        CutFiles,
+        /// Ctrl-V: copy or move the clipboard's files into the active panel.
+        PasteFiles,
         /// Ctrl-Shift-C: copy the name of the entry under the cursor.
         CopyName,
         /// Ctrl-Alt-C: copy the folder holding the entry under the cursor.
@@ -449,12 +455,17 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("ctrl--", ZoomOut, context),
             KeyBinding::new("ctrl-0", ZoomReset, context),
             // Only while a panel has focus: a text field's context is deeper, so
-            // its own Ctrl-C/Ctrl-Ins win there. Ctrl-C first and last, so both
-            // menus show it (Cmd-C on macOS).
-            KeyBinding::new("ctrl-c", CopyName, context),
-            KeyBinding::new("ctrl-insert", CopyName, context),
-            KeyBinding::new("ctrl-c", CopyName, context),
-            KeyBinding::new("ctrl-shift-c", CopyPath, context),
+            // its own Ctrl-C/X/V and Ctrl-Ins/Shift-Ins win there. Ctrl-C and
+            // Ctrl-V first and last, so both menus show them (Cmd on macOS).
+            // Shift-Del stays delete permanently (TC's), so no twin for cut.
+            KeyBinding::new("ctrl-c", CopyFiles, context),
+            KeyBinding::new("ctrl-insert", CopyFiles, context),
+            KeyBinding::new("ctrl-c", CopyFiles, context),
+            KeyBinding::new("ctrl-x", CutFiles, context),
+            KeyBinding::new("ctrl-v", PasteFiles, context),
+            KeyBinding::new("shift-insert", PasteFiles, context),
+            KeyBinding::new("ctrl-v", PasteFiles, context),
+            KeyBinding::new("ctrl-shift-c", CopyName, context),
             KeyBinding::new("ctrl-alt-c", CopyParentPath, context),
             KeyBinding::new("f2", Rename, context),
             KeyBinding::new("f3", View, context),

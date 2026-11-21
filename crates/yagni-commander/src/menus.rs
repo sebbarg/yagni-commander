@@ -12,14 +12,14 @@ use gpui_kit::{
 use yagni_commander_core::{Commander, SortKey};
 
 use crate::actions::{
-    About, Back, CheckForUpdates, CloseTab, CompareContents, Connect, Copy, CopyHere, CopyName,
-    CopyParentPath, CopyPath, CountFolderSizes, Delete, DeselectAll, DeselectGroup,
+    About, Back, CheckForUpdates, CloseTab, CompareContents, Connect, Copy, CopyFiles, CopyHere,
+    CopyName, CopyParentPath, CountFolderSizes, CutFiles, Delete, DeselectAll, DeselectGroup,
     DeselectSameExtension, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, FolderHistory,
     Forward, GoToConfig, GoToLog, InvertSelection, MakeDirectory, MountsLeft, MountsRight, Move,
-    NewTab, NextTab, OpenSettings, OpenTerminal, OpenWith, Pack, PrevTab, Quit, Reload, Rename,
-    SelectAll, SelectGroup, SelectSameExtension, ShowProperties, SortByModified, SortByName,
-    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash,
-    UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    NewTab, NextTab, OpenSettings, OpenTerminal, OpenWith, Pack, PasteFiles, PrevTab, Quit, Reload,
+    Rename, SelectAll, SelectGroup, SelectSameExtension, ShowProperties, SortByModified,
+    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
+    ToggleHidden, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -158,8 +158,10 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
         item("Extract...", Extract),
         item("Compare by content", CompareContents),
         MenuEntry::Separator,
+        item("Copy files", CopyFiles),
+        item("Cut files", CutFiles),
+        item("Paste files", PasteFiles),
         item("Copy name", CopyName),
-        item("Copy path", CopyPath),
         item("Copy parent path", CopyParentPath),
         item("Properties...", ShowProperties),
     ];
@@ -423,8 +425,10 @@ mod tests {
                 "Extract...",
                 "Compare by content",
                 "-",
+                "Copy files",
+                "Cut files",
+                "Paste files",
                 "Copy name",
-                "Copy path",
                 "Copy parent path",
                 "Properties...",
                 "-",

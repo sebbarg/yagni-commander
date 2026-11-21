@@ -99,7 +99,8 @@ impl Kind {
 }
 
 /// F5 inside an archive: the entries to copy out.
-struct FromArchive {
+#[derive(Clone)]
+pub(super) struct FromArchive {
     archive: PathBuf,
     inner: Vec<std::ffi::OsString>,
     names: Vec<std::ffi::OsString>,
@@ -110,9 +111,9 @@ pub(crate) struct RunningJob {
     job: Job,
     pub(super) kind: Kind,
     /// The tab the sources came from.
-    source: PanelId,
+    pub(super) source: PanelId,
     /// The folder the sources came from.
-    source_dir: PathBuf,
+    pub(super) source_dir: PathBuf,
     view: Entity<ProgressView>,
     polls: u32,
     progress_open: bool,
@@ -126,6 +127,9 @@ pub(crate) struct RunningJob {
     pub(super) editing: Option<super::remote_edit::Fetching>,
     /// Shift-F4 on a remote folder: the file to edit once it exists.
     pub(super) then_edit: Option<PathBuf>,
+    /// Ctrl-V of a cut: the clipboard's id, forgotten once the move is
+    /// complete.
+    pub(super) pasted_cut: Option<u64>,
 }
 
 /// A private copy of an archive entry for the viewer, or (`open`, Enter) for
@@ -172,12 +176,6 @@ impl FileManager {
             let other = commander.panel(commander.active().other());
             let targets = panel.targets();
             let one_is_dir = matches!(targets.as_slice(), [one] if one.kind == EntryKind::Dir);
-            // Inside an archive the sources are entries of it.
-            let from_archive = panel.archive().map(|index| FromArchive {
-                archive: index.file().to_path_buf(),
-                inner: inner_parts(index.file(), panel.path()),
-                names: targets.iter().map(|e| e.name.clone()).collect(),
-            });
             (
                 source_paths(panel),
                 // Typed relative paths start from a real folder.
@@ -185,7 +183,7 @@ impl FileManager {
                 commander.home().to_path_buf(),
                 other.path().to_path_buf(),
                 one_is_dir,
-                from_archive,
+                from_archive(panel),
             )
         };
         if sources.is_empty() || self.refuse_second_job(window, cx) {
@@ -216,23 +214,7 @@ impl FileManager {
             },
             Rc::new(move |this, typed, window, cx| {
                 let to = destination(&dir, &home, typed, &sources)?;
-                let sources = sources.clone();
-                if from_archive.is_some() && remote::is_remote(to.path()) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "Can't extract to a remote folder",
-                    ));
-                }
-                let operation = match (&from_archive, kind) {
-                    (Some(from), _) => Operation::ExtractEntries {
-                        archive: from.archive.clone(),
-                        inner: from.inner.clone(),
-                        names: from.names.clone(),
-                        to,
-                    },
-                    (None, Kind::Copy) => Operation::Copy { sources, to },
-                    (None, _) => Operation::Move { sources, to },
-                };
+                let operation = copy_operation(from_archive.as_ref(), kind, sources.clone(), to)?;
                 this.start_job(kind, operation, window, cx)
             }),
             window,
@@ -248,18 +230,26 @@ impl FileManager {
             return;
         }
         self.end_search(cx);
-        let (source, is_dir, home) = {
-            let commander = self.commander.read(cx);
-            let panel = commander.panel(commander.active());
+        let (source, is_dir) = {
+            let panel = self.active_panel(cx);
             let Some(entry) = panel.cursor_entry().filter(|e| e.kind != EntryKind::Parent) else {
                 return;
             };
-            (
-                panel.path().join(&entry.name),
-                entry.kind == EntryKind::Dir,
-                commander.home().to_path_buf(),
-            )
+            (panel.path().join(&entry.name), entry.kind == EntryKind::Dir)
         };
+        self.copy_beside(source, is_dir, window, cx);
+    }
+
+    /// Shift-F5's prompt and copy for `source`, also Ctrl-V of a copy into
+    /// the folder it came from.
+    pub(super) fn copy_beside(
+        &mut self,
+        source: PathBuf,
+        is_dir: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let home = self.commander.read(cx).home().to_path_buf();
         if self.refuse_second_job(window, cx) {
             return;
         }
@@ -715,6 +705,7 @@ impl FileManager {
             select: None,
             editing: None,
             then_edit: None,
+            pasted_cut: None,
         });
         cx.spawn_in(window, async move |this, cx| {
             loop {
@@ -1155,6 +1146,9 @@ impl FileManager {
             return;
         }
         let complete = report.failures.is_empty() && !report.cancelled;
+        if complete && running.pasted_cut.is_some() {
+            self.forget_cut(running.pasted_cut);
+        }
         // Shift-F5 (a copy with a name to select) ignored the selection.
         if matches!(running.kind, Kind::Copy | Kind::Pack) && complete && running.select.is_none() {
             self.commander.update(cx, |commander, _| {
@@ -1339,8 +1333,43 @@ fn difference_line(pair: &ComparePair) -> impl Fn(&Difference) -> String + '_ {
     }
 }
 
+/// Inside an archive: the panel's targets as entries of it.
+pub(super) fn from_archive(panel: &Panel) -> Option<FromArchive> {
+    panel.archive().map(|index| FromArchive {
+        archive: index.file().to_path_buf(),
+        inner: inner_parts(index.file(), panel.path()),
+        names: panel.targets().iter().map(|e| e.name.clone()).collect(),
+    })
+}
+
+/// F5/F6 (and Ctrl-V): the operation for `sources` to `to`. Archive
+/// entries are extracted, never to a host.
+pub(super) fn copy_operation(
+    from_archive: Option<&FromArchive>,
+    kind: Kind,
+    sources: Vec<PathBuf>,
+    to: Destination,
+) -> io::Result<Operation> {
+    if from_archive.is_some() && remote::is_remote(to.path()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Can't extract to a remote folder",
+        ));
+    }
+    Ok(match (from_archive, kind) {
+        (Some(from), _) => Operation::ExtractEntries {
+            archive: from.archive.clone(),
+            inner: from.inner.clone(),
+            names: from.names.clone(),
+            to,
+        },
+        (None, Kind::Copy) => Operation::Copy { sources, to },
+        (None, _) => Operation::Move { sources, to },
+    })
+}
+
 /// Paths of the panel's targets (selection, else the entry under the cursor).
-fn source_paths(panel: &yagni_commander_core::Panel) -> Vec<PathBuf> {
+pub(super) fn source_paths(panel: &yagni_commander_core::Panel) -> Vec<PathBuf> {
     panel
         .targets()
         .iter()
@@ -1349,7 +1378,7 @@ fn source_paths(panel: &yagni_commander_core::Panel) -> Vec<PathBuf> {
 }
 
 /// "“name”" for one source, "3 entries" for more.
-fn describe(sources: &[PathBuf]) -> String {
+pub(super) fn describe(sources: &[PathBuf]) -> String {
     match sources {
         [one] => format!(
             "“{}”",
