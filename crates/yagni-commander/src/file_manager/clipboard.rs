@@ -6,8 +6,10 @@
 //! anywhere forgets the files. Text on the clipboard is never read as
 //! paths. Files another app put there as files (Finder; gpui reads them on
 //! macOS only) are copied. On macOS local files also go onto the pasteboard
-//! as files (core `pasteboard`), so Finder pastes them; once ours are
-//! forgotten they are put back as text alone, so nothing pastes them.
+//! as files (core `pasteboard`), so Finder pastes them; the marker is then
+//! the pasteboard's change count, never the items read back (see
+//! `pasteboard::change_count`). Once ours are forgotten they are put back
+//! as text alone, so nothing pastes them.
 
 use std::path::{Path, PathBuf};
 
@@ -31,8 +33,9 @@ pub(crate) struct FileClipboard {
     from_archive: Option<FromArchive>,
     /// What went onto the system clipboard.
     text: String,
-    /// macOS: the files went onto the pasteboard as files too.
-    as_files: bool,
+    /// macOS: the files went onto the pasteboard as files too, which left
+    /// it at this change count.
+    as_files: Option<isize>,
     /// The tab and folder they came from: a complete copy clears the
     /// selection there, as F5 does.
     source: PanelId,
@@ -68,21 +71,40 @@ fn clipboard_text(sources: &[PathBuf]) -> String {
 }
 
 /// Puts the paths on the clipboard as `text`; on macOS, when they are
-/// `local` files, as files too. Returns whether they went on as files.
-fn write_clipboard(sources: &[PathBuf], local: bool, text: &str, cx: &mut gpui_kit::App) -> bool {
+/// `local` files, as files too. Returns the pasteboard's change count when
+/// they went on as files.
+fn write_clipboard(
+    sources: &[PathBuf],
+    local: bool,
+    text: &str,
+    cx: &mut gpui_kit::App,
+) -> Option<isize> {
     // Never in tests: they would overwrite the real pasteboard, which the
     // test clipboard doesn't see.
     #[cfg(all(target_os = "macos", not(test)))]
     if local {
         let paths: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
-        if yagni_commander_core::pasteboard::write_files(&paths, text) {
-            return true;
+        if let Some(count) = yagni_commander_core::pasteboard::write_files(&paths, text) {
+            return Some(count);
         }
     }
     #[cfg(any(not(target_os = "macos"), test))]
     let _ = (sources, local);
     cx.write_to_clipboard(ClipboardItem::new_string(text.to_owned()));
-    false
+    None
+}
+
+/// Whether the system clipboard still holds `clip`'s files: the change
+/// count when they went onto the pasteboard as files, else the text.
+fn still_holds(clip: &FileClipboard, cx: &gpui_kit::App) -> bool {
+    #[cfg(all(target_os = "macos", not(test)))]
+    if let Some(count) = clip.as_files {
+        return yagni_commander_core::pasteboard::change_count() == count;
+    }
+    cx.read_from_clipboard()
+        .and_then(|item| item.text())
+        .as_deref()
+        == Some(clip.text.as_str())
 }
 
 /// The files another app put on the clipboard as files.
@@ -149,13 +171,7 @@ impl FileManager {
         };
         // Still ours on the pasteboard as files: text alone, so neither
         // Finder nor our Ctrl-V pastes them.
-        if clip.as_files
-            && cx
-                .read_from_clipboard()
-                .and_then(|item| item.text())
-                .as_deref()
-                == Some(clip.text.as_str())
-        {
+        if clip.as_files.is_some() && still_holds(&clip, cx) {
             cx.write_to_clipboard(ClipboardItem::new_string(clip.text));
         }
         cx.notify();
@@ -176,8 +192,7 @@ impl FileManager {
         let Some(clip) = &self.clipboard else {
             return;
         };
-        let current = cx.read_from_clipboard().and_then(|item| item.text());
-        if current.as_deref() != Some(clip.text.as_str()) {
+        if !still_holds(clip, cx) {
             self.clipboard = None;
             cx.notify();
         }
