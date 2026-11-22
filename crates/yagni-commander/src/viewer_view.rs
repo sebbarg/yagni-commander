@@ -397,7 +397,7 @@ impl ViewerView {
     fn zoom(&mut self, zoom_in: Option<bool>, window: &mut Window, cx: &mut Context<Self>) {
         match (self.picture.is_some(), zoom_in) {
             (true, Some(zoom_in)) => self.zoom_picture(zoom_in, window, cx),
-            (true, None) => self.fit_picture(cx),
+            (true, None) => self.fit_picture(window, cx),
             (false, Some(zoom_in)) => {
                 crate::zoom::change_viewer(if zoom_in { 1.0 } else { -1.0 }, cx)
             }

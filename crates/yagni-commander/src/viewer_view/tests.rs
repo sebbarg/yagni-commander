@@ -2479,6 +2479,35 @@ mod image_mode {
         );
     }
 
+    const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20">
+        <rect width="40" height="20" fill="#336699"/></svg>"##;
+
+    #[gpui_kit::test]
+    fn an_svg_opens_in_image_mode_and_is_drawn_for_its_zoom(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.svg", SVG.as_bytes(), None, cx);
+        assert!(in_image_mode(&viewer, &mut vcx));
+        assert!(status(&viewer, &mut vcx).ends_with("image · 40x20 · SVG"));
+        let factor = vcx.update(|window, _| window.scale_factor());
+        let decoded = |vcx: &mut VisualTestContext| {
+            settle(&viewer, vcx);
+            viewer.read_with(vcx, |v, _| v.picture().unwrap().decoded().unwrap())
+        };
+        let side = |zoom: f32| (40.0 * zoom * factor).round() as u32;
+        assert_eq!(decoded(&mut vcx).0, side(1.0), "its own size at fit");
+        vcx.simulate_keystrokes("ctrl-= ctrl-= ctrl-=");
+        assert!(status(&viewer, &mut vcx).ends_with("SVG · 300%"));
+        assert_eq!(decoded(&mut vcx).0, side(3.0), "drawn again, sharp");
+        vcx.simulate_keystrokes("ctrl-0");
+        assert_eq!(decoded(&mut vcx).0, side(1.0), "and small again at fit");
+    }
+
+    #[gpui_kit::test]
+    fn a_text_file_named_svg_says_why_and_shows_text(cx: &mut TestAppContext) {
+        let (_tmp, viewer, mut vcx) = open_named("a.svg", b"not markup", None, cx);
+        assert!(!in_image_mode(&viewer, &mut vcx));
+        assert!(dialog_open(&mut vcx));
+    }
+
     #[gpui_kit::test]
     fn the_status_line_says_while_it_loads(cx: &mut TestAppContext) {
         let (_tmp, viewer, mut vcx) = open_named("a.png", &png(3, 2), None, cx);
@@ -2898,6 +2927,17 @@ mod source_mode {
     }
 
     const RUST: &[u8] = b"fn main() {\n    let s = \"hi\"; // done\n}\n";
+
+    #[gpui_kit::test]
+    fn xml_opens_in_source_mode_with_colors(cx: &mut TestAppContext) {
+        let xml = b"<?xml version=\"1.0\"?>\n<Project Sdk=\"Web\"><!-- note --></Project>\n";
+        let (_tmp, viewer, mut vcx) = view_named("web.config", xml, None, cx);
+        let parts = colored(&viewer, &mut vcx);
+        assert!(has(&parts, "Project", "keyword"), "{parts:?}");
+        assert!(has(&parts, "Sdk", "property"), "{parts:?}");
+        assert!(has(&parts, "<!-- note -->", "comment"), "{parts:?}");
+        assert_eq!(shown_language(&viewer, &mut vcx), Some("XML"));
+    }
 
     #[gpui_kit::test]
     fn a_file_with_a_grammar_opens_in_source_mode_with_colors(cx: &mut TestAppContext) {

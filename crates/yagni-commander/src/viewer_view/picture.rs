@@ -8,7 +8,8 @@
 //!
 //! Zoom is the window's own (`Zoomed`), not the viewer's text level: none
 //! is fit, drawn by `ObjectFit::ScaleDown`; a scale draws the picture at
-//! that size and moves it by its center, kept inside its edges.
+//! that size and moves it by its center, kept inside its edges. An SVG is
+//! drawn again for a zoom that needs more pixels, or far fewer (`redraw`).
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -35,6 +36,7 @@ struct Shown {
     width: u32,
     height: u32,
     format: &'static str,
+    vector: bool,
 }
 
 struct Loading {
@@ -71,6 +73,8 @@ pub(super) struct PictureMode {
     drag: Option<Point<Pixels>>,
     /// Decoded up to `PICTURE_SIDE`, for a zoom past the display's size.
     sharp: bool,
+    /// An SVG's zoom it was last asked to be drawn for (`None`: fit).
+    drawn_for: Option<f32>,
 }
 
 impl PictureMode {
@@ -103,6 +107,11 @@ impl PictureMode {
     #[cfg(test)]
     pub(super) fn is_sharp(&self) -> bool {
         self.sharp
+    }
+
+    #[cfg(test)]
+    pub(super) fn decoded(&self) -> Option<(u32, u32)> {
+        self.shown.as_ref().map(|s| s.decoded)
     }
 
     #[cfg(test)]
@@ -186,6 +195,25 @@ fn wants_sharper(needed: f32, decoded: u32, own: u32, sharp: bool) -> bool {
     !sharp && needed > decoded as f32 + 0.5 && decoded < own.min(PICTURE_SIDE)
 }
 
+/// The longest side an SVG is drawn at, in device pixels, for `zoom` (`None`:
+/// fit, which never enlarges) at the display's `factor`: one unit of its own
+/// size per point, cut to the display at fit and to the texture limit zoomed.
+fn vector_side(own: u32, zoom: Option<f32>, factor: f32, display: Option<f32>) -> u32 {
+    let cap = if zoom.is_some() {
+        PICTURE_SIDE
+    } else {
+        side_limit(display)
+    };
+    ((own as f32 * zoom.unwrap_or(1.0) * factor).round() as u32).clamp(1, cap)
+}
+
+/// Whether an SVG drawn at `decoded` pixels wants drawing again at `wanted`:
+/// sharper, or when it would be shrunk to less than half (the GPU filters
+/// that badly).
+fn redraw(wanted: u32, decoded: u32) -> bool {
+    wanted > decoded || wanted * 2 < decoded
+}
+
 impl ViewerView {
     /// `I`: image mode, over the mode shown now; the key of the mode shown
     /// does nothing.
@@ -216,14 +244,16 @@ impl ViewerView {
             }
         };
         let sharp = self.picture.as_ref().is_some_and(|mode| mode.sharp);
-        let max_side = if sharp {
+        let drawn_for = self.picture.as_ref().and_then(|mode| mode.drawn_for);
+        let max_side = if sharp || drawn_for.is_some() {
             PICTURE_SIDE
         } else {
             side_limit(display_side(window, cx))
         };
+        let vector_scale = drawn_for.unwrap_or(1.0) * window.scale_factor();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(read_picture(&source, max_side));
+            let _ = tx.send(read_picture(&source, max_side, vector_scale));
         });
         self.next_picture += 1;
         let id = self.next_picture;
@@ -273,6 +303,7 @@ impl ViewerView {
                     width: picture.width,
                     height: picture.height,
                     format: picture.format,
+                    vector: picture.vector,
                 };
                 if let Some(old) = mode.shown.replace(new) {
                     cx.drop_image(old.image, Some(window));
@@ -312,26 +343,28 @@ impl ViewerView {
         mode.zoom = next.map(|scale| Zoomed { scale, center });
         mode.drag = None;
         self.clamp_picture(area);
-        if let Some(scale) = next {
-            self.sharpen(scale, window, cx);
-        }
+        self.sharpen(next, window, cx);
         cx.notify();
     }
 
     /// Ctrl-0 in image mode: back to fit.
-    pub(super) fn fit_picture(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn fit_picture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(mode) = self.picture.as_mut() {
             mode.zoom = None;
             mode.drag = None;
         }
+        self.sharpen(None, window, cx);
         cx.notify();
     }
 
-    /// Decodes again at up to `PICTURE_SIDE` when `scale` draws more pixels
-    /// than the display-sized decode has. Once per mode; the old picture
-    /// stays until the new one is ready.
-    fn sharpen(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
+    /// After a zoom to `scale` (`None`: fit). A bitmap decodes again at up
+    /// to `PICTURE_SIDE` when the zoom draws more pixels than the
+    /// display-sized decode has, once per mode; an SVG is drawn again
+    /// whenever `redraw` says. The old picture stays until the new one is
+    /// ready.
+    fn sharpen(&mut self, scale: Option<f32>, window: &mut Window, cx: &mut Context<Self>) {
         let factor = window.scale_factor();
+        let display = display_side(window, cx);
         let Some(mode) = self.picture.as_mut() else {
             return;
         };
@@ -342,6 +375,16 @@ impl ViewerView {
             (shown.width, shown.decoded.0)
         } else {
             (shown.height, shown.decoded.1)
+        };
+        if shown.vector {
+            if redraw(vector_side(own, scale, factor, display), decoded) {
+                mode.drawn_for = scale;
+                self.read_picture(window, cx);
+            }
+            return;
+        }
+        let Some(scale) = scale else {
+            return;
         };
         if wants_sharper(own as f32 * scale * factor, decoded, own, mode.sharp) {
             mode.sharp = true;
@@ -580,6 +623,24 @@ mod tests {
         assert_eq!(offset(0.25, 1000.0, 500.0), 0.0);
         assert_eq!(offset(0.75, 1000.0, 500.0), -500.0);
         assert_eq!(offset(0.0, 400.0, 500.0), 50.0);
+    }
+
+    #[test]
+    fn an_svg_is_drawn_for_its_zoom() {
+        // At fit: its own size in device pixels, cut to the display.
+        assert_eq!(vector_side(24, None, 2.0, Some(1920.0)), 48);
+        assert_eq!(vector_side(5000, None, 1.0, Some(1920.0)), 1920);
+        // Zoomed: up to the texture limit.
+        assert_eq!(vector_side(24, Some(8.0), 2.0, Some(1920.0)), 384);
+        assert_eq!(
+            vector_side(5000, Some(2.0), 1.0, Some(1920.0)),
+            PICTURE_SIDE
+        );
+        assert_eq!(vector_side(1, Some(0.1), 1.0, None), 1, "never empty");
+        assert!(redraw(384, 48), "sharper");
+        assert!(!redraw(48, 48));
+        assert!(!redraw(30, 48), "shrinking a little is fine");
+        assert!(redraw(20, 48), "less than half");
     }
 
     #[test]

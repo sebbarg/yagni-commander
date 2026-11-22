@@ -825,6 +825,33 @@ rm "$left/photo.png"
 keys ctrl+r
 sleep 0.5
 
+echo "an SVG opens in image mode, drawn again sharp when zoomed"
+cat >"$left/drawing.svg" <<'SVG'
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 32 18">
+  <rect width="32" height="18" rx="2" fill="#2b4c7e"/>
+  <circle cx="9" cy="9" r="6" fill="#f2c14e"/>
+  <path d="M17 14 L22 4 L27 14 Z" fill="#e94f37"/>
+  <text x="16" y="17" font-size="2.2" font-family="sans-serif" fill="#ffffff" text-anchor="middle">yagni SVG</text>
+</svg>
+SVG
+keys ctrl+r
+typed drawing
+keys Escape F3
+xdotool windowfocus "$(xdotool search --name "^$left/drawing.svg\$" | head -1)"
+sleep 1.5
+shot 10g5-viewer-svg
+keys ctrl+equal ctrl+equal ctrl+equal ctrl+equal ctrl+equal
+sleep 1
+shot 10g6-viewer-svg-zoomed
+keys ctrl+0 Escape
+check "SVG viewer closed" bash -c '! xdotool search --name "/drawing.svg\$"'
+xdotool windowfocus "$window"
+sleep 0.5
+rm "$left/drawing.svg"
+keys ctrl+r
+sleep 0.5
+
 echo "a .rs file opens in source mode; T shows it plain, S colored again"
 printf '// A sample.\nfn main() {\n    let answer: u32 = 42;\n    println!("{answer} is \\"it\\"");\n}\n' >"$left/sample.rs"
 keys ctrl+r
@@ -853,6 +880,34 @@ check "source viewer closed" bash -c '! xdotool search --name "/sample.rs\$"'
 xdotool windowfocus "$window"
 sleep 0.5
 rm "$left/sample.rs"
+keys ctrl+r
+sleep 0.5
+
+echo "a .csproj file opens in source mode as XML"
+cat >"$left/App.csproj" <<'XML'
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A sample project. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Serilog" Version="4.0.0" />
+  </ItemGroup>
+</Project>
+XML
+keys ctrl+r
+typed App.cs
+keys Escape F3
+xdotool windowfocus "$(xdotool search --name "^$left/App.csproj\$" | head -1)"
+sleep 1.5
+shot 10h5-viewer-source-xml
+keys Escape
+check "XML viewer closed" bash -c '! xdotool search --name "/App.csproj\$"'
+xdotool windowfocus "$window"
+sleep 0.5
+rm "$left/App.csproj"
 keys ctrl+r
 sleep 0.5
 

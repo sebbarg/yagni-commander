@@ -74,7 +74,7 @@ The newest Mesa has the opposite problem for now: built with LLVM 22 (Fedora 44,
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
 - A shared clipboard between your machines, kept on an ssh host (see [Shared clipboard](#shared-clipboard)).
-- A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 27 languages, files up to 4 MiB; L picks the language), hex (H), formatted Markdown (M) and image (I) modes.
+- A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 29 languages, files up to 4 MiB; L picks the language), hex (H), formatted Markdown (M) and image (I; PNG, JPEG, GIF, WebP and SVG) modes.
 - Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it and offers to install a newer release and restart. With the Settings switch "Check for updates" on (the default), it also asks at startup and every hour, and a button in the status bar makes the same offer.
 - Panels follow changes made by other programs.
 - The Git branch in the path header (`main ↑2 ↓1 •`: commits ahead and behind, a dot when something changed), filled in after the listing so it never slows a folder down.

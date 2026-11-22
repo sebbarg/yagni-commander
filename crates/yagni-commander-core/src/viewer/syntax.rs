@@ -12,13 +12,14 @@ pub const SOURCE_CAP: u64 = 4 * 1024 * 1024;
 /// The grammars the app is built with: gpui-component's registry name and
 /// the name the status line shows. `language` returns only these; an app
 /// test checks each is registered.
-pub const LANGUAGES: [(&str, &str); 27] = [
+pub const LANGUAGES: [(&str, &str); 29] = [
     ("bash", "Bash"),
     ("c", "C"),
     ("cpp", "C++"),
     ("csharp", "C#"),
     ("css", "CSS"),
     ("diff", "Diff"),
+    ("dtd", "DTD"),
     ("ejs", "EJS"),
     ("erb", "ERB"),
     ("go", "Go"),
@@ -39,6 +40,7 @@ pub const LANGUAGES: [(&str, &str); 27] = [
     ("toml", "TOML"),
     ("tsx", "TSX"),
     ("typescript", "TypeScript"),
+    ("xml", "XML"),
     ("yaml", "YAML"),
 ];
 
@@ -103,6 +105,7 @@ const EXTENSIONS: &[(&str, &str)] = &[
     ("diff", "diff"),
     ("patch", "diff"),
     ("dockerfile", "bash"),
+    ("dtd", "dtd"),
     ("ejs", "ejs"),
     ("erb", "erb"),
     ("go", "go"),
@@ -140,6 +143,31 @@ const EXTENSIONS: &[(&str, &str)] = &[
     ("ts", "typescript"),
     ("mts", "typescript"),
     ("cts", "typescript"),
+    ("xml", "xml"),
+    ("xsd", "xml"),
+    ("xsl", "xml"),
+    ("xslt", "xml"),
+    ("xaml", "xml"),
+    ("svg", "xml"),
+    ("plist", "xml"),
+    ("rss", "xml"),
+    ("atom", "xml"),
+    ("gpx", "xml"),
+    ("kml", "xml"),
+    ("wsdl", "xml"),
+    ("xlf", "xml"),
+    ("xliff", "xml"),
+    ("csproj", "xml"),
+    ("fsproj", "xml"),
+    ("vbproj", "xml"),
+    ("vcxproj", "xml"),
+    ("proj", "xml"),
+    ("props", "xml"),
+    ("targets", "xml"),
+    ("resx", "xml"),
+    ("nuspec", "xml"),
+    ("ui", "xml"),
+    ("qrc", "xml"),
     ("yaml", "yaml"),
     ("yml", "yaml"),
 ];
@@ -163,18 +191,31 @@ const INTERPRETERS: &[(&str, &str)] = &[
 ];
 
 /// The grammar for a file named `name` whose text starts with
-/// `first_line`: by the whole name, then the extension, then a `#!` line.
+/// `first_line`: by the whole name, then the extension, then a `#!` line
+/// (only without an extension), then an XML declaration (any name the
+/// extensions don't know: `web.config`, `notes.txt`).
 pub fn language(name: &str, first_line: &[u8]) -> Option<&'static str> {
     if let Some(&(_, lang)) = NAMES.iter().find(|(n, _)| *n == name) {
         return Some(lang);
     }
-    if let Some(ext) = extension(name) {
-        return EXTENSIONS
-            .iter()
-            .find(|(e, _)| *e == ext)
-            .map(|&(_, lang)| lang);
-    }
-    interpreter(first_line)
+    let by_start = match extension(name) {
+        Some(ext) => {
+            if let Some(&(_, lang)) = EXTENSIONS.iter().find(|(e, _)| *e == ext) {
+                return Some(lang);
+            }
+            None
+        }
+        None => interpreter(first_line),
+    };
+    by_start.or_else(|| is_xml_declaration(first_line).then_some("xml"))
+}
+
+/// Whether the text starts with `<?xml` (after a byte order mark).
+fn is_xml_declaration(first_line: &[u8]) -> bool {
+    let line = first_line
+        .strip_prefix(b"\xEF\xBB\xBF")
+        .unwrap_or(first_line);
+    line.starts_with(b"<?xml") && line.get(5).is_none_or(|b| b.is_ascii_whitespace())
 }
 
 /// What a grammar picked by hand is remembered by for the session: the
@@ -328,6 +369,25 @@ mod tests {
         }
         // Unknown extensions don't fall back to the first line.
         assert_eq!(language("notes.txt", b"#!/bin/sh\n"), None);
+        assert_eq!(language("App.csproj", b""), Some("xml"));
+        assert_eq!(language("icon.SVG", b""), Some("xml"));
+        assert_eq!(language("note.dtd", b""), Some("dtd"));
+        // An XML declaration, under any name the extensions don't know.
+        assert_eq!(
+            language("web.config", b"<?xml version=\"1.0\"?>\n"),
+            Some("xml")
+        );
+        assert_eq!(
+            language("data", b"\xEF\xBB\xBF<?xml version=\"1.0\"?>"),
+            Some("xml")
+        );
+        assert_eq!(language("notes.txt", b"<?xml\n"), Some("xml"));
+        assert_eq!(
+            language("main.rs", b"<?xml version=\"1.0\"?>"),
+            Some("rust")
+        );
+        assert_eq!(language("a.config", b"<?xml-stylesheet ?>"), None);
+        assert_eq!(language("a.config", b"  <?xml version=\"1.0\"?>"), None);
         assert_eq!(language("README", b"hello"), None);
         assert_eq!(language(".gitignore", b"target/\n"), None);
         assert_eq!(language("makefile.bak", b""), None);

@@ -18,6 +18,8 @@ log.workspace = true
 serde.workspace = true
 tempfile.workspace = true
 toml.workspace = true
+tree-sitter.workspace = true
+tree-sitter-xml.workspace = true
 
 [dev-dependencies]
 gpui-kit = { workspace = true, features = ["test-support"] }

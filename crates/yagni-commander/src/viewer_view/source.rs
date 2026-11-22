@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 use gpui_kit::base::input::Rope;
 use gpui_kit::base::text::CodeBlock;
-use gpui_kit::component::highlighter::{LanguageRegistry, SyntaxHighlighter};
+use gpui_kit::component::highlighter::{LanguageConfig, LanguageRegistry, SyntaxHighlighter};
 use gpui_kit::{App, Context, HighlightStyle, SharedString, Window};
 use yagni_commander_core::format_size;
 use yagni_commander_core::viewer::{Role, Row, SOURCE_CAP, display_name, language, role};
@@ -69,8 +69,38 @@ fn register_queries() {
     ONCE.call_once(register_queries_now);
 }
 
+/// Grammars gpui-kit doesn't ship, with each grammar crate's own query
+/// (`every_language_colors_its_sample` checks they load).
+fn extra_grammars() -> [(&'static str, LanguageConfig); 2] {
+    let config = |name: &str, grammar, highlights| {
+        let grammar = tree_sitter::Language::new(grammar);
+        LanguageConfig::new(name, grammar, Vec::new(), highlights, "", "")
+    };
+    [
+        (
+            "xml",
+            config(
+                "xml",
+                tree_sitter_xml::LANGUAGE_XML,
+                tree_sitter_xml::XML_HIGHLIGHT_QUERY,
+            ),
+        ),
+        (
+            "dtd",
+            config(
+                "dtd",
+                tree_sitter_xml::LANGUAGE_DTD,
+                tree_sitter_xml::DTD_HIGHLIGHT_QUERY,
+            ),
+        ),
+    ]
+}
+
 fn register_queries_now() {
     let registry = LanguageRegistry::singleton();
+    for (name, config) in extra_grammars() {
+        registry.register(name, &config);
+    }
     for (name, query) in QUERIES {
         if let Some(mut config) = registry.language(name) {
             config.highlights = query.into();
@@ -432,6 +462,7 @@ mod tests {
             ("csharp", "class A { public int X = 1; }\n"),
             ("css", "a { color: red; }\n"),
             ("diff", "--- a\n+++ b\n@@ -1 +1 @@\n-x\n+y\n"),
+            ("dtd", "<!ELEMENT note (#PCDATA)>\n"),
             ("ejs", "<% if (x) { %>hi<% } %>\n"),
             ("erb", "<% if x %>hi<% end %>\n"),
             ("go", "package main\nfunc main() {}\n"),
@@ -455,6 +486,10 @@ mod tests {
             ("toml", "[a]\nb = 1\n"),
             ("tsx", "const x: number = <div />;\n"),
             ("typescript", "const x: number = 1;\n"),
+            (
+                "xml",
+                "<?xml version=\"1.0\"?>\n<a b=\"c\"><!-- d --></a>\n",
+            ),
             ("yaml", "a: 1\n"),
         ];
         assert_eq!(samples.len(), yagni_commander_core::viewer::LANGUAGES.len());

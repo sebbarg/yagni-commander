@@ -105,6 +105,14 @@ percent-encoding = "2.3"
 # Image mode in the F3 viewer: gpui's decoder, which we call ourselves for the
 # format list and the limits. Already in the tree: same version, no new crate.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+# Source mode's XML and DTD: the grammars, their highlight queries and the
+# tree-sitter they load into (gpui-kit's version: no second copy). The
+# grammar crate is new (two C parsers, built by cc).
+tree-sitter = "0.26"
+tree-sitter-xml = "0.7"
+# SVG in image mode: parsed by usvg, drawn by resvg. gpui renders its icons with
+# it, so it is in the tree with these features: same version, no new crate.
+resvg = { version = "0.46", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

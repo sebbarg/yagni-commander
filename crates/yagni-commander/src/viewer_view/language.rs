@@ -353,7 +353,8 @@ mod tests {
         assert_eq!(shown(first_match("c#")), Some("C#"));
         assert_eq!(shown(first_match("plain t")), Some("Plain text"));
         assert_eq!(shown(first_match("jso")), Some("JSON"));
-        assert_eq!(first_match("x"), None);
+        assert_eq!(shown(first_match("x")), Some("XML"));
+        assert_eq!(first_match("q"), None);
         assert_eq!(first_match(""), None);
     }
 }
