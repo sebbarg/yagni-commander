@@ -180,9 +180,88 @@ fn system_fonts() -> Arc<usvg::fontdb::Database> {
         .get_or_init(|| {
             let mut db = usvg::fontdb::Database::new();
             db.load_system_fonts();
+            installed_generics(&mut db);
             Arc::new(db)
         })
         .clone()
+}
+
+/// Installed fonts to try for a generic family, in order, when the one
+/// fontdb chose isn't installed.
+const SANS: &[&str] = &[
+    "Noto Sans",
+    "DejaVu Sans",
+    "Liberation Sans",
+    "Cantarell",
+    "Ubuntu",
+    "Helvetica",
+    "Arial",
+];
+const SERIF: &[&str] = &[
+    "Noto Serif",
+    "DejaVu Serif",
+    "Liberation Serif",
+    "Times",
+    "Times New Roman",
+];
+const MONO: &[&str] = &[
+    "Noto Sans Mono",
+    "DejaVu Sans Mono",
+    "Liberation Mono",
+    "Ubuntu Mono",
+    "Menlo",
+    "Courier New",
+];
+
+/// Points each generic family (`sans-serif`, ...) at a font that is
+/// installed. fontdb takes them from fontconfig's alias files without
+/// looking: the last alias's first preferred name, which on Kubuntu is a
+/// font it doesn't have, so `font-family="sans-serif"` (and usvg's fallback,
+/// serif) matched nothing and the text was left out. Kept when installed;
+/// else the first of our list that is, else any installed family.
+fn installed_generics(db: &mut usvg::fontdb::Database) {
+    use usvg::fontdb::Family;
+    let installed = |db: &usvg::fontdb::Database, name: &str| {
+        db.faces()
+            .any(|face| face.families.iter().any(|(n, _)| n == name))
+    };
+    let pick = |db: &usvg::fontdb::Database, family: Family, list: &[&str]| {
+        let current = db.family_name(&family);
+        if installed(db, current) {
+            return None;
+        }
+        list.iter()
+            .find(|name| installed(db, name))
+            .map(|name| (*name).to_owned())
+            .or_else(|| {
+                let face = db.faces().next()?;
+                Some(face.families.first()?.0.clone())
+            })
+    };
+    if let Some(name) = pick(db, Family::SansSerif, SANS) {
+        db.set_sans_serif_family(name);
+    }
+    if let Some(name) = pick(db, Family::Serif, SERIF) {
+        db.set_serif_family(name);
+    }
+    if let Some(name) = pick(db, Family::Monospace, MONO) {
+        db.set_monospace_family(name);
+    }
+    let sans = db.family_name(&Family::SansSerif).to_owned();
+    for (family, set) in [
+        (
+            Family::Cursive,
+            usvg::fontdb::Database::set_cursive_family::<String> as fn(&mut _, String),
+        ),
+        (
+            Family::Fantasy,
+            usvg::fontdb::Database::set_fantasy_family::<String>,
+        ),
+    ] {
+        if !installed(db, db.family_name(&family)) {
+            set(db, sans.clone());
+        }
+    }
 }
 
 fn format_name(format: ImageFormat) -> Option<&'static str> {
@@ -544,6 +623,63 @@ mod tests {
             .filter(|p| p[3] > 0)
             .count();
         assert!(drawn > 20, "{drawn} pixels");
+    }
+
+    /// A database holding only the bundled JetBrains Mono.
+    fn one_font() -> usvg::fontdb::Database {
+        let mut db = usvg::fontdb::Database::new();
+        db.load_font_data(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../yagni-commander/assets/fonts/JetBrainsMonoNL-Regular.ttf"
+            ))
+            .to_vec(),
+        );
+        db
+    }
+
+    #[test]
+    fn generic_families_name_installed_fonts() {
+        use usvg::fontdb::Family;
+        let mut db = one_font();
+        // As fontdb leaves them after reading an alias it doesn't have.
+        db.set_sans_serif_family("Not Installed Sans");
+        db.set_serif_family("Not Installed Serif");
+        installed_generics(&mut db);
+        for family in [
+            Family::SansSerif,
+            Family::Serif,
+            Family::Monospace,
+            Family::Cursive,
+            Family::Fantasy,
+        ] {
+            assert_eq!(db.family_name(&family), "JetBrains Mono NL", "{family:?}");
+        }
+        let text = r#"<svg xmlns="http://www.w3.org/2000/svg" width="60" height="30">
+            <text x="2" y="24" font-size="24" font-family="sans-serif">Hi</text></svg>"#;
+        let options = usvg::Options {
+            fontdb: Arc::new(db),
+            ..usvg::Options::default()
+        };
+        let tree = usvg::Tree::from_str(text, &options).unwrap();
+        assert!(tree.root().has_children(), "the text is drawn");
+    }
+
+    #[test]
+    fn an_installed_generic_family_is_kept() {
+        use usvg::fontdb::Family;
+        let mut db = one_font();
+        db.set_monospace_family("JetBrains Mono NL");
+        db.set_sans_serif_family("JetBrains Mono NL");
+        installed_generics(&mut db);
+        assert_eq!(db.family_name(&Family::Monospace), "JetBrains Mono NL");
+        let mut empty = usvg::fontdb::Database::new();
+        installed_generics(&mut empty);
+        assert_eq!(
+            empty.family_name(&Family::SansSerif),
+            "Arial",
+            "nothing to pick"
+        );
     }
 
     #[test]
