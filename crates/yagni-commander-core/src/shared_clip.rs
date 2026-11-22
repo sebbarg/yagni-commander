@@ -11,6 +11,7 @@
 //! can't reorder them or make them expire.
 
 use std::io;
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::remote::{join, time_of};
@@ -76,7 +77,7 @@ pub fn push(client: &mut Client, dir: &[u8], text: &str, machine: &str) -> io::R
     {
         return Ok(Pushed::Same);
     }
-    let name = item_name(SystemTime::now(), machine, &random_hex()?);
+    let name = item_name(next_millis(SystemTime::now()), machine, &random_hex()?);
     write_item(client, dir, &name, text.as_bytes())?;
     // The new item is the newest: room for KEEP - 1 others.
     for old in kept.iter().skip(KEEP - 1) {
@@ -160,12 +161,25 @@ pub fn age(now: SystemTime, then: SystemTime) -> String {
     }
 }
 
-/// An item's file name.
-fn item_name(now: SystemTime, machine: &str, random: &str) -> String {
-    let millis = now
+/// The last millisecond [`next_millis`] gave.
+static LAST_MILLIS: Mutex<u64> = Mutex::new(0);
+
+/// `now` in milliseconds since the epoch, but always later than the last
+/// one given: items pushed in one second have the same file time on the
+/// host, so their names order them, and two pushes in one millisecond
+/// would otherwise be ordered by their random part.
+fn next_millis(now: SystemTime) -> u64 {
+    let now = now
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
+        .as_millis() as u64;
+    let mut last = LAST_MILLIS.lock().unwrap_or_else(PoisonError::into_inner);
+    *last = now.max(*last + 1);
+    *last
+}
+
+/// An item's file name.
+fn item_name(millis: u64, machine: &str, random: &str) -> String {
     format!("{millis:013}-{machine}-{random}{SUFFIX}")
 }
 
@@ -507,9 +521,19 @@ mod tests {
     }
 
     #[test]
+    fn names_never_repeat_a_millisecond() {
+        let now = SystemTime::now();
+        let first = next_millis(now);
+        let second = next_millis(now);
+        let third = next_millis(now - Duration::from_secs(60)); // the clock went back
+        let millis = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        assert!(first >= millis);
+        assert!(second > first && third > second, "{first} {second} {third}");
+    }
+
+    #[test]
     fn names_carry_the_machine() {
-        let now = UNIX_EPOCH + Duration::from_millis(1_763_738_412_345);
-        let name = item_name(now, "my-box", "0a1b2c3d");
+        let name = item_name(1_763_738_412_345, "my-box", "0a1b2c3d");
         assert_eq!(name, "1763738412345-my-box-0a1b2c3d.txt");
         assert_eq!(machine_of(name.as_bytes()), Some("my-box"));
         assert_eq!(machine_of(b"notes.txt"), None);
