@@ -31,6 +31,8 @@ pub struct SettingsView {
     file_manager: WeakEntity<FileManager>,
     editor: Entity<InputState>,
     terminal: Entity<InputState>,
+    /// The shared clipboard's ssh host.
+    shared: Entity<InputState>,
     days: Entity<InputState>,
     /// The Theme dropdown: the built-ins' display names.
     theme: Entity<Dropdown>,
@@ -43,6 +45,7 @@ pub struct SettingsView {
     /// the text it opened with can't undo a hand edit of the file.
     editor_edited: bool,
     terminal_edited: bool,
+    shared_edited: bool,
     days_edited: bool,
     /// Cancelled: nothing more is saved (a field's blur as the dialog
     /// closes would undo the revert).
@@ -71,6 +74,13 @@ impl SettingsView {
             let mut state = InputState::new(window, cx)
                 .placeholder("e.g. wezterm start --cwd {active_dir}")
                 .default_value(config.terminal.clone().unwrap_or_default());
+            state.set_disabled(disabled, cx);
+            state
+        });
+        let shared = cx.new(|cx| {
+            let mut state = InputState::new(window, cx)
+                .placeholder("an ssh host, e.g. myserver")
+                .default_value(config.shared_clipboard.clone().unwrap_or_default());
             state.set_disabled(disabled, cx);
             state
         });
@@ -120,6 +130,15 @@ impl SettingsView {
                 },
             ),
             cx.subscribe_in(
+                &shared,
+                window,
+                |this, _, event: &InputEvent, window, cx| match event {
+                    InputEvent::Change => this.shared_edited = true,
+                    InputEvent::Blur => this.commit_shared(window, cx),
+                    _ => {}
+                },
+            ),
+            cx.subscribe_in(
                 &days,
                 window,
                 |this, _, event: &InputEvent, window, cx| match event {
@@ -133,6 +152,7 @@ impl SettingsView {
             file_manager,
             editor,
             terminal,
+            shared,
             days,
             theme,
             days_error: None,
@@ -140,6 +160,7 @@ impl SettingsView {
             log_dir_copied: false,
             editor_edited: false,
             terminal_edited: false,
+            shared_edited: false,
             days_edited: false,
             cancelled: false,
             _subscriptions: subscriptions,
@@ -188,6 +209,7 @@ impl SettingsView {
             ("editor", self.editor.focus_handle(cx)),
             ("terminal", self.terminal.focus_handle(cx)),
             ("days", self.days.focus_handle(cx)),
+            ("shared", self.shared.focus_handle(cx)),
             ("theme", self.theme.focus_handle(cx)),
         ]
     }
@@ -200,6 +222,11 @@ impl SettingsView {
     #[cfg(test)]
     pub fn terminal_text(&self, cx: &App) -> String {
         self.terminal.read(cx).value().to_string()
+    }
+
+    #[cfg(test)]
+    pub fn shared_text(&self, cx: &App) -> String {
+        self.shared.read(cx).value().to_string()
     }
 
     #[cfg(test)]
@@ -232,6 +259,14 @@ impl SettingsView {
         self.change(Setting::terminal(&text), window, cx);
     }
 
+    fn commit_shared(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !std::mem::take(&mut self.shared_edited) {
+            return;
+        }
+        let text = self.shared.read(cx).value().to_string();
+        self.change(Setting::shared_clipboard(&text), window, cx);
+    }
+
     fn commit_days(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.days_edited {
             return;
@@ -259,7 +294,7 @@ impl SettingsView {
             .iter()
             .chain(&PANEL_SWITCHES)
             .find(|s| hotlist::label(s.1).letter == Some(letter));
-        if !(switch.is_some() || "terd".contains(letter)) {
+        if !(switch.is_some() || "terdh".contains(letter)) {
             return false;
         }
         if disabled {
@@ -270,6 +305,7 @@ impl SettingsView {
             ('t', _) => self.theme.update(cx, |d, cx| d.open(window, cx)),
             ('e', _) => select_field(&self.editor, window, cx),
             ('r', _) => select_field(&self.terminal, window, cx),
+            ('h', _) => select_field(&self.shared, window, cx),
             _ => select_field(&self.days, window, cx),
         }
         cx.notify();
@@ -281,6 +317,7 @@ impl SettingsView {
     fn commit(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.commit_editor(window, cx);
         self.commit_terminal(window, cx);
+        self.commit_shared(window, cx);
         self.commit_days(window, cx);
         self.days_error.is_none()
     }
@@ -296,7 +333,7 @@ type SwitchDef = (
 );
 
 /// The general column's switches, in order (Theme, Editor, Terminal and
-/// the days field take T, E, R and D).
+/// the days field take T, E, R and D; Shared clipboard H).
 const GENERAL_SWITCHES: [SwitchDef; 3] = [
     (
         "settings-sort",
@@ -504,7 +541,23 @@ impl Render for SettingsView {
             .gap(crate::zoom::rems_from_px(8.0))
             .child("Panels")
             .children(PANEL_SWITCHES.iter().map(switch))
-            .child(hint("Name and Size are always shown.".into()));
+            .child(hint("Name and Size are always shown.".into()))
+            .child(
+                div()
+                    .mt(crate::zoom::rems_from_px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(crate::zoom::rems_from_px(4.0))
+                    .child(marked_label("S&hared clipboard"))
+                    .child(
+                        div()
+                            .debug_selector(|| "settings-shared".into())
+                            .child(text_field(&self.shared)),
+                    )
+                    .child(hint(
+                        "Push with Ctrl-K Ctrl-C, pick with Ctrl-K Ctrl-V.".into(),
+                    )),
+            );
 
         column()
             // A dialog body clips at its bottom edge.

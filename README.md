@@ -32,6 +32,7 @@ Bug reports are welcome; feature requests might get a YAGNI.
 - A mounts dropdown per panel (Alt-F1, Alt-F2, or the folder button before the path): Root, USB drives and network mounts (and Home, if it is a filesystem of its own), without the system's own mounts.
 - Open with (Shift-Enter): pick the application for a file from the ones your desktop (or macOS) registers for its type.
 - Remote folders over SFTP (Ctrl-F): browse, copy and move between machines through your own `ssh` (see [Remote folders](#remote-folders-sftp)).
+- A shared clipboard between your machines, kept on an ssh host (see [Shared clipboard](#shared-clipboard)).
 - A viewer (F3) that opens multi-GB files instantly, with text (T), source code with syntax colors (S; 27 languages, files up to 4 MiB; L picks the language), hex (H), formatted Markdown (M) and image (I) modes.
 - Help > Check for updates (on macOS in the app menu) asks GitHub when you choose it and offers to install a newer release and restart. With the Settings switch "Check for updates" on (the default), it also asks at startup and every hour, and a button in the status bar makes the same offer.
 - Panels follow changes made by other programs.
@@ -82,6 +83,13 @@ Ctrl-F (or Commands > SFTP connect...) lists the hosts in your `~/.ssh/config`; 
 - Not on remote folders yet: Find files (Alt-F7), Properties, Open with, Compare, packing and extracting.
 
 **Editing (F4) works on a local copy.** The file is copied to a private folder on your machine and opened in your editor; every save is copied back to the host, after a check that nobody changed the file there in the meantime (if somebody did, you are asked first). That is fine for a config file or a quick fix. It is not a remote development setup: only the one file is edited, the copy lives on your machine, and the editor knows nothing about the host. For serious work on a remote machine, use an editor built for it, such as VS Code with its Remote - SSH extension (or Zed's remote development), which runs on the host and edits there directly.
+
+## Shared clipboard
+
+Text copied on one machine, picked on another, through a host you already reach with ssh. Set the host in Settings (Shared clipboard) or in `config.toml`: `shared_clipboard = "myserver"`, a name as you would type it after `ssh`. Ctrl-K Ctrl-C (Commands > Push to shared clipboard) sends the clipboard's text there; Ctrl-K Ctrl-V (Commands > Shared clipboard...) lists the items, newest first, and Enter copies one back to your clipboard (Del deletes it).
+
+- The items are files in `~/.local/share/yagni-commander/clipboard` on the host, readable only by your user there, which is also all the setup: every machine logging in as the same user shares them. The newest 50 are kept, up to 1 MiB each, text only.
+- They stay in plain text on the host until they are pushed out or deleted, so think twice before pushing a password to a host other people administer.
 
 ## Installing
 

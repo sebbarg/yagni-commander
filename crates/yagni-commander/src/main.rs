@@ -19,6 +19,7 @@ mod option_box;
 mod panel_view;
 mod rem_scope;
 mod settings_dialog;
+mod shared_clip_dialog;
 mod theme;
 mod viewer_view;
 mod windows;

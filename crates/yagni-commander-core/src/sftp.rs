@@ -536,6 +536,90 @@ impl Client {
             .collect())
     }
 
+    /// The first `len` bytes (fewer for a shorter file, or if the server
+    /// returns less) of each file in `paths`, with the requests in flight
+    /// at once: every open, then every read, then every close.
+    pub fn read_heads(
+        &mut self,
+        paths: &[Vec<u8>],
+        len: u32,
+    ) -> io::Result<Vec<io::Result<Vec<u8>>>> {
+        let handles = self.pipelined(
+            paths.len(),
+            |client, ix| {
+                client.send_request(FXP_OPEN, |p| {
+                    p.bytes(&paths[ix]);
+                    p.u32(OPEN_READ);
+                    p.u32(0); // no attributes
+                })
+            },
+            |reply| reply.expect(FXP_HANDLE).and_then(|mut body| body.bytes()),
+        )?;
+        let open: Vec<&Vec<u8>> = handles.iter().filter_map(|h| h.as_ref().ok()).collect();
+        let mut heads = self
+            .pipelined(
+                open.len(),
+                |client, ix| {
+                    client.send_request(FXP_READ, |p| {
+                        p.bytes(open[ix]);
+                        p.u64(0);
+                        p.u32(len);
+                    })
+                },
+                |reply| {
+                    if reply.is_eof() {
+                        return Ok(Vec::new());
+                    }
+                    reply.expect(FXP_DATA).and_then(|mut body| body.bytes())
+                },
+            )?
+            .into_iter();
+        // Closing can't change what was read.
+        self.pipelined(
+            open.len(),
+            |client, ix| client.send_request(FXP_CLOSE, |p| p.bytes(open[ix])),
+            |_| (),
+        )?;
+        Ok(handles
+            .into_iter()
+            .map(|handle| match handle {
+                Ok(_) => heads.next().expect("one read per open file"),
+                Err(e) => Err(e),
+            })
+            .collect())
+    }
+
+    /// Sends request `ix` for each `ix` below `count` with `send`, up to
+    /// [`IN_FLIGHT`] at once, and turns each reply into its result with
+    /// `parse`, in request order.
+    fn pipelined<T>(
+        &mut self,
+        count: usize,
+        mut send: impl FnMut(&mut Self, usize) -> io::Result<u32>,
+        mut parse: impl FnMut(Reply) -> T,
+    ) -> io::Result<Vec<T>> {
+        let mut results: Vec<Option<T>> = (0..count).map(|_| None).collect();
+        let mut pending = HashMap::new();
+        let mut next = 0;
+        while next < count || !pending.is_empty() {
+            while next < count && pending.len() < IN_FLIGHT {
+                let id = send(self, next)?;
+                pending.insert(id, next);
+                next += 1;
+            }
+            let (id, reply) = self.receive_reply()?;
+            let Some(ix) = pending.remove(&id) else {
+                self.broken = true;
+                return Err(protocol("the server answered a request it was never sent"));
+            };
+            results[ix] = Some(parse(reply));
+        }
+        Ok(results
+            .into_iter()
+            .map(|r| r.expect("every reply read"))
+            .collect())
+    }
+
     /// Whether `e` (from [`Client::open_write`] with `exclusive`) means
     /// the file exists: OpenSSH reports that as a plain failure.
     pub fn exists_error(&mut self, e: &io::Error, path: &[u8]) -> bool {
@@ -908,6 +992,29 @@ pub(crate) mod tests {
 
     fn bytes(path: &Path) -> &[u8] {
         path.as_os_str().as_bytes()
+    }
+
+    #[test]
+    fn reads_the_heads_of_many_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("a"), "hello world").unwrap();
+        std::fs::write(tmp.path().join("empty"), "").unwrap();
+        let paths: Vec<Vec<u8>> = ["a", "missing", "empty", "a"]
+            .iter()
+            .map(|n| bytes(&tmp.path().join(n)).to_vec())
+            .collect();
+        let mut client = local_client();
+        let heads = client.read_heads(&paths, 5).unwrap();
+        assert_eq!(heads[0].as_ref().unwrap(), b"hello");
+        assert_eq!(
+            heads[1].as_ref().unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(heads[2].as_ref().unwrap(), b"");
+        assert_eq!(heads[3].as_ref().unwrap(), b"hello");
+        assert!(client.read_heads(&[], 5).unwrap().is_empty());
+        // Every handle was closed: the session still works.
+        assert!(client.stat(&paths[0]).is_ok());
     }
 
     #[test]

@@ -3545,6 +3545,32 @@ fn typing_a_terminal_saves_it_and_emptying_it_removes_it(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn the_shared_clipboard_host_is_saved(cx: &mut TestAppContext) {
+    let (_tmp, _commander, cx) = open(cx);
+    let cfg = tempfile::tempdir().unwrap();
+    let path = use_config(cfg.path(), "", cx);
+    activate(cx);
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-h");
+    cx.simulate_input(" box ");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(!settings_open(cx));
+    assert_eq!(config(cx).shared_clipboard.as_deref(), Some("box"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.lines().any(|l| l == "shared_clipboard = \"box\""),
+        "{text}"
+    );
+    cx.simulate_keystrokes("ctrl-,");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-h backspace enter");
+    cx.run_until_parked();
+    assert_eq!(config(cx).shared_clipboard, None);
+}
+
+#[gpui_kit::test]
 fn keys_reach_the_panels_after_settings_close(cx: &mut TestAppContext) {
     let (_tmp, commander, cx) = open(cx);
     let cfg = tempfile::tempdir().unwrap();
@@ -3904,6 +3930,16 @@ mod menu_bar {
         // The items still run their actions.
         cx.simulate_keystrokes("down down down down down enter");
         assert_eq!(menu_open(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_commands_menu_shows_the_shared_clipboards_whole_chords(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        cx.simulate_keystrokes("alt-c");
+        assert_eq!(menu_open(cx), Some(2));
+        for keys in ["Ctrl+K Ctrl+C", "Ctrl+K Ctrl+V"] {
+            assert!(bounds(cx, format!("menu-key-{keys}")).is_some(), "{keys}");
+        }
     }
 
     #[gpui_kit::test]
@@ -4305,6 +4341,10 @@ mod mounts {
         cx.simulate_keystrokes("alt-r");
         cx.simulate_input("foot");
         assert_eq!(view.read_with(cx, |v, cx| v.terminal_text(cx)), "foot");
+        // Alt-H: Shared clipboard.
+        cx.simulate_keystrokes("alt-h");
+        cx.simulate_input("box");
+        assert_eq!(view.read_with(cx, |v, cx| v.shared_text(cx)), "box");
         cx.simulate_keystrokes("alt-t");
         cx.run_until_parked();
         assert!(view.read_with(cx, |v, cx| v.theme_open(cx)));
@@ -8536,7 +8576,7 @@ mod themes {
         assert!(dialog_open(cx), "the prompt stays");
     }
 
-    fn open_viewer(cx: &mut VisualTestContext) -> VisualTestContext {
+    pub(super) fn open_viewer(cx: &mut VisualTestContext) -> VisualTestContext {
         cx.simulate_keystrokes("end f3"); // "f"
         cx.run_until_parked();
         let window = cx
@@ -10244,6 +10284,7 @@ pub(crate) mod tab_order {
             "DialogKeys",
             "DialogKeys",
             "DialogKeys",
+            "shared",
             "button:Cancel",
         ];
         assert_order(cx, "tab", &order, &named);
@@ -11288,5 +11329,327 @@ mod clipboard_files {
         cx.run_until_parked();
         assert!(box_text(cx).starts_with("In search results\n"));
         assert!(!job_running(cx));
+    }
+}
+
+mod shared_clipboard {
+    use super::*;
+    use std::os::unix::ffi::OsStrExt;
+
+    /// The main window with `shared_clipboard = "test-host"`, the items in
+    /// `clip` inside a temporary folder (not made yet), from machine
+    /// `testbox`. Returns that folder.
+    fn with_host(
+        cx: &mut TestAppContext,
+    ) -> (
+        tempfile::TempDir,
+        std::path::PathBuf,
+        tempfile::TempDir,
+        &mut VisualTestContext,
+    ) {
+        super::remote_folders::use_local_server();
+        let (tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "shared_clipboard = \"test-host\"\n", cx);
+        activate(cx);
+        let dir = tmp.path().join("clip");
+        let bytes = dir.as_os_str().as_bytes().to_vec();
+        file_manager(cx).update(cx, |this, _| {
+            this.shared.dir = Some(bytes);
+            this.shared.machine = Some("testbox".into());
+        });
+        (tmp, dir, cfg, cx)
+    }
+
+    fn items(dir: &std::path::Path) -> Vec<String> {
+        let Ok(read) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = read
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        names.sort();
+        names
+    }
+
+    fn status(cx: &mut VisualTestContext) -> Option<String> {
+        file_manager(cx).read_with(cx, |this, _| this.shared.status.clone().map(Into::into))
+    }
+
+    /// The dialog's rows, `None` while it is closed.
+    fn rows(cx: &mut VisualTestContext) -> Option<usize> {
+        let open = dialog_open(cx);
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.shared
+                .dialog
+                .as_ref()
+                .filter(|_| open)
+                .map(|list| list.read(cx).len())
+        })
+    }
+
+    fn highlight(cx: &mut VisualTestContext) -> usize {
+        file_manager(cx).read_with(cx, |this, cx| {
+            this.shared.dialog.as_ref().unwrap().read(cx).highlight()
+        })
+    }
+
+    fn list_dialog(cx: &mut VisualTestContext) {
+        cx.simulate_keystrokes("ctrl-k ctrl-v");
+        wait_until(cx, |cx| rows(cx).is_some());
+    }
+
+    fn push(text: &str, count: usize, dir: &std::path::Path, cx: &mut VisualTestContext) {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.into()));
+        cx.simulate_keystrokes("ctrl-k ctrl-c");
+        wait_until(cx, |_| items(dir).len() == count);
+        wait_until(cx, |cx| status(cx).is_some());
+    }
+
+    #[gpui_kit::test]
+    fn without_a_host_both_keys_say_where_to_set_it(cx: &mut TestAppContext) {
+        let (_tmp, _commander, cx) = open(cx);
+        let cfg = tempfile::tempdir().unwrap();
+        use_config(cfg.path(), "", cx);
+        activate(cx);
+        for keys in ["ctrl-k ctrl-c", "ctrl-k ctrl-v"] {
+            cx.simulate_keystrokes(keys);
+            cx.run_until_parked();
+            assert!(dialog_open(cx), "{keys}");
+            let text = box_text(cx);
+            assert!(
+                text.contains("Set a host for the shared clipboard in Settings."),
+                "{text}"
+            );
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            assert!(!dialog_open(cx));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn pushing_without_text_says_so(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        cx.simulate_keystrokes("ctrl-k ctrl-c");
+        cx.run_until_parked();
+        assert!(dialog_open(cx));
+        assert!(box_text(cx).contains("The clipboard holds no text."));
+        assert!(items(&dir).is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn a_pushed_text_is_listed_and_picked_back(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        push("hello world", 1, &dir, cx);
+        assert_eq!(status(cx).as_deref(), Some("Pushed to test-host"));
+        assert!(cx.debug_bounds("status-shared").is_some());
+        assert!(items(&dir)[0].contains("-testbox-"), "{:?}", items(&dir));
+        // The next command clears the word.
+        cx.simulate_keystrokes("down");
+        assert_eq!(status(cx), None);
+
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("other".into()));
+        list_dialog(cx);
+        assert_eq!(rows(cx), Some(1));
+        assert!(cx.debug_bounds("shared-row-0").is_some());
+        // A dialog, centered in the window, not tied to a panel.
+        let list = cx.debug_bounds("shared-list").unwrap();
+        let window = cx.update(|window, _| window.viewport_size());
+        let middle = list.center().x;
+        assert!(
+            (middle - window.width / 2.0).abs() < gpui_kit::px(2.0),
+            "{list:?} in {window:?}"
+        );
+        // Enter in the list copies.
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), None);
+        wait_until(cx, |cx| {
+            clipboard_text(cx).as_deref() == Some("hello world")
+        });
+        assert_eq!(status(cx).as_deref(), Some("Copied from test-host"));
+        let fm = file_manager(cx);
+        let focused = cx.update(|window, cx| fm.read(cx).focus.is_focused(window));
+        assert!(focused, "focus is back on the panels");
+    }
+
+    #[gpui_kit::test]
+    fn the_copy_button_and_a_double_click_copy_too(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        push("one", 1, &dir, cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("other".into()));
+        list_dialog(cx);
+        click(cx, "button-Copy", 1);
+        wait_until(cx, |cx| clipboard_text(cx).as_deref() == Some("one"));
+        assert_eq!(rows(cx), None);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("other".into()));
+        list_dialog(cx);
+        click(cx, "shared-row-0", 2);
+        wait_until(cx, |cx| clipboard_text(cx).as_deref() == Some("one"));
+        assert_eq!(rows(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_newest_comes_first_and_del_removes(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        push("first", 1, &dir, cx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        push("second", 2, &dir, cx);
+        list_dialog(cx);
+        assert_eq!(rows(cx), Some(2));
+        cx.simulate_keystrokes("down");
+        assert_eq!(highlight(cx), 1);
+        cx.simulate_keystrokes("down");
+        assert_eq!(highlight(cx), 0, "wraps");
+        cx.simulate_keystrokes("end");
+        assert_eq!(highlight(cx), 1);
+        cx.simulate_keystrokes("home");
+        assert_eq!(highlight(cx), 0);
+        // Del on the newest, "second": "first" stays.
+        let newest = items(&dir)[1].clone();
+        cx.simulate_keystrokes("delete");
+        assert_eq!(rows(cx), Some(1));
+        wait_until(cx, |_| items(&dir).len() == 1);
+        assert!(!items(&dir).contains(&newest));
+        // Alt-D, the Delete button, on the last one: the dialog stays,
+        // empty, with Copy and Delete off.
+        cx.simulate_keystrokes("alt-d");
+        wait_until(cx, |_| items(&dir).is_empty());
+        assert_eq!(rows(cx), Some(0));
+        assert!(cx.debug_bounds("shared-empty").is_some());
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), Some(0), "Enter copies nothing");
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), None);
+    }
+
+    fn progress(cx: &mut VisualTestContext) -> Option<String> {
+        file_manager(cx).read_with(cx, |this, _| this.shared.progress.clone().map(Into::into))
+    }
+
+    #[gpui_kit::test]
+    fn the_status_line_says_what_runs_on_the_host(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        // Each step shows its word at once (the host answers later, on the
+        // test clock's polls), kept through other commands.
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
+        cx.simulate_keystrokes("ctrl-k ctrl-c");
+        assert_eq!(progress(cx).as_deref(), Some("Pushing to test-host..."));
+        cx.simulate_keystrokes("down");
+        assert_eq!(progress(cx).as_deref(), Some("Pushing to test-host..."));
+        assert!(cx.debug_bounds("status-shared").is_some());
+        wait_until(cx, |cx| status(cx).is_some());
+        assert_eq!(progress(cx), None);
+        assert_eq!(status(cx).as_deref(), Some("Pushed to test-host"));
+        assert_eq!(items(&dir).len(), 1);
+
+        cx.simulate_keystrokes("ctrl-k ctrl-v");
+        assert_eq!(
+            progress(cx).as_deref(),
+            Some("Reading the shared clipboard on test-host...")
+        );
+        wait_until(cx, |cx| rows(cx).is_some());
+        assert_eq!(progress(cx), None);
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(progress(cx).as_deref(), Some("Copying from test-host..."));
+        wait_until(cx, |cx| {
+            status(cx).as_deref() == Some("Copied from test-host")
+        });
+        assert_eq!(progress(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_step_takes_its_word_away(cx: &mut TestAppContext) {
+        let (_tmp, _dir, cfg, cx) = with_host(cx);
+        use_config(cfg.path(), "shared_clipboard = \"nowhere\"\n", cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
+        cx.simulate_keystrokes("ctrl-k ctrl-c");
+        assert_eq!(progress(cx).as_deref(), Some("Pushing to nowhere..."));
+        wait_until(cx, dialog_open);
+        assert_eq!(progress(cx), None);
+        assert_eq!(status(cx), None);
+    }
+
+    #[gpui_kit::test]
+    fn the_words_come_before_waiting_files(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        cx.simulate_keystrokes("end ctrl-c"); // files wait for Ctrl-V
+        assert!(cx.debug_bounds("status-clipboard").is_some());
+        cx.simulate_keystrokes("ctrl-k ctrl-c");
+        assert!(cx.debug_bounds("status-shared").is_some());
+        wait_until(cx, |_| items(&dir).len() == 1);
+        wait_until(cx, |cx| status(cx).is_some());
+        assert!(cx.debug_bounds("status-shared").is_some());
+    }
+
+    #[gpui_kit::test]
+    fn an_empty_clipboard_says_so(cx: &mut TestAppContext) {
+        let (_tmp, _dir, _cfg, cx) = with_host(cx);
+        cx.simulate_keystrokes("ctrl-k ctrl-v");
+        wait_until(cx, dialog_open);
+        assert!(box_text(cx).contains("The shared clipboard is empty"));
+    }
+
+    #[gpui_kit::test]
+    fn the_dialog_tabs_from_the_list_to_the_buttons(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        push("x", 1, &dir, cx);
+        list_dialog(cx);
+        let named = file_manager(cx).read_with(cx, |this, cx| {
+            vec![(
+                "list",
+                this.shared.dialog.as_ref().unwrap().focus_handle(cx),
+            )]
+        });
+        use super::tab_order::{assert_focus, assert_order};
+        assert_focus(cx, "list", &named);
+        let order = ["button:Delete", "button:Close", "button:Copy", "list"];
+        assert_order(cx, "tab", &order, &named);
+        let back = ["button:Copy", "button:Close", "button:Delete", "list"];
+        assert_order(cx, "shift-tab", &back, &named);
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        assert_eq!(rows(cx), None);
+        let fm = file_manager(cx);
+        let focused = cx.update(|window, cx| fm.read(cx).focus.is_focused(window));
+        assert!(focused, "focus is back on the panels");
+    }
+
+    #[gpui_kit::test]
+    fn ctrl_k_ctrl_c_pushes_from_a_viewer_and_errors_show_there(cx: &mut TestAppContext) {
+        let (_tmp, dir, cfg, cx) = with_host(cx);
+        let mut viewer_cx = super::themes::open_viewer(cx);
+        viewer_cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("from F3".into()));
+        viewer_cx.simulate_keystrokes("ctrl-k ctrl-c");
+        wait_until(cx, |_| items(&dir).len() == 1);
+        wait_until(cx, |cx| status(cx).is_some());
+        // Without a host: the box opens in the viewer, not behind it.
+        use_config(cfg.path(), "", cx);
+        viewer_cx.simulate_keystrokes("ctrl-k ctrl-c");
+        viewer_cx.run_until_parked();
+        assert!(!dialog_open(cx));
+        let in_viewer = viewer_cx.update(|window, cx| {
+            use gpui_kit::component::WindowExt;
+            window.has_active_dialog(cx)
+        });
+        assert!(in_viewer);
+    }
+
+    #[gpui_kit::test]
+    fn an_unreachable_host_shows_sshs_words(cx: &mut TestAppContext) {
+        let (_tmp, _dir, cfg, cx) = with_host(cx);
+        use_config(cfg.path(), "shared_clipboard = \"nowhere\"\n", cx);
+        cx.simulate_keystrokes("ctrl-k ctrl-v");
+        wait_until(cx, dialog_open);
+        let text = box_text(cx);
+        assert!(
+            text.contains("Could not resolve hostname nowhere"),
+            "{text}"
+        );
     }
 }

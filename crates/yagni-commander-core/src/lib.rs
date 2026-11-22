@@ -29,6 +29,7 @@ mod quick_search;
 pub mod remote;
 pub mod select;
 pub mod sftp;
+pub mod shared_clip;
 pub mod shell_path;
 mod sort;
 pub mod ssh_config;

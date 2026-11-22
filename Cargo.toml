@@ -63,7 +63,7 @@ toml = "1"
 toml_edit = "0.25"
 # Already in the tree via gpui-component: same version, no new crate.
 notify = "8.2"
-nix = { version = "0.32", default-features = false, features = ["user", "fs", "dir", "signal"] }
+nix = { version = "0.32", default-features = false, features = ["user", "fs", "dir", "signal", "hostname"] }
 trash = "5"
 unicode-width = "0.2"
 # Alt-F7 text search. Already in the tree: same version, no new crate.

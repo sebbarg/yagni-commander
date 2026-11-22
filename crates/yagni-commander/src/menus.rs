@@ -16,10 +16,11 @@ use crate::actions::{
     CopyName, CopyParentPath, CountFolderSizes, CutFiles, Delete, DeselectAll, DeselectGroup,
     DeselectSameExtension, DirectoryHotlist, Edit, EditNewFile, Extract, FindFiles, FolderHistory,
     Forward, GoToConfig, GoToLog, InvertSelection, MakeDirectory, MountsLeft, MountsRight, Move,
-    NewTab, NextTab, OpenSettings, OpenTerminal, OpenWith, Pack, PasteFiles, PrevTab, Quit, Reload,
-    Rename, SelectAll, SelectGroup, SelectSameExtension, ShowProperties, SortByModified,
-    SortByName, SortByOwner, SortByPermissions, SortBySize, SwapPanels, SyncOtherPanel,
-    ToggleHidden, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    NewTab, NextTab, OpenSettings, OpenTerminal, OpenWith, Pack, PasteFiles, PrevTab,
+    PushSharedClipboard, Quit, Reload, Rename, SelectAll, SelectGroup, SelectSameExtension,
+    SharedClipboard, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
+    SortBySize, SwapPanels, SyncOtherPanel, ToggleHidden, Trash, UserCommands, View, ZoomIn,
+    ZoomOut, ZoomReset,
 };
 
 pub enum MenuEntry {
@@ -96,6 +97,13 @@ fn item(label: &'static str, action: impl Action) -> MenuEntry {
         checked: None,
         keys: None,
     }
+}
+
+/// An item on a key sequence, shown whole: gpui-component's menu shows only
+/// a binding's first keystroke (`Kbd::binding_for_action_in`), so Ctrl-K
+/// Ctrl-C read "Ctrl+K". The native macOS menu skips sequences.
+fn chord(label: &'static str, action: impl Action, keys: &'static str) -> MenuEntry {
+    keypad(label, action, keys)
 }
 
 /// An item on a keypad key, shown as TC writes it (`Num +`).
@@ -249,6 +257,12 @@ pub fn menus(state: MenuState, mac: bool) -> Vec<MenuDef> {
                 item("Count folder sizes", CountFolderSizes),
                 item("Open terminal here", OpenTerminal),
                 item("User commands", UserCommands),
+                chord(
+                    "Push to shared clipboard",
+                    PushSharedClipboard,
+                    "Ctrl+K Ctrl+C",
+                ),
+                chord("Shared clipboard...", SharedClipboard, "Ctrl+K Ctrl+V"),
                 MenuEntry::Separator,
                 item("New tab", NewTab),
                 item("Close tab", CloseTab),
@@ -466,6 +480,8 @@ mod tests {
                 "Count folder sizes",
                 "Open terminal here",
                 "User commands",
+                "Push to shared clipboard",
+                "Shared clipboard...",
                 "-",
                 "New tab",
                 "Close tab",

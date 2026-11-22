@@ -116,6 +116,11 @@ actions!(
         /// Ctrl-K Ctrl-T, in every window: the next built-in theme, saved like
         /// Settings' Theme. In no menu.
         CycleTheme,
+        /// Ctrl-K Ctrl-C, in every window: the system clipboard's text to the
+        /// shared clipboard's host.
+        PushSharedClipboard,
+        /// Ctrl-K Ctrl-V: the shared clipboard's items.
+        SharedClipboard,
         DirectoryHotlist,
         /// Ctrl-S: the user commands popup.
         UserCommands,
@@ -185,6 +190,17 @@ pub const LANGUAGE_CONTEXT: &str = "Language";
 /// Language popup actions.
 pub mod language {
     gpui_kit::actions!(language, [Up, Down, Pick, Close]);
+}
+
+/// Key context of the shared clipboard dialog's list (Ctrl-K Ctrl-V).
+pub const SHARED_CLIP_CONTEXT: &str = "SharedClip";
+
+/// Shared clipboard list actions.
+pub mod shared_clip {
+    gpui_kit::actions!(
+        shared_clip,
+        [Up, Down, First, Last, PageUp, PageDown, Remove]
+    );
 }
 
 /// Key context of the Open with popup (Shift-Enter).
@@ -508,7 +524,19 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
     bind(
         cx,
         mac,
-        [KeyBinding::new("ctrl-k ctrl-t", CycleTheme, None)],
+        [
+            KeyBinding::new("ctrl-k ctrl-t", CycleTheme, None),
+            KeyBinding::new("ctrl-k ctrl-c", PushSharedClipboard, None),
+        ],
+    );
+    bind(
+        cx,
+        mac,
+        [KeyBinding::new(
+            "ctrl-k ctrl-v",
+            SharedClipboard,
+            Some(FILE_MANAGER_CONTEXT),
+        )],
     );
     // The in-window menu bar (Linux; macOS has the native one). "alt" alone
     // is gpui's modifier-only binding: Alt pressed and released with no
@@ -612,6 +640,20 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("down", mounts::Down, popup),
             KeyBinding::new("enter", mounts::Pick, popup),
             KeyBinding::new("escape", mounts::Close, popup),
+        ],
+    );
+    let popup = Some(SHARED_CLIP_CONTEXT);
+    bind(
+        cx,
+        mac,
+        [
+            KeyBinding::new("up", shared_clip::Up, popup),
+            KeyBinding::new("down", shared_clip::Down, popup),
+            KeyBinding::new("home", shared_clip::First, popup),
+            KeyBinding::new("end", shared_clip::Last, popup),
+            KeyBinding::new("pageup", shared_clip::PageUp, popup),
+            KeyBinding::new("pagedown", shared_clip::PageDown, popup),
+            KeyBinding::new("delete", shared_clip::Remove, popup),
         ],
     );
     let popup = Some(OPEN_WITH_CONTEXT);

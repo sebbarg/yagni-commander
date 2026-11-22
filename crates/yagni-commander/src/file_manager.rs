@@ -27,6 +27,7 @@ mod properties;
 pub(crate) mod remote_edit;
 mod select;
 pub(crate) mod self_update;
+mod shared_clip;
 mod sizes;
 mod watch;
 
@@ -37,11 +38,12 @@ use crate::actions::{
     DeselectSameExtension, DirectoryHotlist, Edit, EditNewFile, Extract, FILE_MANAGER_CONTEXT,
     FindFiles, FolderHistory, Forward, GoToConfig, GoToLog, GoUp, InvertSelection, MakeDirectory,
     MenuAlt, MountsLeft, MountsRight, Move, NewTab, NextTab, OpenMenu, OpenSettings, OpenTerminal,
-    OpenWith, Pack, PageDown, PageUp, PasteFiles, PrevTab, Reload, Rename, SelectAll, SelectDown,
-    SelectEnd, SelectGroup, SelectHome, SelectPageDown, SelectPageUp, SelectSameExtension,
-    SelectUp, ShowProperties, SortByModified, SortByName, SortByOwner, SortByPermissions,
-    SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel, ToggleAndDown, ToggleHidden, ToggleMenu,
-    ToggleSelection, Trash, UserCommands, View, ZoomIn, ZoomOut, ZoomReset,
+    OpenWith, Pack, PageDown, PageUp, PasteFiles, PrevTab, PushSharedClipboard, Reload, Rename,
+    SelectAll, SelectDown, SelectEnd, SelectGroup, SelectHome, SelectPageDown, SelectPageUp,
+    SelectSameExtension, SelectUp, SharedClipboard, ShowProperties, SortByModified, SortByName,
+    SortByOwner, SortByPermissions, SortBySize, SwapPanels, SwitchPanel, SyncOtherPanel,
+    ToggleAndDown, ToggleHidden, ToggleMenu, ToggleSelection, Trash, UserCommands, View, ZoomIn,
+    ZoomOut, ZoomReset,
 };
 use crate::app_state::AppState;
 use crate::config_state::CurrentConfig;
@@ -189,6 +191,9 @@ pub struct FileManager {
     pub(crate) places: Option<Vec<yagni_commander_core::mounts::Place>>,
     /// The open Open with popup (Shift-Enter).
     pub(crate) open_with: Option<open_with::OpenApps>,
+    /// The shared clipboard: its open list, its last word for the status
+    /// line, and what app tests replace.
+    pub(crate) shared: shared_clip::SharedClip,
     /// Finds the applications in place of the system's lookup (app tests).
     pub(crate) apps_lookup: Option<open_with::Lookup>,
     /// Id of the last Open with lookup; an older one's result is dropped.
@@ -249,6 +254,20 @@ impl FileManager {
                         });
                     });
                 }
+            }
+        });
+        // Ctrl-K Ctrl-C, from any window: errors show where it was pressed.
+        App::on_action(cx, {
+            let this = this.clone();
+            move |_: &PushSharedClipboard, cx: &mut App| {
+                let Some(view) = this.upgrade() else { return };
+                let target = cx.active_window();
+                // Deferred: the window is still dispatching the keys.
+                cx.defer(move |cx| {
+                    let _ = main.update(cx, |_, window, cx| {
+                        view.update(cx, |this, cx| this.push_shared(target, window, cx))
+                    });
+                });
             }
         });
         let mut subscriptions = vec![
@@ -371,6 +390,7 @@ impl FileManager {
             next_sizes: 0,
             places: None,
             open_with: None,
+            shared: Default::default(),
             apps_lookup: None,
             next_lookup: 0,
             hotlist_dialog: None,
@@ -880,6 +900,7 @@ impl FileManager {
 
     fn execute(&mut self, command: Command, cx: &mut Context<Self>) {
         self.notice = None;
+        self.shared.status = None;
         execute(&self.commander, command, cx);
     }
 
@@ -1052,6 +1073,15 @@ impl Render for FileManager {
         let info = self
             .sizes_text()
             .map(|text| ("status-sizes", text))
+            // The shared clipboard's words are newer than waiting files,
+            // and gone after the next command.
+            .or_else(|| {
+                self.shared
+                    .progress
+                    .clone()
+                    .or_else(|| self.shared.status.clone())
+                    .map(|text| ("status-shared", text))
+            })
             .or_else(|| {
                 self.clipboard_status()
                     .map(|text| ("status-clipboard", text))
@@ -1211,6 +1241,9 @@ impl Render for FileManager {
             .on_action(cx.listener(|this, _: &CopyParentPath, _, cx| this.copy_parent_path(cx)))
             .on_action(cx.listener(|this, _: &View, window, cx| this.view_file(window, cx)))
             .on_action(cx.listener(|this, _: &OpenWith, window, cx| this.open_with(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &SharedClipboard, window, cx| this.open_shared(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Pack, window, cx| this.pack(window, cx)))
             .on_action(cx.listener(|this, _: &Extract, window, cx| this.extract(window, cx)))
             .on_action(

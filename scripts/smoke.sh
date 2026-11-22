@@ -50,7 +50,7 @@ printf '#!/bin/sh\necho "$1" >>"%s/edited"\n' "$work" >"$work/bin/fake-editor"
 chmod +x "$work/bin/fake-editor"
 printf '#!/bin/sh\necho "$1" >"%s/user-command"\n' "$work" >"$work/bin/smoke-command"
 chmod +x "$work/bin/smoke-command"
-printf '# smoke config\neditor = "fake-editor"\nlog = true\ncheck_updates = false\n\n[[commands]]\nname = "&Smoke"\ncommand = "smoke-command {active_path}"\n' >"$work/config/yagni-commander/config.toml"
+printf '# smoke config\neditor = "fake-editor"\nlog = true\ncheck_updates = false\nshared_clipboard = "smokehost"\n\n[[commands]]\nname = "&Smoke"\ncommand = "smoke-command {active_path}"\n' >"$work/config/yagni-commander/config.toml"
 # Two applications for text files (Shift-Enter), found through the
 # temporary XDG folders; the first is the default. Each records its file.
 mkdir -p "$work/data/applications"
@@ -1006,6 +1006,19 @@ shot 13d-remote-terminal
 keys Return
 check "Ctrl-Shift-T copied the ssh command" clipboard "ssh -t smokehost 'cd $remote; exec \"\$SHELL\" -l'"
 check "and started the terminal in home" has "$work/terminal-ran-in" "$HOME"
+
+echo "shared clipboard: Ctrl-K Ctrl-C pushes the text, Ctrl-K Ctrl-V lists and copies it back"
+clip=$remote/.local/share/yagni-commander/clipboard
+printf 'shared smoke text' | xclip -selection clipboard
+keys ctrl+k ctrl+c
+check "Ctrl-K Ctrl-C pushed an item to the host" bash -c "compgen -G '$clip/*.txt'"
+check "the item holds the text" bash -c "cat '$clip'/*.txt | grep -qx 'shared smoke text'"
+check "the folder is private" bash -c "[[ \$(stat -c %a '$clip') == 700 ]]"
+printf 'something else' | xclip -selection clipboard
+keys ctrl+k ctrl+v
+shot 13e-shared-clipboard
+keys Return
+check "Ctrl-K Ctrl-V copied it back" clipboard "shared smoke text"
 # Closing it brings its right neighbor (docs) to the front; back one.
 keys ctrl+w ctrl+shift+Tab
 check "the local tab it was opened from, in front again" title_is "$left"

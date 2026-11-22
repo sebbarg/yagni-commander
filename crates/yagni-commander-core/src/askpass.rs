@@ -293,7 +293,7 @@ pub fn run_helper() -> Option<i32> {
 }
 
 /// 128 random bits as hex.
-fn random_token() -> io::Result<String> {
+pub(crate) fn random_token() -> io::Result<String> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())

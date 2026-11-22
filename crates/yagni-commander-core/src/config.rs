@@ -23,6 +23,9 @@ pub struct Config {
     /// Command that Ctrl-Shift-T runs instead of the default terminal, with
     /// `{active_dir}` for the folder (see [`crate::terminal`]).
     pub terminal: Option<String>,
+    /// The ssh host of the shared clipboard (see [`crate::shared_clip`]);
+    /// none turns it off.
+    pub shared_clipboard: Option<String>,
     /// Sort names case-sensitively (uppercase before lowercase).
     pub case_sensitive_sort: bool,
     /// Log every file the app creates, copies, moves, renames, trashes or
@@ -60,6 +63,7 @@ impl Default for Config {
         Self {
             editor: None,
             terminal: None,
+            shared_clipboard: None,
             case_sensitive_sort: false,
             log: false,
             log_keep_days: 7,
@@ -87,6 +91,10 @@ const TEMPLATE: &str = r#"# yagni-commander settings
 # It starts in the panel's folder; {active_dir} is that folder, for
 # terminals that need it as an argument.
 # terminal = "wezterm start --cwd {active_dir}"
+
+# The ssh host of the shared clipboard: Ctrl-K Ctrl-C pushes the clipboard's
+# text there, Ctrl-K Ctrl-V lists the items and copies one back.
+# shared_clipboard = "myserver"
 
 # Sort names case-sensitively (uppercase before lowercase).
 case_sensitive_sort = false
@@ -157,6 +165,7 @@ fn unknown_keys(text: &str) -> Vec<String> {
     let filled = Config {
         editor: Some(String::new()),
         terminal: Some(String::new()),
+        shared_clipboard: Some(String::new()),
         theme: Some(String::new()),
         ..Config::default()
     };
@@ -178,6 +187,7 @@ fn unknown_keys(text: &str) -> Vec<String> {
 pub enum Setting {
     Editor(Option<String>),
     Terminal(Option<String>),
+    SharedClipboard(Option<String>),
     CaseSensitiveSort(bool),
     Log(bool),
     LogKeepDays(u32),
@@ -202,6 +212,12 @@ impl Setting {
         let text = text.trim();
         Self::Terminal((!text.is_empty()).then(|| text.to_owned()))
     }
+
+    /// The shared clipboard's host as typed, like [`Setting::editor`].
+    pub fn shared_clipboard(text: &str) -> Self {
+        let text = text.trim();
+        Self::SharedClipboard((!text.is_empty()).then(|| text.to_owned()))
+    }
 }
 
 /// Allowed values of `log_keep_days`.
@@ -221,6 +237,7 @@ impl Config {
         match setting {
             Setting::Editor(editor) => self.editor = editor.clone(),
             Setting::Terminal(terminal) => self.terminal = terminal.clone(),
+            Setting::SharedClipboard(host) => self.shared_clipboard = host.clone(),
             Setting::CaseSensitiveSort(on) => self.case_sensitive_sort = *on,
             Setting::Log(on) => self.log = *on,
             Setting::LogKeepDays(days) => self.log_keep_days = *days,
@@ -270,6 +287,10 @@ pub fn save_setting(path: &Path, setting: &Setting) -> Result<Config, StorageErr
         Setting::Editor(Some(editor)) => doc["editor"] = toml_edit::value(editor.as_str()),
         Setting::Terminal(None) => remove_keeping_comments(&mut doc, "terminal"),
         Setting::Terminal(Some(command)) => doc["terminal"] = toml_edit::value(command.as_str()),
+        Setting::SharedClipboard(None) => remove_keeping_comments(&mut doc, "shared_clipboard"),
+        Setting::SharedClipboard(Some(host)) => {
+            doc["shared_clipboard"] = toml_edit::value(host.as_str())
+        }
         Setting::CaseSensitiveSort(on) => doc["case_sensitive_sort"] = toml_edit::value(*on),
         Setting::Log(on) => doc["log"] = toml_edit::value(*on),
         Setting::LogKeepDays(days) => doc["log_keep_days"] = toml_edit::value(i64::from(*days)),
@@ -627,7 +648,7 @@ mod tests {
 
     #[test]
     fn every_known_key_and_the_template_count_as_known() {
-        let text = "editor = \"e\"\nterminal = \"t\"\ncase_sensitive_sort = true\nlog = true\nlog_keep_days = 1\nshow_modified = true\nshow_owner = true\nshow_permissions = true\nicons = true\ngit = true\ncheck_updates = true\ntheme = \"t\"\n[[hotlist]]\npath = \"/x\"\n[[commands]]\ncommand = \"c\"\n";
+        let text = "editor = \"e\"\nterminal = \"t\"\nshared_clipboard = \"s\"\ncase_sensitive_sort = true\nlog = true\nlog_keep_days = 1\nshow_modified = true\nshow_owner = true\nshow_permissions = true\nicons = true\ngit = true\ncheck_updates = true\ntheme = \"t\"\n[[hotlist]]\npath = \"/x\"\n[[commands]]\ncommand = \"c\"\n";
         assert_eq!(unknown_keys(text), Vec::<String>::new());
         assert_eq!(unknown_keys(TEMPLATE), Vec::<String>::new());
     }
@@ -663,6 +684,7 @@ mod tests {
         let config = Config {
             editor: Some("zed".into()),
             terminal: Some("wezterm start --cwd {active_dir}".into()),
+            shared_clipboard: Some("box".into()),
             case_sensitive_sort: true,
             log: true,
             log_keep_days: 30,
@@ -736,6 +758,31 @@ case_sensitive_sort = false
             text.starts_with("# my settings\n\n# the editor\n"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_shared_clipboard_is_saved_and_emptied() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        Config::load_or_create(&path).unwrap();
+        let config = save_setting(&path, &Setting::shared_clipboard(" box ")).unwrap();
+        assert_eq!(config.shared_clipboard.as_deref(), Some("box"));
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.lines().any(|l| l == "shared_clipboard = \"box\""),
+            "{text}"
+        );
+        let config = save_setting(&path, &Setting::shared_clipboard("")).unwrap();
+        assert_eq!(config.shared_clipboard, None);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            !text.lines().any(|l| l.starts_with("shared_clipboard")),
+            "{text}"
+        );
+        assert!(text.contains("# shared_clipboard = \"myserver\""), "{text}");
+        let mut config = Config::default();
+        config.set(&Setting::shared_clipboard("web"));
+        assert_eq!(config.shared_clipboard.as_deref(), Some("web"));
     }
 
     #[test]
