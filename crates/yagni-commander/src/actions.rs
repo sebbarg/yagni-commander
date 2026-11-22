@@ -199,7 +199,7 @@ pub const SHARED_CLIP_CONTEXT: &str = "SharedClip";
 pub mod shared_clip {
     gpui_kit::actions!(
         shared_clip,
-        [Up, Down, First, Last, PageUp, PageDown, Remove]
+        [Up, Down, First, Last, PageUp, PageDown, Remove, View]
     );
 }
 
@@ -654,6 +654,7 @@ pub fn bind_keys_for(cx: &mut App, mac: bool) {
             KeyBinding::new("pageup", shared_clip::PageUp, popup),
             KeyBinding::new("pagedown", shared_clip::PageDown, popup),
             KeyBinding::new("delete", shared_clip::Remove, popup),
+            KeyBinding::new("f3", shared_clip::View, popup),
         ],
     );
     let popup = Some(OPEN_WITH_CONTEXT);

@@ -3,9 +3,11 @@
 //! `remote::with_session`, so the connection, its questions and the shared
 //! session are those of remote folders; the result comes back over a std
 //! channel polled every `OPENER_POLL`, like Open with's lookup. The items
-//! show in a dialog: the list ([`SharedClipList`]) and Delete, Close, Copy.
+//! show in a dialog: the list ([`SharedClipList`]) and View, Delete,
+//! Close, Copy.
 
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 
@@ -256,6 +258,14 @@ impl FileManager {
                 true
             })
         };
+        let view_button: OnPress = Rc::new({
+            let (me, list, host) = (me.clone(), list.clone(), host.clone());
+            move |window, cx| {
+                if let Some(name) = list.read(cx).current() {
+                    let _ = me.update(cx, |fm, cx| fm.view_shared(&host, name, window, cx));
+                }
+            }
+        });
         let delete_button: OnPress = Rc::new({
             let list = list.clone();
             move |_, cx| list.update(cx, |list, cx| list.remove(cx))
@@ -277,22 +287,25 @@ impl FileManager {
         });
         let buttons = ButtonRow::build(
             [
+                ("&View", view_button),
                 ("&Delete", delete_button),
                 ("Close", close_button),
                 ("Copy", copy_button),
             ],
-            2,
+            3,
             cx,
         );
         let events = cx.subscribe_in(&list, window, {
             let (buttons, copy) = (buttons.clone(), copy.clone());
             move |this, list, event: &SharedClipEvent, window, cx| match event {
+                SharedClipEvent::View(name) => this.view_shared(&host, name.clone(), window, cx),
                 SharedClipEvent::Remove(name) => {
                     this.remove_shared(&host, name.clone(), window, cx);
                     if list.read(cx).len() == 0 {
                         buttons.update(cx, |row, cx| {
-                            row.set_enabled(0, false);
-                            row.set_enabled(2, false);
+                            for button in [0, 1, 3] {
+                                row.set_enabled(button, false);
+                            }
                             cx.notify();
                         });
                     }
@@ -318,7 +331,7 @@ impl FileManager {
                 .title(TITLE)
                 .w(crate::zoom::dialog_width(640.0, cx))
                 .close_button(false)
-                // Alt-D from the list too.
+                // Alt-V and Alt-D from the list too.
                 .child(dialog_keys(div().child(list.clone()), &buttons, None))
                 .footer(buttons.clone())
                 // Enter in the list.
@@ -352,6 +365,55 @@ impl FileManager {
                         cx.notify();
                     }
                     Err(e) => this.shared_error(e.to_string(), None, window, cx),
+                }
+            },
+            window,
+            cx,
+        );
+    }
+
+    /// F3 or View: fetches item `name` into a private folder and opens the
+    /// viewer on it, titled with the item's place on the host. The dialog
+    /// stays open.
+    fn view_shared(
+        &mut self,
+        host: &str,
+        name: Vec<u8>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let progress = self.start_progress(format!("Fetching from {host}..."), cx);
+        let label = host.to_owned();
+        let file_name = name.clone();
+        self.on_host(
+            host,
+            move |client, dir| {
+                let text = shared_clip::fetch(client, dir, &name)?;
+                Ok((dir.to_vec(), text))
+            },
+            move |this, result, window, cx| {
+                this.end_progress(&progress, cx);
+                let opened = result.and_then(|(dir, text)| {
+                    let root = this
+                        .temp_dir
+                        .clone()
+                        .ok_or_else(|| io::Error::other("no folder for temporary files"))?;
+                    yagni_commander_core::storage::private_dir(&root)?;
+                    let temp = tempfile::Builder::new().prefix("view-").tempdir_in(&root)?;
+                    let file = temp.path().join(std::ffi::OsStr::from_bytes(&file_name));
+                    std::fs::write(&file, text)?;
+                    let shown = remote::path_of(&label, &[&dir[..], b"/", &file_name].concat());
+                    crate::viewer_view::open(
+                        file,
+                        &shown,
+                        window.window_bounds(),
+                        Some(temp),
+                        None,
+                        cx,
+                    )
+                });
+                if let Err(e) = opened {
+                    this.shared_error(e.to_string(), None, window, cx);
                 }
             },
             window,

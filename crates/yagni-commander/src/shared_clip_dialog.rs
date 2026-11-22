@@ -1,8 +1,8 @@
 //! The shared clipboard dialog's list (Ctrl-K Ctrl-V): the host's items
 //! (core [`shared_clip::list`]), newest first, each its preview and its
-//! machine and age. Up/Down wrap, Home/End and Page Up/Page Down move, Del
-//! deletes, a double click copies; Enter is the dialog's (Copy). The dialog
-//! around it is built in `file_manager/shared_clip.rs`.
+//! machine and age. Up/Down wrap, Home/End and Page Up/Page Down move, F3
+//! views, Del deletes, a double click copies; Enter is the dialog's (Copy).
+//! The dialog around it is built in `file_manager/shared_clip.rs`.
 
 use std::time::SystemTime;
 
@@ -20,6 +20,8 @@ use crate::zoom::rems_from_px;
 pub enum SharedClipEvent {
     /// A double click: copy the highlighted item.
     Pick,
+    /// F3: view the item, the file name given.
+    View(Vec<u8>),
     /// Deleted from the list; the host still has it.
     Remove(Vec<u8>),
 }
@@ -179,6 +181,11 @@ impl Render for SharedClipList {
             .on_action(cx.listener(|this, _: &act::PageUp, _, cx| this.page(false, cx)))
             .on_action(cx.listener(|this, _: &act::PageDown, _, cx| this.page(true, cx)))
             .on_action(cx.listener(|this, _: &act::Remove, _, cx| this.remove(cx)))
+            .on_action(cx.listener(|this, _: &act::View, _, cx| {
+                if let Some(name) = this.current() {
+                    cx.emit(SharedClipEvent::View(name));
+                }
+            }))
             .track_scroll(&self.scroll)
             .overflow_y_scroll()
             .mt(rems_from_px(4.0))

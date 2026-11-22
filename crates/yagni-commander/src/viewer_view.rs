@@ -578,6 +578,10 @@ impl ViewerView {
     }
 
     #[cfg(test)]
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+    #[cfg(test)]
     pub(crate) fn top(&self) -> u64 {
         self.top
     }

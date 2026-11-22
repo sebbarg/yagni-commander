@@ -11521,6 +11521,8 @@ mod shared_clipboard {
         cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         assert_eq!(rows(cx), Some(0), "Enter copies nothing");
+        cx.simulate_keystrokes("f3");
+        assert_eq!(progress(cx), None, "F3 views nothing");
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();
         assert_eq!(rows(cx), None);
@@ -11587,6 +11589,62 @@ mod shared_clipboard {
         assert!(cx.debug_bounds("status-shared").is_some());
     }
 
+    /// The viewer windows' files.
+    fn viewed(cx: &mut VisualTestContext) -> Vec<std::path::PathBuf> {
+        let viewers: Vec<_> = cx
+            .windows()
+            .into_iter()
+            .filter_map(|w| crate::viewer_view::tests::viewer_in(w, cx))
+            .collect();
+        viewers
+            .into_iter()
+            .map(|viewer| viewer.read_with(cx, |v, _| v.path().to_path_buf()))
+            .collect()
+    }
+
+    #[gpui_kit::test]
+    fn f3_and_view_open_the_item_in_the_viewer(cx: &mut TestAppContext) {
+        let (tmp, dir, _cfg, cx) = with_host(cx);
+        let temp = tmp.path().join("viewer-tmp");
+        file_manager(cx).update(cx, |this, _| this.temp_dir = Some(temp.clone()));
+        push("line one\nline two", 1, &dir, cx);
+        list_dialog(cx);
+        cx.simulate_keystrokes("f3");
+        assert_eq!(progress(cx).as_deref(), Some("Fetching from test-host..."));
+        wait_until(cx, |cx| viewed(cx).len() == 1);
+        assert_eq!(progress(cx), None);
+        let file = viewed(cx)[0].clone();
+        assert!(file.starts_with(&temp), "{file:?}: a private copy");
+        assert_eq!(
+            file.file_name().unwrap().to_str(),
+            Some(items(&dir)[0].as_str())
+        );
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "line one\nline two"
+        );
+        // The dialog stays, for the next pick; Alt-V is View.
+        assert_eq!(rows(cx), Some(1));
+        cx.simulate_keystrokes("alt-v");
+        wait_until(cx, |cx| viewed(cx).len() == 2);
+        assert_eq!(rows(cx), Some(1));
+    }
+
+    #[gpui_kit::test]
+    fn view_without_a_temp_folder_says_so(cx: &mut TestAppContext) {
+        let (_tmp, dir, _cfg, cx) = with_host(cx);
+        push("x", 1, &dir, cx);
+        list_dialog(cx);
+        cx.simulate_keystrokes("f3");
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(500));
+        cx.run_until_parked();
+        wait_until(cx, |cx| progress(cx).is_none());
+        assert!(viewed(cx).is_empty());
+        // The error box is on top of the list.
+        assert!(box_text(cx).contains("no folder for temporary files"));
+    }
+
     #[gpui_kit::test]
     fn an_empty_clipboard_says_so(cx: &mut TestAppContext) {
         let (_tmp, _dir, _cfg, cx) = with_host(cx);
@@ -11608,9 +11666,21 @@ mod shared_clipboard {
         });
         use super::tab_order::{assert_focus, assert_order};
         assert_focus(cx, "list", &named);
-        let order = ["button:Delete", "button:Close", "button:Copy", "list"];
+        let order = [
+            "button:View",
+            "button:Delete",
+            "button:Close",
+            "button:Copy",
+            "list",
+        ];
         assert_order(cx, "tab", &order, &named);
-        let back = ["button:Copy", "button:Close", "button:Delete", "list"];
+        let back = [
+            "button:Copy",
+            "button:Close",
+            "button:Delete",
+            "button:View",
+            "list",
+        ];
         assert_order(cx, "shift-tab", &back, &named);
         cx.simulate_keystrokes("escape");
         cx.run_until_parked();

@@ -144,7 +144,7 @@ Do this on every machine that should share, with each logging in to the server a
 3. On the other machine, press Ctrl-K Ctrl-V (or Commands > Shared clipboard...). A dialog lists the items, newest first, each with its first line, the machine it came from and its age.
 4. Pick one with the arrow keys and press Enter (or Copy, or double-click it). It is on your clipboard, ready to paste anywhere.
 
-In the list, Del (or Delete) removes the highlighted item from the server; Escape (or Close) closes the dialog. The first use of a session may ask for your ssh password or key passphrase, as remote folders do.
+In the list, F3 (or View) opens the highlighted item in the viewer, Del (or Delete) removes it from the server; Escape (or Close) closes the dialog. The first use of a session may ask for your ssh password or key passphrase, as remote folders do.
 
 **Limitations.**
 

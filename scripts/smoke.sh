@@ -1017,6 +1017,15 @@ check "the folder is private" bash -c "[[ \$(stat -c %a '$clip') == 700 ]]"
 printf 'something else' | xclip -selection clipboard
 keys ctrl+k ctrl+v
 shot 13e-shared-clipboard
+keys F3
+check "F3 viewed the item from the host" xdotool search --name "^sftp://smokehost$clip/"
+xdotool windowfocus "$(xdotool search --name "^sftp://smokehost$clip/" | head -1)"
+sleep 0.5
+shot 13f-shared-viewer
+keys Escape
+check "the item's viewer closed" bash -c "! xdotool search --name '^sftp://smokehost$clip/'"
+xdotool windowfocus "$window"
+sleep 0.5
 keys Return
 check "Ctrl-K Ctrl-V copied it back" clipboard "shared smoke text"
 # Closing it brings its right neighbor (docs) to the front; back one.
