@@ -21,6 +21,47 @@ Aimed at macOS, KDE Plasma and Hyprland (Omarchy). Tested on macOS, KDE (X11 and
 
 Bug reports are welcome; feature requests might get a YAGNI.
 
+## Installing
+
+On macOS (Apple Silicon and Intel) and Linux (x86_64):
+
+```sh
+curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh
+```
+
+It downloads the latest release, checks it against the release's `SHA256SUMS`, and installs it for you alone, no root needed: on macOS `yagni-commander.app` in `~/Applications`, on Linux the binary, a launcher entry and the icons in `~/.local`, so it shows in your app menu. Run it again to update. It needs `curl` (Ubuntu 22.04 lacks it: `sudo apt install curl`). To remove it: `... | sh -s -- --uninstall`. The script is short; download it and read it first if you prefer.
+
+### By hand
+
+Download the file for your system from [Releases](https://github.com/sebbarg/yagni-commander/releases), or build it yourself (below).
+
+**macOS** (`yagni-commander-<version>-macos.zip`): unzip it and move `yagni-commander.app` to Applications. The app is not notarized by Apple (that needs a paid developer account), so macOS refuses to open a copy downloaded with a browser. Remove the download mark once:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/yagni-commander.app
+```
+
+or try to open it, then choose Open Anyway in System Settings > Privacy & Security. The install script and a build from source don't need this step.
+
+**Linux** (`yagni-commander-<version>-linux-x86_64.tar.gz`, built on Ubuntu 22.04, so it needs glibc 2.35 or newer):
+
+```sh
+tar -xzf yagni-commander-*-linux-x86_64.tar.gz
+cd yagni-commander-*-linux-x86_64
+./install.sh
+```
+
+`./install.sh uninstall` removes it.
+
+**Without a GPU** (a virtual machine, or no working graphics driver), it renders through Mesa's software Vulkan driver (llvmpipe). Ubuntu 22.04's Mesa (23.2) draws an empty window there: the frame shows, the inside stays see-through. Newer Mesa works (Ubuntu 24.04's does); on 22.04 install it from the kisak PPA:
+
+```sh
+sudo add-apt-repository ppa:kisak/kisak-mesa
+sudo apt update && sudo apt upgrade
+```
+
+The newest Mesa has the opposite problem for now: built with LLVM 22 (Fedora 44, current Arch), llvmpipe crashes compiling a shader ("LLVM ERROR: Cannot select ... X86ISD::MGATHER"), an upstream Mesa/LLVM bug that also hits other apps. With a GPU, none of this applies.
+
 ## Features
 
 - Two panels, Tab switches between them. Columns Name, Size, Modified, Owner, Permissions; click a header to sort.
@@ -114,47 +155,6 @@ In the list, Del (or Delete) removes the highlighted item from the server; Escap
 - **Plain text on the server.** Items stay there until they are pushed out or deleted, readable by your user and the server's administrators. Think twice before pushing a password to a server other people run.
 - **One user.** Every machine must log in to the server as the same user; different users see different clipboards. It is not meant for sharing with other people.
 - **The server needs SFTP**, as remote folders do. The items are in `~/.local/share/yagni-commander/clipboard` there.
-
-## Installing
-
-On macOS (Apple Silicon and Intel) and Linux (x86_64):
-
-```sh
-curl -fsSL https://github.com/sebbarg/yagni-commander/releases/latest/download/install.sh | sh
-```
-
-It downloads the latest release, checks it against the release's `SHA256SUMS`, and installs it for you alone, no root needed: on macOS `yagni-commander.app` in `~/Applications`, on Linux the binary, a launcher entry and the icons in `~/.local`, so it shows in your app menu. Run it again to update. It needs `curl` (Ubuntu 22.04 lacks it: `sudo apt install curl`). To remove it: `... | sh -s -- --uninstall`. The script is short; download it and read it first if you prefer.
-
-### By hand
-
-Download the file for your system from [Releases](https://github.com/sebbarg/yagni-commander/releases), or build it yourself (below).
-
-**macOS** (`yagni-commander-<version>-macos.zip`): unzip it and move `yagni-commander.app` to Applications. The app is not notarized by Apple (that needs a paid developer account), so macOS refuses to open a copy downloaded with a browser. Remove the download mark once:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/yagni-commander.app
-```
-
-or try to open it, then choose Open Anyway in System Settings > Privacy & Security. The install script and a build from source don't need this step.
-
-**Linux** (`yagni-commander-<version>-linux-x86_64.tar.gz`, built on Ubuntu 22.04, so it needs glibc 2.35 or newer):
-
-```sh
-tar -xzf yagni-commander-*-linux-x86_64.tar.gz
-cd yagni-commander-*-linux-x86_64
-./install.sh
-```
-
-`./install.sh uninstall` removes it.
-
-**Without a GPU** (a virtual machine, or no working graphics driver), it renders through Mesa's software Vulkan driver (llvmpipe). Ubuntu 22.04's Mesa (23.2) draws an empty window there: the frame shows, the inside stays see-through. Newer Mesa works (Ubuntu 24.04's does); on 22.04 install it from the kisak PPA:
-
-```sh
-sudo add-apt-repository ppa:kisak/kisak-mesa
-sudo apt update && sudo apt upgrade
-```
-
-The newest Mesa has the opposite problem for now: built with LLVM 22 (Fedora 44, current Arch), llvmpipe crashes compiling a shader ("LLVM ERROR: Cannot select ... X86ISD::MGATHER"), an upstream Mesa/LLVM bug that also hits other apps. With a GPU, none of this applies.
 
 ## Building
 
