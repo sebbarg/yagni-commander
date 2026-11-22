@@ -86,10 +86,34 @@ Ctrl-F (or Commands > SFTP connect...) lists the hosts in your `~/.ssh/config`; 
 
 ## Shared clipboard
 
-Text copied on one machine, picked on another, through a host you already reach with ssh. Set the host in Settings (Shared clipboard) or in `config.toml`: `shared_clipboard = "myserver"`, a name as you would type it after `ssh`. Ctrl-K Ctrl-C (Commands > Push to shared clipboard) sends the clipboard's text there; Ctrl-K Ctrl-V (Commands > Shared clipboard...) lists the items, newest first, and Enter copies one back to your clipboard (Del deletes it).
+Copy text on one machine and paste it on another, through a server you already reach with ssh. There is nothing to install on the server and no account to make: the items are plain files in your home folder there, and ssh does the logging in.
 
-- The items are files in `~/.local/share/yagni-commander/clipboard` on the host, readable only by your user there, which is also all the setup: every machine logging in as the same user shares them. The newest 50 are kept, up to 1 MiB each, text only.
-- They stay in plain text on the host until they are pushed out or deleted, so think twice before pushing a password to a host other people administer.
+**Setting it up.** In Settings (Ctrl-,), type the server under Shared clipboard, as you would after `ssh` (an alias from `~/.ssh/config`, or `user@host`). Or set it in `config.toml`:
+
+```toml
+shared_clipboard = "myserver"
+```
+
+Do this on every machine that should share, with each logging in to the server as the same user.
+
+**Using it.**
+
+1. Copy some text in any application.
+2. Switch to yagni-commander and press Ctrl-K Ctrl-C (or Commands > Push to shared clipboard). The status line says "Pushing to myserver...", then "Pushed to myserver".
+3. On the other machine, press Ctrl-K Ctrl-V (or Commands > Shared clipboard...). A dialog lists the items, newest first, each with its first line, the machine it came from and its age.
+4. Pick one with the arrow keys and press Enter (or Copy, or double-click it). It is on your clipboard, ready to paste anywhere.
+
+In the list, Del (or Delete) removes the highlighted item from the server; Escape (or Close) closes the dialog. The first use of a session may ask for your ssh password or key passphrase, as remote folders do.
+
+**Limitations.**
+
+- **Text only.** Images, files and formatting are not shared. With an image on the clipboard, Ctrl-K Ctrl-C says "The clipboard holds no text." Some applications put a text version beside an image (often the file's path); that text is what gets pushed then. Text copied from a web page or a document arrives as plain text.
+- **Up to 1 MiB per item.** Larger text is refused.
+- **The newest 50 items are kept.** Each push or listing deletes the older ones.
+- **Not automatic.** Nothing syncs on its own: you push on one machine and pick on the other. The keys work only in yagni-commander (in any of its windows for pushing, the main window for the list), so it must be running on both machines.
+- **Plain text on the server.** Items stay there until they are pushed out or deleted, readable by your user and the server's administrators. Think twice before pushing a password to a server other people run.
+- **One user.** Every machine must log in to the server as the same user; different users see different clipboards. It is not meant for sharing with other people.
+- **The server needs SFTP**, as remote folders do. The items are in `~/.local/share/yagni-commander/clipboard` there.
 
 ## Installing
 
