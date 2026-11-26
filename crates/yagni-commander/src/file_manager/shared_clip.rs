@@ -161,7 +161,7 @@ impl FileManager {
             .clone()
             .unwrap_or_else(shared_clip::machine);
         let label = host.clone();
-        let progress = self.start_progress(format!("Pushing to {host}..."), cx);
+        let progress = self.start_progress(format!("Pushing clipboard to {host}..."), cx);
         self.on_host(
             &host,
             move |client, dir| shared_clip::push(client, dir, &text, &machine),
@@ -169,7 +169,7 @@ impl FileManager {
                 this.end_progress(&progress, cx);
                 match result {
                     Ok(_) => {
-                        this.shared.status = Some(format!("Pushed to {label}").into());
+                        this.shared.status = Some(format!("Pushed clipboard to {label}").into());
                         cx.notify();
                     }
                     Err(e) => this.shared_error(e.to_string(), target, window, cx),

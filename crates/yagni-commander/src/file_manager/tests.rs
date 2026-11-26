@@ -11442,7 +11442,7 @@ mod shared_clipboard {
     fn a_pushed_text_is_listed_and_picked_back(cx: &mut TestAppContext) {
         let (_tmp, dir, _cfg, cx) = with_host(cx);
         push("hello world", 1, &dir, cx);
-        assert_eq!(status(cx).as_deref(), Some("Pushed to test-host"));
+        assert_eq!(status(cx).as_deref(), Some("Pushed clipboard to test-host"));
         assert!(cx.debug_bounds("status-shared").is_some());
         assert!(items(&dir)[0].contains("-testbox-"), "{:?}", items(&dir));
         // The next command clears the word.
@@ -11539,13 +11539,13 @@ mod shared_clipboard {
         // test clock's polls), kept through other commands.
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
         cx.simulate_keystrokes("ctrl-k ctrl-c");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing to test-host..."));
+        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to test-host..."));
         cx.simulate_keystrokes("down");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing to test-host..."));
+        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to test-host..."));
         assert!(cx.debug_bounds("status-shared").is_some());
         wait_until(cx, |cx| status(cx).is_some());
         assert_eq!(progress(cx), None);
-        assert_eq!(status(cx).as_deref(), Some("Pushed to test-host"));
+        assert_eq!(status(cx).as_deref(), Some("Pushed clipboard to test-host"));
         assert_eq!(items(&dir).len(), 1);
 
         cx.simulate_keystrokes("ctrl-k ctrl-v");
@@ -11571,7 +11571,7 @@ mod shared_clipboard {
         use_config(cfg.path(), "shared_clipboard = \"nowhere\"\n", cx);
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
         cx.simulate_keystrokes("ctrl-k ctrl-c");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing to nowhere..."));
+        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to nowhere..."));
         wait_until(cx, dialog_open);
         assert_eq!(progress(cx), None);
         assert_eq!(status(cx), None);
