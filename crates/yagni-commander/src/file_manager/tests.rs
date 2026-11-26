@@ -11539,9 +11539,15 @@ mod shared_clipboard {
         // test clock's polls), kept through other commands.
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
         cx.simulate_keystrokes("ctrl-k ctrl-c");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to test-host..."));
+        assert_eq!(
+            progress(cx).as_deref(),
+            Some("Pushing clipboard to test-host...")
+        );
         cx.simulate_keystrokes("down");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to test-host..."));
+        assert_eq!(
+            progress(cx).as_deref(),
+            Some("Pushing clipboard to test-host...")
+        );
         assert!(cx.debug_bounds("status-shared").is_some());
         wait_until(cx, |cx| status(cx).is_some());
         assert_eq!(progress(cx), None);
@@ -11571,7 +11577,10 @@ mod shared_clipboard {
         use_config(cfg.path(), "shared_clipboard = \"nowhere\"\n", cx);
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string("text".into()));
         cx.simulate_keystrokes("ctrl-k ctrl-c");
-        assert_eq!(progress(cx).as_deref(), Some("Pushing clipboard to nowhere..."));
+        assert_eq!(
+            progress(cx).as_deref(),
+            Some("Pushing clipboard to nowhere...")
+        );
         wait_until(cx, dialog_open);
         assert_eq!(progress(cx), None);
         assert_eq!(status(cx), None);
