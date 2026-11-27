@@ -24,19 +24,17 @@ Not kept here (owner, 2026-11-22). What is on `main` but not released: `git log 
 - User-facing text and docs: no em dashes.
 - Dialog tab order (a recurring bug): every new or changed dialog is checked with Tab and Shift-Tab, in an app test (`mod tab_order`, `assert_order`) and in the headless app. The rule: reading order (top to bottom, left to right), buttons last, Tab into the buttons on the first and Shift-Tab on the last, disabled controls skipped, round at both ends, never out of the top dialog, every stop visibly focused (SPEC, "Tab order in every dialog"; ARCHITECTURE, Gotchas).
 
-## Fresh dev container (Ubuntu 26.04, no display)
+## Dev container (Ubuntu 26.04, no display)
 
-Containers are ephemeral; redo this at the start of a session if `~/.cargo/bin/cargo` is missing.
+The image provides everything; nothing is installed per session. Rust lives in `/usr/local/rustup` and `/usr/local/cargo` (`CARGO_HOME`, on PATH): the minimal profile with clippy, rustfmt and llvm-tools, plus `cargo-llvm-cov` and `cargo-audit` (the version `security-watch.yml` pins). The packages the build, the tests and the smoke script need:
 
-```sh
-curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal -c clippy,rustfmt
-sudo apt-get install -y build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev \
-  libwayland-dev libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev \
-  mesa-vulkan-drivers xvfb xdotool x11-utils imagemagick xclip openssh-sftp-server
-~/.cargo/bin/rustup component add llvm-tools-preview && ~/.cargo/bin/cargo install cargo-llvm-cov --locked
+```
+build-essential pkg-config clang cmake libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev
+libfontconfig-dev libfreetype-dev libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
+mesa-vulkan-drivers xvfb xdotool x11-utils imagemagick xclip openssh-sftp-server
 ```
 
-Cargo is at `~/.cargo/bin/cargo` (not on PATH in non-login shells). A clean build takes a few minutes.
+A missing one belongs in the image's Dockerfile (an `apt-get install` without `apt-get update` in the same `RUN` fails on stale lists). Don't install rustup or cargo tools into `~/.cargo`: rustup's installer adds `. "$HOME/.cargo/env"` to the shell profiles, which puts `~/.cargo/bin` ahead of the image's tools. A clean build takes a few minutes.
 
 ## Headless run (to see the real app in the container)
 
